@@ -164,7 +164,9 @@ NODATA_VALUE = -9999
 
 # Minimum lake area for reliable mapping (km²)
 # Lakes below this threshold may have significant area uncertainty
-MIN_LAKE_AREA = 0.0051
+# Set to 0 to include all lakes; 0.0051 is minimum for reliable NHD mapping
+# NHD contains ~5M waterbodies, but many are < 0.001 km²
+MIN_LAKE_AREA = 0.001  # Lower threshold to include more small lakes
 
 # Power law analysis parameters
 POWERLAW_XMIN_THRESHOLD = 0.46  # km², from Cael & Seekell (2016)
