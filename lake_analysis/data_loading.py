@@ -33,9 +33,76 @@ from pathlib import Path
 
 from config import (
     LAKE_GDB_PATH, LAKE_FEATURE_CLASS, LAKE_PARQUET_PATH,
-    RASTERS, COLS, TARGET_CRS,
+    RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
     NODATA_VALUE, MIN_LAKE_AREA, RASTER_TILE_SIZE
 )
+
+
+def get_raster_nodata(raster_name_or_path):
+    """
+    Get the NoData value for a raster, checking RASTER_METADATA first.
+
+    Different rasters have different NoData values:
+    - elevation: 32767
+    - slope: -3.4028235e+38 (float min)
+    - relief_5km: -32768
+    - climate variables: -32768 or -9999
+
+    Parameters
+    ----------
+    raster_name_or_path : str
+        Either a key from RASTERS dict (e.g., 'elevation') or a full path
+
+    Returns
+    -------
+    float or None
+        NoData value from metadata, or None if not found
+    """
+    # Check if it's a key in RASTERS
+    for name, path in RASTERS.items():
+        if raster_name_or_path == name or raster_name_or_path == path:
+            if name in RASTER_METADATA:
+                return RASTER_METADATA[name].get('nodata')
+    return None
+
+
+def estimate_raster_memory(raster_path):
+    """
+    Estimate memory required to load a raster into RAM.
+
+    Parameters
+    ----------
+    raster_path : str
+
+    Returns
+    -------
+    dict
+        Memory estimates and recommendations
+    """
+    import rasterio
+    with rasterio.open(raster_path) as src:
+        # Calculate size in bytes
+        dtype_sizes = {
+            'int8': 1, 'uint8': 1,
+            'int16': 2, 'uint16': 2,
+            'int32': 4, 'uint32': 4,
+            'float32': 4, 'float64': 8,
+        }
+        dtype_str = str(src.dtypes[0])
+        bytes_per_pixel = dtype_sizes.get(dtype_str, 4)
+
+        total_pixels = src.width * src.height
+        raw_bytes = total_pixels * bytes_per_pixel
+        float_bytes = total_pixels * 8  # If converted to float64
+
+        return {
+            'dimensions': (src.height, src.width),
+            'total_pixels': total_pixels,
+            'dtype': dtype_str,
+            'raw_size_gb': raw_bytes / 1e9,
+            'float64_size_gb': float_bytes / 1e9,
+            'recommend_chunked': raw_bytes > 1e9,  # >1GB
+        }
 
 
 # ============================================================================
@@ -330,7 +397,7 @@ def load_raster(raster_path, band=1, masked=True):
         return data, transform, crs, nodata
 
 
-def load_raster_chunked(raster_path, tile_size=RASTER_TILE_SIZE):
+def load_raster_chunked(raster_path, tile_size=RASTER_TILE_SIZE, custom_nodata=None):
     """
     Generator that yields raster data in tiles for memory-efficient processing.
 
@@ -340,13 +407,30 @@ def load_raster_chunked(raster_path, tile_size=RASTER_TILE_SIZE):
         Path to raster file
     tile_size : int
         Size of tiles in pixels (default from config)
+    custom_nodata : float, optional
+        Override NoData value. If None, uses value from RASTER_METADATA
+        or the raster file metadata.
 
     Yields
     ------
     tuple
         (tile_data, window, row_offset, col_offset)
+
+    Notes
+    -----
+    IMPORTANT: Different rasters have different NoData values!
+    - elevation (srtm_ea): 32767
+    - slope (srtm_slope): -3.4028235e+38
+    - relief (srtm_rlif_5k): -32768
     """
+    # Get nodata value from metadata if not provided
+    if custom_nodata is None:
+        custom_nodata = get_raster_nodata(raster_path)
+
     with rasterio.open(raster_path) as src:
+        # Use custom nodata, then file metadata, then None
+        nodata = custom_nodata if custom_nodata is not None else src.nodata
+
         for row_off in range(0, src.height, tile_size):
             for col_off in range(0, src.width, tile_size):
                 # Calculate window size (handle edge cases)
@@ -357,9 +441,13 @@ def load_raster_chunked(raster_path, tile_size=RASTER_TILE_SIZE):
                 data = src.read(1, window=window)
 
                 # Replace nodata with NaN
-                if src.nodata is not None:
-                    data = data.astype(float)
-                    data[data == src.nodata] = np.nan
+                data = data.astype(float)
+                if nodata is not None:
+                    # Handle special case for float min (slope raster)
+                    if nodata < -1e30:
+                        data[data < -1e30] = np.nan
+                    else:
+                        data[data == nodata] = np.nan
 
                 yield data, window, row_off, col_off
 
@@ -487,7 +575,8 @@ def reproject_raster_to_target(input_path, output_path, target_crs=TARGET_CRS,
 
 def calculate_landscape_area_by_bin(raster_path, breaks,
                                      use_chunked=True,
-                                     tile_size=RASTER_TILE_SIZE):
+                                     tile_size=RASTER_TILE_SIZE,
+                                     custom_nodata=None):
     """
     Calculate total landscape area in each bin of a raster variable.
 
@@ -501,23 +590,50 @@ def calculate_landscape_area_by_bin(raster_path, breaks,
     breaks : list
         Bin edges (e.g., [0, 200, 400, 600, ...])
     use_chunked : bool
-        If True, process in tiles (memory efficient)
+        If True, process in tiles (memory efficient). STRONGLY recommended
+        for rasters > 1GB (elevation, slope, relief).
     tile_size : int
         Tile size for chunked processing
+    custom_nodata : float, optional
+        Override NoData value. If None, uses RASTER_METADATA.
 
     Returns
     -------
     pandas.DataFrame
         Columns: bin_lower, bin_upper, bin_label, pixel_count, area_km2
+
+    Notes
+    -----
+    Memory Warning: Your topographic rasters are 8GB uncompressed!
+    - elevation (srtm_ea): 8.05 GB
+    - slope (srtm_slope): 8.05 GB
+    - relief (srtm_rlif_5k): 3.96 GB
+    Always use use_chunked=True (the default) for these rasters.
     """
+    raster_name = Path(raster_path).stem
     print(f"Calculating landscape area by bin...")
-    print(f"  Raster: {Path(raster_path).stem}")
+    print(f"  Raster: {raster_name}")
     print(f"  Number of bins: {len(breaks) - 1}")
+
+    # Estimate memory and warn if large
+    mem_info = estimate_raster_memory(raster_path)
+    if mem_info['recommend_chunked']:
+        print(f"  WARNING: Large raster ({mem_info['raw_size_gb']:.2f} GB)")
+        print(f"  Using chunked processing (tile_size={tile_size})")
+        if not use_chunked:
+            print(f"  CAUTION: use_chunked=False may cause memory issues!")
 
     # Get raster info for pixel area calculation
     info = get_raster_info(raster_path)
     pixel_area_km2 = info['pixel_area_km2']
     print(f"  Pixel area: {pixel_area_km2:.6f} km²")
+    print(f"  CRS: {info['crs']}")
+
+    # Get nodata value
+    if custom_nodata is None:
+        custom_nodata = get_raster_nodata(raster_path)
+    if custom_nodata is not None:
+        print(f"  NoData value: {custom_nodata}")
 
     # Initialize bin counts
     bin_counts = np.zeros(len(breaks) + 1, dtype=np.int64)
@@ -525,12 +641,14 @@ def calculate_landscape_area_by_bin(raster_path, breaks,
     if use_chunked:
         # Memory-efficient chunked processing
         total_pixels = 0
-        for tile_data, window, _, _ in load_raster_chunked(raster_path, tile_size):
+        n_tiles = 0
+        for tile_data, window, _, _ in load_raster_chunked(raster_path, tile_size, custom_nodata):
             # Flatten and remove NaN
             values = tile_data.flatten()
             valid_mask = ~np.isnan(values)
             values = values[valid_mask]
             total_pixels += len(values)
+            n_tiles += 1
 
             # Digitize into bins
             bin_indices = np.digitize(values, breaks)
@@ -540,6 +658,11 @@ def calculate_landscape_area_by_bin(raster_path, breaks,
             for idx, count in zip(unique, counts):
                 bin_counts[idx] += count
 
+            # Progress indicator every 100 tiles
+            if n_tiles % 100 == 0:
+                print(f"    Processed {n_tiles} tiles, {total_pixels:,} valid pixels...")
+
+        print(f"  Total tiles: {n_tiles}")
         print(f"  Total valid pixels processed: {total_pixels:,}")
     else:
         # Load entire raster (memory intensive)

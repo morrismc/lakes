@@ -23,22 +23,96 @@ LAKE_FEATURE_CLASS = "Lakes_with_all_details"
 # Alternative: If you export to parquet later for faster loading
 LAKE_PARQUET_PATH = r"F:\Lakes\Data\lakes.parquet"
 
-# Raster paths (ESRI Grid format - folders containing .adf files)
+# Raster paths
+# NOTE: For ESRI Grid rasters, point to the FOLDER (not the .adf file inside)
+# For other formats (.bil, .asc), point to the actual file
 RASTERS = {
-    # Topographic variables
-    'elevation': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_dem",  # Update path if different
+    # Topographic variables (NAD_1983_Albers projection, ~93.7m cells)
+    # WARNING: These are LARGE (8GB each uncompressed) - use chunked processing!
+    'elevation': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_ea",
     'slope': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_slope",
     'relief_5km': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_rlif_5k",
 
-    # Climate variables
+    # Climate variables (Geographic CRS - different from topographic!)
     'PET': r"F:\Lakes\GIS\rasters\PET_he_annual\pet_he_yr",
-    'precip_4km': r"F:\Lakes\GIS\rasters\PRISM_ppt_30yr_normal_4kmM2_annual_asc",
-    'precip_800m': r"F:\Lakes\GIS\rasters\PRISM_ppt_30yr_normal_800mM2_annual_bil",
-    'aridity': r"F:\Lakes\GIS\rasters\ai_lwr48",
+    'precip_4km': r"F:\Lakes\GIS\rasters\PRISM_ppt_30yr_normal_4kmM2_annual_asc\PRISM_ppt_30yr_normal_4kmM2_annual_asc.asc",
+    'precip_800m': r"F:\Lakes\GIS\rasters\PRISM_ppt_30yr_normal_800mM2_annual_bil\PRISM_ppt_30yr_normal_800mM2_annual_bil.bil",
+    'aridity': r"F:\Lakes\GIS\rasters\AI_annual\ai_yr",
 }
 
-# Output directory
+# Raster metadata - NoData values and CRS info for each raster
+# CRITICAL: Different rasters have different NoData values!
+RASTER_METADATA = {
+    'elevation': {
+        'nodata': 32767,
+        'crs': 'NAD_1983_Albers',  # Projected (meters)
+        'units': 'meters',
+        'cell_size_m': 93.7,
+        'size_gb': 8.05,
+    },
+    'slope': {
+        'nodata': -3.4028235e+38,  # Float min (special value)
+        'crs': 'NAD_1983_Albers',
+        'units': 'degrees',
+        'cell_size_m': 93.7,
+        'size_gb': 8.05,
+    },
+    'relief_5km': {
+        'nodata': -32768,
+        'crs': 'NAD_1983_Albers',
+        'units': 'meters',
+        'cell_size_m': 93.7,
+        'size_gb': 3.96,
+    },
+    'PET': {
+        'nodata': -32768,
+        'crs': 'EPSG:4326',  # WGS 1984 (geographic, degrees)
+        'units': 'mm',
+        'cell_size_deg': 0.0083,  # ~1km at equator
+        'size_gb': 1.45,
+    },
+    'precip_4km': {
+        'nodata': -9999,
+        'crs': 'EPSG:4269',  # NAD 1983 (geographic, degrees)
+        'units': 'mm',
+        'cell_size_deg': 0.0417,  # ~4km
+        'size_gb': 0.003,
+    },
+    'precip_800m': {
+        'nodata': -9999,  # Assumed - verify
+        'crs': 'EPSG:4269',  # NAD 1983
+        'units': 'mm',
+        'cell_size_deg': 0.0083,  # ~800m
+    },
+    'aridity': {
+        'nodata': -32768,  # Assumed - verify
+        'crs': 'EPSG:4326',  # WGS 1984
+        'units': 'dimensionless',
+        'cell_size_deg': 0.0083,
+    },
+}
+
+# Output directory (will be created if it doesn't exist)
 OUTPUT_DIR = r"F:\Lakes\Analysis\outputs"
+
+# ============================================================================
+# CRS COMPATIBILITY NOTES
+# ============================================================================
+# IMPORTANT: Your rasters are in DIFFERENT coordinate systems!
+#
+# PROJECTED (NAD_1983_Albers, units=meters):
+#   - elevation, slope, relief_5km
+#   - Cell size: ~93.7m
+#   - Good for area calculations (equal-area projection)
+#
+# GEOGRAPHIC (degrees):
+#   - PET (WGS 1984 / EPSG:4326)
+#   - precip_4km, precip_800m (NAD 1983 / EPSG:4269)
+#   - aridity (WGS 1984 / EPSG:4326)
+#   - Cell area varies by latitude!
+#
+# For 2D analyses (elevation × slope), use only Albers rasters (same CRS).
+# For 1D analyses, the code handles geographic CRS pixel area calculation.
 
 # ============================================================================
 # COLUMN NAME MAPPING
