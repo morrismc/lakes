@@ -1,0 +1,41 @@
+# Lake Distribution Analysis - Requirements
+# Install with: pip install -r requirements.txt
+# Or with conda: conda install --file requirements.txt
+
+# Core data handling
+numpy>=1.21.0
+pandas>=1.3.0
+pyarrow>=8.0.0          # For parquet file support
+
+# Geospatial
+geopandas>=0.10.0       # Requires GDAL
+rasterio>=1.2.0         # For raster processing
+fiona>=1.8.0            # For geodatabase reading (requires GDAL OpenFileGDB driver)
+pyproj>=3.0.0           # Coordinate transformations
+
+# Scientific computing
+scipy>=1.7.0            # For signal processing, optimization
+
+# Visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0         # Optional, for enhanced styling
+
+# Progress indicators
+tqdm>=4.60.0            # Progress bars for long operations
+
+# Optional: Interactive notebooks
+# jupyter>=1.0.0
+# ipython>=7.0.0
+
+# Note: GDAL installation
+# ----------------------
+# The geodatabase and raster reading requires GDAL with specific drivers.
+# On Windows, the easiest installation is via conda:
+#
+#   conda create -n lakes python=3.10
+#   conda activate lakes
+#   conda install -c conda-forge gdal geopandas rasterio fiona pyarrow
+#   pip install scipy matplotlib seaborn tqdm
+#
+# This ensures the OpenFileGDB driver is available for reading .gdb files
+# and ESRI Grid (.adf) rasters are supported.
