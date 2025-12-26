@@ -30,7 +30,7 @@ from scipy.optimize import minimize_scalar, brentq
 from collections import Counter
 import warnings
 
-from config import COLS, POWERLAW_XMIN_THRESHOLD, MIN_LAKES_FOR_POWERLAW, RANDOM_SEED
+from .config import COLS, POWERLAW_XMIN_THRESHOLD, MIN_LAKES_FOR_POWERLAW, RANDOM_SEED
 
 
 # ============================================================================
@@ -591,7 +591,7 @@ def full_powerlaw_analysis(lake_areas, xmin_threshold=POWERLAW_XMIN_THRESHOLD,
     }
 
     # Step 2: Bootstrap uncertainty
-    if fit['alpha'] is not np.nan:
+    if not np.isnan(fit['alpha']):
         print("\n[2] Estimating uncertainty (bootstrap)...")
         uncertainty = estimate_alpha_uncertainty(areas, fit['xmin'], fit['alpha'])
         print(f"    α = {fit['alpha']:.3f} ± {uncertainty['se']:.3f}")
@@ -630,7 +630,7 @@ def full_powerlaw_analysis(lake_areas, xmin_threshold=POWERLAW_XMIN_THRESHOLD,
     print(f"    Cael & Seekell (2016): τ = 2.14 for lakes ≥ 0.46 km²")
     print(f"    This dataset: α = {fit['alpha']:.3f} for lakes ≥ {fit['xmin']:.4f} km²")
 
-    if fit['alpha'] is not np.nan:
+    if not np.isnan(fit['alpha']):
         diff = abs(fit['alpha'] - 2.14)
         if diff < 0.1:
             print(f"    → Very close to global estimate (Δ = {diff:.3f})")

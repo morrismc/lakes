@@ -21,14 +21,15 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from config import (
+from .config import (
     COLS, ELEV_BREAKS, SLOPE_BREAKS, RELIEF_BREAKS,
-    RASTER_TILE_SIZE, TARGET_CRS
+    RASTER_TILE_SIZE, TARGET_CRS, RASTER_METADATA
 )
-from data_loading import (
+from .data_loading import (
     calculate_landscape_area_by_bin,
     load_raster_chunked,
-    get_raster_info
+    get_raster_info,
+    get_raster_nodata
 )
 
 
@@ -244,8 +245,20 @@ def compute_2d_normalized_density(lake_df, raster1_path, raster2_path,
     print(f"  Processing rasters in tiles...")
     import rasterio
 
+    # Get NoData values from RASTER_METADATA (more reliable than raster file metadata)
+    nodata1 = get_raster_nodata(raster1_path)
+    nodata2 = get_raster_nodata(raster2_path)
+    print(f"  NoData values: var1={nodata1}, var2={nodata2}")
+
     with rasterio.open(raster1_path) as src1, rasterio.open(raster2_path) as src2:
+        # Fall back to file metadata if not in RASTER_METADATA
+        if nodata1 is None:
+            nodata1 = src1.nodata
+        if nodata2 is None:
+            nodata2 = src2.nodata
+
         n_tiles = 0
+        total_valid_pixels = 0
         for row_off in range(0, src1.height, tile_size):
             for col_off in range(0, src1.width, tile_size):
                 # Calculate window
@@ -257,11 +270,18 @@ def compute_2d_normalized_density(lake_df, raster1_path, raster2_path,
                 data1 = src1.read(1, window=window).astype(float)
                 data2 = src2.read(1, window=window).astype(float)
 
-                # Handle nodata
-                if src1.nodata is not None:
-                    data1[data1 == src1.nodata] = np.nan
-                if src2.nodata is not None:
-                    data2[data2 == src2.nodata] = np.nan
+                # Handle nodata - use custom values from RASTER_METADATA
+                if nodata1 is not None:
+                    # Handle special case for float min (slope raster)
+                    if nodata1 < -1e30:
+                        data1[data1 < -1e30] = np.nan
+                    else:
+                        data1[data1 == nodata1] = np.nan
+                if nodata2 is not None:
+                    if nodata2 < -1e30:
+                        data2[data2 < -1e30] = np.nan
+                    else:
+                        data2[data2 == nodata2] = np.nan
 
                 # Flatten and find valid pixels
                 v1 = data1.flatten()
@@ -269,6 +289,7 @@ def compute_2d_normalized_density(lake_df, raster1_path, raster2_path,
                 valid = ~(np.isnan(v1) | np.isnan(v2))
                 v1 = v1[valid]
                 v2 = v2[valid]
+                total_valid_pixels += len(v1)
 
                 # Digitize
                 bins1 = np.digitize(v1, var1_breaks)
@@ -280,7 +301,12 @@ def compute_2d_normalized_density(lake_df, raster1_path, raster2_path,
 
                 n_tiles += 1
 
-        print(f"  Processed {n_tiles} tiles")
+                # Progress indicator every 100 tiles
+                if n_tiles % 100 == 0:
+                    print(f"    Processed {n_tiles} tiles, {total_valid_pixels:,} valid pixels...")
+
+        print(f"  Processed {n_tiles} tiles total")
+        print(f"  Total valid pixels: {total_valid_pixels:,}")
 
     # Bin the lakes in 2D
     print(f"  Binning lakes...")

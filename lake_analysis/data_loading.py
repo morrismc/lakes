@@ -31,7 +31,7 @@ from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.crs import CRS
 from pathlib import Path
 
-from config import (
+from .config import (
     LAKE_GDB_PATH, LAKE_FEATURE_CLASS, LAKE_PARQUET_PATH,
     RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
     NODATA_VALUE, MIN_LAKE_AREA, RASTER_TILE_SIZE

@@ -20,7 +20,7 @@ import matplotlib.colors as mcolors
 from matplotlib.ticker import MaxNLocator, LogLocator
 from pathlib import Path
 
-from config import (
+from .config import (
     PLOT_STYLE, PLOT_PARAMS, COLORMAPS, OUTPUT_DIR,
     COLS, ELEVATION_DOMAINS, ensure_output_dir
 )
@@ -127,19 +127,37 @@ def plot_raw_vs_normalized(result_df, value_column, units='',
 
 
 def find_local_peaks(values, prominence=0.1):
-    """Find indices of local maxima in an array."""
+    """Find indices of local maxima in an array, handling NaN values."""
+    # Convert to numpy array and handle NaN
+    values = np.asarray(values, dtype=float)
+
+    # Check if all values are NaN
+    if np.all(np.isnan(values)):
+        return []
+
     try:
         from scipy.signal import find_peaks
-        peaks, properties = find_peaks(values, prominence=prominence * np.nanmax(values))
-        # Sort by height
+        # Replace NaN with -inf for peak finding (NaN breaks comparisons)
+        clean_values = np.where(np.isnan(values), -np.inf, values)
+        max_val = np.nanmax(values)
+        if np.isnan(max_val) or max_val <= 0:
+            return []
+        peaks, properties = find_peaks(clean_values, prominence=prominence * max_val)
+        # Sort by height (using original values)
         if len(peaks) > 0:
-            sorted_idx = np.argsort(values[peaks])[::-1]
-            return peaks[sorted_idx]
+            # Filter out peaks that correspond to NaN positions
+            valid_peaks = [p for p in peaks if not np.isnan(values[p])]
+            if len(valid_peaks) > 0:
+                sorted_idx = np.argsort([values[p] for p in valid_peaks])[::-1]
+                return [valid_peaks[i] for i in sorted_idx]
         return []
     except ImportError:
-        # Simple fallback without scipy
+        # Simple fallback without scipy - handle NaN in comparisons
         peaks = []
         for i in range(1, len(values) - 1):
+            # Skip if any value is NaN
+            if np.isnan(values[i]) or np.isnan(values[i-1]) or np.isnan(values[i+1]):
+                continue
             if values[i] > values[i-1] and values[i] > values[i+1]:
                 peaks.append(i)
         return sorted(peaks, key=lambda x: values[x], reverse=True)
@@ -795,10 +813,669 @@ def create_summary_figure(elev_results, slope_results=None, relief_results=None,
     return fig
 
 
+# ============================================================================
+# ENHANCED POWER LAW VISUALIZATIONS
+# ============================================================================
+
+def plot_powerlaw_by_elevation_multipanel(lake_df, elev_bands, area_col=None,
+                                           elev_col=None, figsize=(16, 12),
+                                           save_path=None):
+    """
+    Create multi-panel plot showing power law fits for each elevation band.
+
+    Each panel shows the CCDF (complementary cumulative distribution function)
+    with the fitted power law line.
+
+    Parameters
+    ----------
+    lake_df : DataFrame
+        Lake data with area and elevation columns
+    elev_bands : list
+        Elevation bin edges (e.g., [0, 500, 1000, 1500, ...])
+    area_col, elev_col : str
+        Column names (defaults from config)
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+
+    if area_col is None:
+        area_col = COLS['area']
+    if elev_col is None:
+        elev_col = COLS['elevation']
+
+    # Determine grid layout
+    n_bands = len(elev_bands) - 1
+    n_cols = min(3, n_bands)
+    n_rows = (n_bands + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_bands == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = axes.reshape(1, -1)
+
+    colors = plt.cm.viridis(np.linspace(0, 0.9, n_bands))
+
+    for i in range(n_bands):
+        row, col = divmod(i, n_cols)
+        ax = axes[row, col]
+
+        elev_low, elev_high = elev_bands[i], elev_bands[i+1]
+        mask = (lake_df[elev_col] >= elev_low) & (lake_df[elev_col] < elev_high)
+        areas = lake_df.loc[mask, area_col].values
+        areas = areas[areas > 0]
+
+        if len(areas) < 50:
+            ax.text(0.5, 0.5, f'n={len(areas)}\n(insufficient data)',
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(f'{elev_low}-{elev_high} m', fontsize=12)
+            continue
+
+        # Compute CCDF
+        sorted_areas = np.sort(areas)[::-1]
+        ranks = np.arange(1, len(sorted_areas) + 1)
+        ccdf = ranks / len(sorted_areas)
+
+        # Plot CCDF
+        ax.scatter(sorted_areas, ccdf, s=3, alpha=0.5, c=[colors[i]])
+
+        # Fit power law (simple MLE for display)
+        xmin = 0.1  # Use consistent threshold for visual comparison
+        tail = areas[areas >= xmin]
+        if len(tail) > 10:
+            alpha = 1 + len(tail) / np.sum(np.log(tail / xmin))
+
+            # Plot fit line
+            x_line = np.logspace(np.log10(xmin), np.log10(sorted_areas.max()), 50)
+            y_line = (x_line / xmin) ** (1 - alpha)
+            ax.plot(x_line, y_line, 'r--', linewidth=2, label=f'α = {alpha:.2f}')
+            ax.legend(loc='lower left', fontsize=10)
+
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_xlabel('Area (km²)', fontsize=10)
+        ax.set_ylabel('P(X ≥ x)', fontsize=10)
+        ax.set_title(f'{elev_low}-{elev_high} m (n={len(areas):,})', fontsize=12)
+        ax.grid(True, alpha=0.3, which='both')
+
+    # Hide unused axes
+    for i in range(n_bands, n_rows * n_cols):
+        row, col = divmod(i, n_cols)
+        axes[row, col].set_visible(False)
+
+    fig.suptitle('Lake Size Distribution (CCDF) by Elevation Band', fontsize=16, y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_powerlaw_overlay(lake_df, elev_bands, area_col=None, elev_col=None,
+                          figsize=(12, 8), save_path=None):
+    """
+    Overlay CCDFs from all elevation bands on single plot for comparison.
+
+    This makes it easy to visually compare how the power law exponent
+    varies with elevation.
+
+    Parameters
+    ----------
+    lake_df : DataFrame
+    elev_bands : list
+    """
+    setup_plot_style()
+
+    if area_col is None:
+        area_col = COLS['area']
+    if elev_col is None:
+        elev_col = COLS['elevation']
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    n_bands = len(elev_bands) - 1
+    colors = plt.cm.plasma(np.linspace(0.1, 0.9, n_bands))
+
+    legend_entries = []
+
+    for i in range(n_bands):
+        elev_low, elev_high = elev_bands[i], elev_bands[i+1]
+        mask = (lake_df[elev_col] >= elev_low) & (lake_df[elev_col] < elev_high)
+        areas = lake_df.loc[mask, area_col].values
+        areas = areas[areas > 0]
+
+        if len(areas) < 50:
+            continue
+
+        # Compute CCDF
+        sorted_areas = np.sort(areas)[::-1]
+        ranks = np.arange(1, len(sorted_areas) + 1)
+        ccdf = ranks / len(sorted_areas)
+
+        # Subsample for plotting efficiency
+        if len(sorted_areas) > 2000:
+            idx = np.unique(np.logspace(0, np.log10(len(sorted_areas)-1), 1000).astype(int))
+            sorted_areas = sorted_areas[idx]
+            ccdf = ccdf[idx]
+
+        # Fit alpha for label
+        xmin = 0.1
+        tail = areas[areas >= xmin]
+        alpha = 1 + len(tail) / np.sum(np.log(tail / xmin)) if len(tail) > 10 else np.nan
+
+        label = f'{elev_low}-{elev_high}m (α={alpha:.2f})' if not np.isnan(alpha) else f'{elev_low}-{elev_high}m'
+        ax.plot(sorted_areas, ccdf, '-', linewidth=2, color=colors[i], alpha=0.8, label=label)
+
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('Lake Area (km²)', fontsize=14)
+    ax.set_ylabel('P(X ≥ x)', fontsize=14)
+    ax.set_title('Lake Size CCDF Comparison Across Elevation Bands', fontsize=16)
+    ax.legend(loc='lower left', fontsize=10, ncol=2)
+    ax.grid(True, alpha=0.3, which='both')
+
+    # Add reference slope
+    x_ref = np.logspace(-2, 2, 50)
+    y_ref = (x_ref / 0.5) ** (-1.14)  # α=2.14 means slope of -(α-1)=-1.14
+    ax.plot(x_ref, y_ref, 'k--', linewidth=2, alpha=0.5, label='Cael & Seekell (α=2.14)')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_powerlaw_explained(results, figsize=(14, 10), save_path=None):
+    """
+    Create an educational figure explaining power law parameters.
+
+    Shows:
+    - What α (alpha) means: steepness of decline
+    - What x_min means: where power law begins
+    - Comparison to Cael & Seekell (2016) global result
+
+    Parameters
+    ----------
+    results : dict
+        Output from full_powerlaw_analysis()
+    """
+    setup_plot_style()
+
+    fig = plt.figure(figsize=figsize)
+
+    # Panel A: What different alpha values look like
+    ax1 = fig.add_subplot(2, 2, 1)
+    x = np.logspace(-1, 3, 100)
+    for alpha, color, label in [(1.5, 'blue', 'α=1.5 (shallow)'),
+                                  (2.0, 'green', 'α=2.0 (moderate)'),
+                                  (2.14, 'red', 'α=2.14 (global)'),
+                                  (2.5, 'purple', 'α=2.5 (steep)'),
+                                  (3.0, 'orange', 'α=3.0 (very steep)')]:
+        y = (x / 0.5) ** (1 - alpha)
+        ax1.plot(x, y, color=color, linewidth=2, label=label)
+
+    ax1.set_xscale('log')
+    ax1.set_yscale('log')
+    ax1.set_xlabel('Lake Area (km²)')
+    ax1.set_ylabel('P(X ≥ x) - CCDF')
+    ax1.set_title('A) What α (alpha) means', fontsize=14, fontweight='bold')
+    ax1.legend(loc='lower left', fontsize=9)
+    ax1.set_xlim(0.1, 1000)
+    ax1.grid(True, alpha=0.3)
+
+    # Add explanation text
+    ax1.text(0.98, 0.98, 'Higher α → fewer large lakes\nLower α → more large lakes',
+             transform=ax1.transAxes, ha='right', va='top', fontsize=10,
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    # Panel B: What x_min means
+    ax2 = fig.add_subplot(2, 2, 2)
+    x = np.logspace(-2, 3, 100)
+    alpha = 2.14
+
+    for xmin, color, label in [(0.1, 'blue', 'x_min=0.1 km²'),
+                                 (0.46, 'red', 'x_min=0.46 km² (global)'),
+                                 (1.0, 'green', 'x_min=1.0 km²')]:
+        y = np.where(x >= xmin, (x / xmin) ** (1 - alpha), np.nan)
+        ax2.plot(x, y, color=color, linewidth=2, label=label)
+        ax2.axvline(xmin, color=color, linestyle=':', alpha=0.5)
+
+    ax2.set_xscale('log')
+    ax2.set_yscale('log')
+    ax2.set_xlabel('Lake Area (km²)')
+    ax2.set_ylabel('P(X ≥ x) - CCDF')
+    ax2.set_title('B) What x_min means', fontsize=14, fontweight='bold')
+    ax2.legend(loc='lower left', fontsize=9)
+    ax2.grid(True, alpha=0.3)
+
+    ax2.text(0.98, 0.98, 'x_min = minimum size where\npower law behavior begins',
+             transform=ax2.transAxes, ha='right', va='top', fontsize=10,
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    # Panel C: Key metrics table
+    ax3 = fig.add_subplot(2, 2, 3)
+    ax3.axis('off')
+
+    if results:
+        table_data = [
+            ['Parameter', 'Value', 'Interpretation'],
+            ['α (alpha)', f"{results.get('alpha', 'N/A'):.3f}", 'Power law exponent'],
+            ['x_min', f"{results.get('xmin', 'N/A'):.4f} km²", 'Lower cutoff'],
+            ['n (tail)', f"{results.get('n_tail', 'N/A'):,}", 'Lakes in power law regime'],
+            ['KS statistic', f"{results.get('ks_statistic', 'N/A'):.4f}", 'Goodness of fit'],
+            ['Global α', '2.14', 'Cael & Seekell (2016)'],
+        ]
+
+        table = ax3.table(cellText=table_data, loc='center', cellLoc='left',
+                          colWidths=[0.25, 0.3, 0.45])
+        table.auto_set_font_size(False)
+        table.set_fontsize(11)
+        table.scale(1.2, 1.8)
+
+        # Style header
+        for j in range(3):
+            table[(0, j)].set_facecolor('#4472C4')
+            table[(0, j)].set_text_props(color='white', fontweight='bold')
+
+    ax3.set_title('C) Key Power Law Parameters', fontsize=14, fontweight='bold', y=0.95)
+
+    # Panel D: Interpretation guide
+    ax4 = fig.add_subplot(2, 2, 4)
+    ax4.axis('off')
+
+    interpretation_text = """
+    INTERPRETING POWER LAW RESULTS
+
+    Power Law: P(X ≥ x) ∝ x^(1-α)
+
+    • α < 2.14: More large lakes than global average
+      → May indicate tectonic basins or large glacial lakes
+
+    • α ≈ 2.14: Similar to global distribution
+      → "Typical" lake-forming processes
+
+    • α > 2.14: Fewer large lakes than expected
+      → May indicate young landscapes or constrained basins
+
+    WHAT AFFECTS α?
+
+    • Geologic age: Older landscapes tend toward α ≈ 2
+    • Lake-forming processes: Glacial vs fluvial vs tectonic
+    • Basin constraints: Topography limits maximum size
+    • Scale of analysis: Regional vs continental
+    """
+
+    ax4.text(0.05, 0.95, interpretation_text, transform=ax4.transAxes,
+             fontsize=10, verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+    ax4.set_title('D) Interpretation Guide', fontsize=14, fontweight='bold', y=0.98)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+# ============================================================================
+# ENHANCED 2D DENSITY WITH MARGINAL DISTRIBUTIONS
+# ============================================================================
+
+def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
+                                    var1_units='', var2_units='',
+                                    log_scale=True, figsize=(12, 10),
+                                    save_path=None):
+    """
+    Create 2D heatmap with marginal density distributions along each axis.
+
+    This is a key visualization showing:
+    - Central heatmap: 2D normalized lake density
+    - Top margin: 1D density vs var2 (integrated over var1)
+    - Right margin: 1D density vs var1 (integrated over var2)
+
+    Parameters
+    ----------
+    result_df : DataFrame
+        Output from compute_2d_normalized_density()
+    var1_name, var2_name : str
+        Variable names (e.g., 'Elevation_', 'Slope')
+    var1_units, var2_units : str
+        Units for axis labels
+    log_scale : bool
+        If True, use log10 color scale
+    """
+    setup_plot_style()
+
+    # Create figure with gridspec for layout
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(3, 3, width_ratios=[0.15, 1, 0.05], height_ratios=[0.3, 1, 0.05],
+                          hspace=0.05, wspace=0.05)
+
+    # Main heatmap
+    ax_main = fig.add_subplot(gs[1, 1])
+
+    # Marginal axes
+    ax_top = fig.add_subplot(gs[0, 1], sharex=ax_main)
+    ax_right = fig.add_subplot(gs[1, 0], sharey=ax_main)
+    ax_cbar = fig.add_subplot(gs[1, 2])
+
+    # Pivot data for heatmap
+    var1_mid = f'{var1_name}_mid'
+    var2_mid = f'{var2_name}_mid'
+
+    pivot_df = result_df.pivot_table(
+        index=var1_mid,
+        columns=var2_mid,
+        values='normalized_density'
+    )
+
+    # Prepare data
+    data = pivot_df.values.copy()
+    if log_scale:
+        with np.errstate(divide='ignore', invalid='ignore'):
+            data = np.log10(data)
+        data[~np.isfinite(data)] = np.nan
+        cbar_label = 'log₁₀(Lakes per 1,000 km²)'
+    else:
+        cbar_label = 'Lakes per 1,000 km²'
+
+    # Main heatmap
+    extent = [pivot_df.columns.min(), pivot_df.columns.max(),
+              pivot_df.index.min(), pivot_df.index.max()]
+    im = ax_main.imshow(data, aspect='auto', cmap='magma', origin='lower',
+                        extent=extent, interpolation='nearest')
+
+    # Colorbar
+    cbar = plt.colorbar(im, cax=ax_cbar)
+    cbar.set_label(cbar_label, fontsize=12)
+
+    # Top marginal: density vs var2 (sum over var1)
+    marginal_top = result_df.groupby(var2_mid).agg({
+        'n_lakes': 'sum',
+        'area_km2': 'sum'
+    }).reset_index()
+    marginal_top['density'] = (marginal_top['n_lakes'] / marginal_top['area_km2']) * 1000
+
+    ax_top.fill_between(marginal_top[var2_mid], marginal_top['density'],
+                        alpha=0.5, color='steelblue')
+    ax_top.plot(marginal_top[var2_mid], marginal_top['density'],
+                'o-', color='steelblue', linewidth=2, markersize=3)
+    ax_top.set_ylabel('Density', fontsize=10)
+    ax_top.tick_params(labelbottom=False)
+    ax_top.set_title(f'Lake Density in {var1_name} × {var2_name} Space', fontsize=14)
+
+    # Right marginal: density vs var1 (sum over var2)
+    marginal_right = result_df.groupby(var1_mid).agg({
+        'n_lakes': 'sum',
+        'area_km2': 'sum'
+    }).reset_index()
+    marginal_right['density'] = (marginal_right['n_lakes'] / marginal_right['area_km2']) * 1000
+
+    ax_right.fill_betweenx(marginal_right[var1_mid], marginal_right['density'],
+                           alpha=0.5, color='darkred')
+    ax_right.plot(marginal_right['density'], marginal_right[var1_mid],
+                  'o-', color='darkred', linewidth=2, markersize=3)
+    ax_right.set_xlabel('Density', fontsize=10)
+    ax_right.tick_params(labelleft=False)
+    ax_right.invert_xaxis()  # So it reads left-to-right from the heatmap
+
+    # Labels
+    var1_label = f'{var1_name} ({var1_units})' if var1_units else var1_name
+    var2_label = f'{var2_name} ({var2_units})' if var2_units else var2_name
+    ax_main.set_xlabel(var2_label, fontsize=12)
+    ax_main.set_ylabel(var1_label, fontsize=12)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, (ax_main, ax_top, ax_right)
+
+
+def plot_2d_contour_with_domains(result_df, var1_name, var2_name,
+                                  var1_units='', var2_units='',
+                                  figsize=(12, 9), save_path=None):
+    """
+    2D density contour plot with annotated geomorphic process domains.
+
+    Shows conceptual regions where different lake-forming processes dominate.
+    """
+    setup_plot_style()
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    var1_mid = f'{var1_name}_mid'
+    var2_mid = f'{var2_name}_mid'
+
+    pivot_df = result_df.pivot_table(
+        index=var1_mid,
+        columns=var2_mid,
+        values='normalized_density'
+    )
+
+    X, Y = np.meshgrid(pivot_df.columns, pivot_df.index)
+    Z = pivot_df.values
+
+    # Log transform
+    with np.errstate(divide='ignore', invalid='ignore'):
+        Z_log = np.log10(Z)
+    Z_log[~np.isfinite(Z_log)] = np.nan
+
+    # Filled contours
+    levels = np.linspace(np.nanmin(Z_log), np.nanmax(Z_log), 15)
+    cf = ax.contourf(X, Y, Z_log, levels=levels, cmap='magma', extend='both')
+    ax.contour(X, Y, Z_log, levels=levels, colors='white', linewidths=0.3, alpha=0.5)
+
+    cbar = plt.colorbar(cf, ax=ax, shrink=0.8)
+    cbar.set_label('log₁₀(Lakes per 1,000 km²)', fontsize=12)
+
+    # Add domain annotations (if elevation × slope)
+    if 'elev' in var1_name.lower() or 'elev' in var1_mid.lower():
+        # Glacial domain
+        ax.annotate('GLACIAL\nDOMAIN', xy=(5, 2000), fontsize=11, fontweight='bold',
+                   ha='center', color='white',
+                   bbox=dict(boxstyle='round', facecolor='blue', alpha=0.5))
+
+        # Floodplain domain
+        ax.annotate('FLOODPLAIN\nDOMAIN', xy=(2, 150), fontsize=11, fontweight='bold',
+                   ha='center', color='white',
+                   bbox=dict(boxstyle='round', facecolor='green', alpha=0.5))
+
+        # "Dead zone" - steep slopes
+        ax.annotate('STEEP SLOPES\n(few lakes)', xy=(25, 1000), fontsize=10,
+                   ha='center', color='white', style='italic',
+                   bbox=dict(boxstyle='round', facecolor='red', alpha=0.3))
+
+    var1_label = f'{var1_name.replace("_", "")} ({var1_units})' if var1_units else var1_name
+    var2_label = f'{var2_name.replace("_", "")} ({var2_units})' if var2_units else var2_name
+    ax.set_ylabel(var1_label, fontsize=14)
+    ax.set_xlabel(var2_label, fontsize=14)
+    ax.set_title('Lake Density with Process Domain Annotations', fontsize=16)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+# ============================================================================
+# ADDITIONAL USEFUL VISUALIZATIONS
+# ============================================================================
+
+def plot_lake_size_histogram_by_elevation(lake_df, elev_bands, area_col=None,
+                                           elev_col=None, figsize=(14, 8),
+                                           save_path=None):
+    """
+    Stacked histogram showing lake size distribution at different elevations.
+    """
+    setup_plot_style()
+
+    if area_col is None:
+        area_col = COLS['area']
+    if elev_col is None:
+        elev_col = COLS['elevation']
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    n_bands = len(elev_bands) - 1
+    colors = plt.cm.terrain(np.linspace(0.2, 0.8, n_bands))
+
+    # Create log-spaced bins for area
+    area_bins = np.logspace(-3, 2, 40)
+
+    for i in range(n_bands):
+        elev_low, elev_high = elev_bands[i], elev_bands[i+1]
+        mask = (lake_df[elev_col] >= elev_low) & (lake_df[elev_col] < elev_high)
+        areas = lake_df.loc[mask, area_col].values
+        areas = areas[areas > 0]
+
+        if len(areas) > 0:
+            ax.hist(areas, bins=area_bins, alpha=0.6, color=colors[i],
+                   label=f'{elev_low}-{elev_high}m (n={len(areas):,})')
+
+    ax.set_xscale('log')
+    ax.set_xlabel('Lake Area (km²)', fontsize=14)
+    ax.set_ylabel('Number of Lakes', fontsize=14)
+    ax.set_title('Lake Size Distribution by Elevation', fontsize=16)
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(True, alpha=0.3, which='both')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_cumulative_area_by_size(lake_df, area_col=None, figsize=(10, 6),
+                                  save_path=None):
+    """
+    Plot cumulative lake area as function of minimum lake size.
+
+    Shows what fraction of total lake area comes from different size classes.
+    """
+    setup_plot_style()
+
+    if area_col is None:
+        area_col = COLS['area']
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    areas = lake_df[area_col].values
+    areas = areas[areas > 0]
+    sorted_areas = np.sort(areas)[::-1]  # Largest first
+
+    cumsum_area = np.cumsum(sorted_areas)
+    total_area = cumsum_area[-1]
+
+    # X-axis: lake size at that rank
+    ax.plot(sorted_areas, cumsum_area / total_area * 100, 'b-', linewidth=2)
+
+    ax.set_xscale('log')
+    ax.set_xlabel('Lake Area (km²)', fontsize=14)
+    ax.set_ylabel('Cumulative % of Total Lake Area', fontsize=14)
+    ax.set_title('Cumulative Lake Area Distribution', fontsize=16)
+    ax.grid(True, alpha=0.3, which='both')
+
+    # Add reference lines
+    for pct in [50, 90, 99]:
+        idx = np.searchsorted(cumsum_area / total_area * 100, pct)
+        if idx < len(sorted_areas):
+            area_threshold = sorted_areas[idx]
+            ax.axhline(pct, color='gray', linestyle='--', alpha=0.5)
+            ax.axvline(area_threshold, color='gray', linestyle='--', alpha=0.5)
+            ax.annotate(f'{pct}% from lakes ≥{area_threshold:.2f} km²',
+                       xy=(area_threshold, pct), xytext=(10, 5),
+                       textcoords='offset points', fontsize=9)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_geographic_density_map(lake_df, lat_col=None, lon_col=None,
+                                 grid_size=0.5, figsize=(14, 10),
+                                 save_path=None):
+    """
+    Create geographic heatmap of lake density.
+
+    Parameters
+    ----------
+    grid_size : float
+        Size of grid cells in degrees
+    """
+    setup_plot_style()
+
+    if lat_col is None:
+        lat_col = COLS.get('lat', 'Latitude')
+    if lon_col is None:
+        lon_col = COLS.get('lon', 'Longitude')
+
+    if lat_col not in lake_df.columns or lon_col not in lake_df.columns:
+        print(f"Warning: Lat/Lon columns not found. Available: {list(lake_df.columns)}")
+        return None, None
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Create grid
+    lat_bins = np.arange(lake_df[lat_col].min(), lake_df[lat_col].max() + grid_size, grid_size)
+    lon_bins = np.arange(lake_df[lon_col].min(), lake_df[lon_col].max() + grid_size, grid_size)
+
+    # Count lakes per cell
+    H, xedges, yedges = np.histogram2d(lake_df[lon_col], lake_df[lat_col],
+                                        bins=[lon_bins, lat_bins])
+
+    # Plot
+    with np.errstate(divide='ignore'):
+        H_log = np.log10(H.T + 1)  # +1 to handle zeros
+
+    im = ax.imshow(H_log, origin='lower', aspect='auto', cmap='YlOrRd',
+                   extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
+
+    cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label('log₁₀(Lake Count + 1)', fontsize=12)
+
+    ax.set_xlabel('Longitude (°)', fontsize=14)
+    ax.set_ylabel('Latitude (°)', fontsize=14)
+    ax.set_title('Geographic Distribution of Lakes (CONUS)', fontsize=16)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
     print("  - plot_raw_vs_normalized()")
+    print("  - plot_powerlaw_by_elevation_multipanel()")
+    print("  - plot_powerlaw_overlay()")
+    print("  - plot_powerlaw_explained()")
+    print("  - plot_2d_heatmap_with_marginals()")
+    print("  - plot_geographic_density_map()")
     print("  - plot_1d_density()")
     print("  - plot_2d_heatmap()")
     print("  - plot_powerlaw_rank_size()")

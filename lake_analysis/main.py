@@ -37,27 +37,32 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Import project modules
-from config import (
+from .config import (
     LAKE_GDB_PATH, LAKE_FEATURE_CLASS, RASTERS, OUTPUT_DIR,
     COLS, ELEV_BREAKS, SLOPE_BREAKS, RELIEF_BREAKS,
     POWERLAW_XMIN_THRESHOLD, ensure_output_dir, print_config_summary
 )
-from data_loading import (
+from .data_loading import (
     load_lake_data_from_gdb, load_lake_data_from_parquet,
     calculate_landscape_area_by_bin, check_raster_alignment,
     summarize_lake_data, quick_data_check, get_raster_info
 )
-from normalization import (
+from .normalization import (
     compute_1d_normalized_density, compute_2d_normalized_density,
     compute_1d_density_with_size_classes, classify_lake_domains,
     compute_domain_statistics
 )
-from visualization import (
+from .visualization import (
     plot_raw_vs_normalized, plot_1d_density, plot_2d_heatmap,
     plot_powerlaw_rank_size, plot_domain_comparison,
-    plot_bimodality_test, create_summary_figure, setup_plot_style
+    plot_bimodality_test, create_summary_figure, setup_plot_style,
+    # Enhanced visualizations
+    plot_powerlaw_by_elevation_multipanel, plot_powerlaw_overlay,
+    plot_powerlaw_explained, plot_2d_heatmap_with_marginals,
+    plot_2d_contour_with_domains, plot_lake_size_histogram_by_elevation,
+    plot_cumulative_area_by_size, plot_geographic_density_map
 )
-from powerlaw_analysis import (
+from .powerlaw_analysis import (
     full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
     fit_powerlaw_by_domain
 )
@@ -84,14 +89,26 @@ def load_data(source='gdb'):
     print("LOADING LAKE DATA")
     print("=" * 60)
 
-    if source == 'gdb':
-        lakes = load_lake_data_from_gdb()
-    else:
-        lakes = load_lake_data_from_parquet()
+    try:
+        print(f"\n[STEP 1] Loading from {source}...")
+        if source == 'gdb':
+            lakes = load_lake_data_from_gdb()
+        else:
+            lakes = load_lake_data_from_parquet()
 
-    summarize_lake_data(lakes)
+        print(f"\n[STEP 2] Generating summary statistics...")
+        summarize_lake_data(lakes)
 
-    return lakes
+        print(f"\n[SUCCESS] Loaded {len(lakes):,} lakes successfully!")
+        return lakes
+
+    except FileNotFoundError as e:
+        print(f"\n[ERROR] File not found: {e}")
+        print("  Please check the paths in config.py")
+        raise
+    except Exception as e:
+        print(f"\n[ERROR] Failed to load data: {e}")
+        raise
 
 
 # ============================================================================
@@ -124,63 +141,81 @@ def analyze_elevation(lakes, raster_path=None, save_figures=True):
     print("HYPOTHESIS 1: ELEVATION-NORMALIZED BIMODALITY")
     print("=" * 60)
 
-    if raster_path is None:
-        raster_path = RASTERS.get('elevation')
+    try:
+        if raster_path is None:
+            raster_path = RASTERS.get('elevation')
 
-    if raster_path is None or not os.path.exists(raster_path):
-        print("WARNING: Elevation raster not found.")
-        print("Please update RASTERS['elevation'] in config.py")
+        if raster_path is None or not os.path.exists(raster_path):
+            print("[ERROR] Elevation raster not found.")
+            print("  Please update RASTERS['elevation'] in config.py")
+            return None
+
+        # Get raster info
+        print("\n[STEP 1/5] Getting raster metadata...")
+        info = get_raster_info(raster_path)
+        print(f"  Raster: {raster_path}")
+        print(f"  Dimensions: {info['width']} x {info['height']}")
+        print(f"  CRS: {info['crs']}")
+        print(f"  Pixel area: {info['pixel_area_km2']:.6f} km²")
+
+        # Calculate landscape area
+        print("\n[STEP 2/5] Calculating landscape area by elevation bin...")
+        print("  This may take several minutes for large rasters...")
+        landscape_area = calculate_landscape_area_by_bin(raster_path, ELEV_BREAKS)
+        print("  Landscape area calculation complete!")
+
+        # Compute normalized density
+        print("\n[STEP 3/5] Computing normalized lake density...")
+        elev_col = COLS['elevation']
+        density = compute_1d_normalized_density(
+            lakes, elev_col, ELEV_BREAKS, landscape_area
+        )
+        print("  Density calculation complete!")
+
+        # Visualize
+        ensure_output_dir()
+
+        if save_figures:
+            print("\n[STEP 4/5] Generating visualizations...")
+            fig, axes = plot_raw_vs_normalized(
+                density, 'Elevation', units='m',
+                save_path=f"{OUTPUT_DIR}/H1_elevation_raw_vs_normalized.png"
+            )
+            plt.close(fig)
+
+            fig, ax = plot_bimodality_test(
+                density, 'Elevation', units='m',
+                save_path=f"{OUTPUT_DIR}/H1_elevation_bimodality_test.png"
+            )
+            plt.close(fig)
+            print("  Figures saved!")
+
+        # Save data
+        print("\n[STEP 5/5] Saving results to CSV...")
+        density.to_csv(f"{OUTPUT_DIR}/H1_elevation_density.csv", index=False)
+        landscape_area.to_csv(f"{OUTPUT_DIR}/H1_elevation_landscape_area.csv", index=False)
+        print(f"  Results saved to {OUTPUT_DIR}/")
+
+        # Identify peaks
+        peaks = density.nlargest(3, 'normalized_density')
+        print("\n[RESULTS] Top 3 density peaks:")
+        for _, row in peaks.iterrows():
+            print(f"  {row['bin_lower']:.0f}-{row['bin_upper']:.0f} m: "
+                  f"{row['normalized_density']:.2f} lakes/1000 km²")
+
+        print("\n[SUCCESS] H1 analysis complete!")
+
+        return {
+            'landscape_area': landscape_area,
+            'density': density,
+            'peaks': peaks,
+        }
+
+    except Exception as e:
+        print(f"\n[ERROR] H1 analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None
-
-    # Get raster info
-    info = get_raster_info(raster_path)
-    print(f"\nElevation raster: {raster_path}")
-    print(f"  Dimensions: {info['width']} x {info['height']}")
-    print(f"  CRS: {info['crs']}")
-    print(f"  Pixel area: {info['pixel_area_km2']:.6f} km²")
-
-    # Calculate landscape area
-    print("\nCalculating landscape area by elevation bin...")
-    landscape_area = calculate_landscape_area_by_bin(raster_path, ELEV_BREAKS)
-
-    # Compute normalized density
-    elev_col = COLS['elevation']
-    density = compute_1d_normalized_density(
-        lakes, elev_col, ELEV_BREAKS, landscape_area
-    )
-
-    # Visualize
-    ensure_output_dir()
-
-    if save_figures:
-        fig, axes = plot_raw_vs_normalized(
-            density, 'Elevation', units='m',
-            save_path=f"{OUTPUT_DIR}/H1_elevation_raw_vs_normalized.png"
-        )
-        plt.close(fig)
-
-        fig, ax = plot_bimodality_test(
-            density, 'Elevation', units='m',
-            save_path=f"{OUTPUT_DIR}/H1_elevation_bimodality_test.png"
-        )
-        plt.close(fig)
-
-    # Save data
-    density.to_csv(f"{OUTPUT_DIR}/H1_elevation_density.csv", index=False)
-    landscape_area.to_csv(f"{OUTPUT_DIR}/H1_elevation_landscape_area.csv", index=False)
-
-    # Identify peaks
-    peaks = density.nlargest(3, 'normalized_density')
-    print("\nTop 3 density peaks:")
-    for _, row in peaks.iterrows():
-        print(f"  {row['bin_lower']:.0f}-{row['bin_upper']:.0f} m: "
-              f"{row['normalized_density']:.2f} lakes/1000 km²")
-
-    return {
-        'landscape_area': landscape_area,
-        'density': density,
-        'peaks': peaks,
-    }
 
 
 # ============================================================================
@@ -205,46 +240,65 @@ def analyze_slope(lakes, raster_path=None, save_figures=True):
     print("HYPOTHESIS 2: SLOPE THRESHOLD")
     print("=" * 60)
 
-    if raster_path is None:
-        raster_path = RASTERS.get('slope')
+    try:
+        if raster_path is None:
+            raster_path = RASTERS.get('slope')
 
-    if raster_path is None or not os.path.exists(raster_path):
-        print("WARNING: Slope raster not found.")
-        return None
+        if raster_path is None or not os.path.exists(raster_path):
+            print("[ERROR] Slope raster not found.")
+            print("  Please update RASTERS['slope'] in config.py")
+            return None
 
-    # Calculate landscape area
-    landscape_area = calculate_landscape_area_by_bin(raster_path, SLOPE_BREAKS)
+        # Calculate landscape area
+        print("\n[STEP 1/4] Calculating landscape area by slope bin...")
+        print("  This may take several minutes for large rasters...")
+        landscape_area = calculate_landscape_area_by_bin(raster_path, SLOPE_BREAKS)
+        print("  Landscape area calculation complete!")
 
-    # Compute normalized density
-    slope_col = COLS['slope']
-    density = compute_1d_normalized_density(
-        lakes, slope_col, SLOPE_BREAKS, landscape_area
-    )
-
-    # Visualize
-    ensure_output_dir()
-
-    if save_figures:
-        fig, axes = plot_raw_vs_normalized(
-            density, 'Slope', units='°',
-            save_path=f"{OUTPUT_DIR}/H2_slope_raw_vs_normalized.png"
+        # Compute normalized density
+        print("\n[STEP 2/4] Computing normalized lake density...")
+        slope_col = COLS['slope']
+        density = compute_1d_normalized_density(
+            lakes, slope_col, SLOPE_BREAKS, landscape_area
         )
-        plt.close(fig)
+        print("  Density calculation complete!")
 
-    # Find threshold (steepest decline)
-    density['density_change'] = density['normalized_density'].diff()
-    threshold_idx = density['density_change'].idxmin()
-    if threshold_idx is not None and not pd.isna(threshold_idx):
-        threshold_slope = density.loc[threshold_idx, 'bin_lower']
-        print(f"\nSteepest density decline at: {threshold_slope}°")
+        # Visualize
+        ensure_output_dir()
 
-    # Save data
-    density.to_csv(f"{OUTPUT_DIR}/H2_slope_density.csv", index=False)
+        if save_figures:
+            print("\n[STEP 3/4] Generating visualizations...")
+            fig, axes = plot_raw_vs_normalized(
+                density, 'Slope', units='°',
+                save_path=f"{OUTPUT_DIR}/H2_slope_raw_vs_normalized.png"
+            )
+            plt.close(fig)
+            print("  Figure saved!")
 
-    return {
-        'landscape_area': landscape_area,
-        'density': density,
-    }
+        # Find threshold (steepest decline)
+        print("\n[STEP 4/4] Identifying slope threshold...")
+        density['density_change'] = density['normalized_density'].diff()
+        threshold_idx = density['density_change'].idxmin()
+        if threshold_idx is not None and not pd.isna(threshold_idx):
+            threshold_slope = density.loc[threshold_idx, 'bin_lower']
+            print(f"  Steepest density decline at: {threshold_slope}°")
+
+        # Save data
+        density.to_csv(f"{OUTPUT_DIR}/H2_slope_density.csv", index=False)
+        print(f"  Results saved to {OUTPUT_DIR}/")
+
+        print("\n[SUCCESS] H2 analysis complete!")
+
+        return {
+            'landscape_area': landscape_area,
+            'density': density,
+        }
+
+    except Exception as e:
+        print(f"\n[ERROR] H2 analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 # ============================================================================
@@ -269,46 +323,65 @@ def analyze_relief(lakes, raster_path=None, save_figures=True):
     print("HYPOTHESIS 3: RELIEF CONTROLS")
     print("=" * 60)
 
-    if raster_path is None:
-        raster_path = RASTERS.get('relief_5km')
+    try:
+        if raster_path is None:
+            raster_path = RASTERS.get('relief_5km')
 
-    if raster_path is None or not os.path.exists(raster_path):
-        print("WARNING: Relief raster not found.")
-        return None
+        if raster_path is None or not os.path.exists(raster_path):
+            print("[ERROR] Relief raster not found.")
+            print("  Please update RASTERS['relief_5km'] in config.py")
+            return None
 
-    # Calculate landscape area
-    landscape_area = calculate_landscape_area_by_bin(raster_path, RELIEF_BREAKS)
+        # Calculate landscape area
+        print("\n[STEP 1/4] Calculating landscape area by relief bin...")
+        print("  This may take several minutes for large rasters...")
+        landscape_area = calculate_landscape_area_by_bin(raster_path, RELIEF_BREAKS)
+        print("  Landscape area calculation complete!")
 
-    # Compute normalized density
-    relief_col = COLS.get('relief_5km', 'F5km_relief')
-    density = compute_1d_normalized_density(
-        lakes, relief_col, RELIEF_BREAKS, landscape_area
-    )
-
-    # Visualize
-    ensure_output_dir()
-
-    if save_figures:
-        fig, axes = plot_raw_vs_normalized(
-            density, 'Relief (5km)', units='m',
-            save_path=f"{OUTPUT_DIR}/H3_relief_raw_vs_normalized.png"
+        # Compute normalized density
+        print("\n[STEP 2/4] Computing normalized lake density...")
+        relief_col = COLS.get('relief_5km', 'F5km_relief')
+        density = compute_1d_normalized_density(
+            lakes, relief_col, RELIEF_BREAKS, landscape_area
         )
-        plt.close(fig)
+        print("  Density calculation complete!")
 
-    # Find peak (intermediate relief)
-    peak_idx = density['normalized_density'].idxmax()
-    if peak_idx is not None:
-        peak_relief = (density.loc[peak_idx, 'bin_lower'] +
-                      density.loc[peak_idx, 'bin_upper']) / 2
-        print(f"\nPeak density at relief: {peak_relief:.0f} m")
+        # Visualize
+        ensure_output_dir()
 
-    # Save data
-    density.to_csv(f"{OUTPUT_DIR}/H3_relief_density.csv", index=False)
+        if save_figures:
+            print("\n[STEP 3/4] Generating visualizations...")
+            fig, axes = plot_raw_vs_normalized(
+                density, 'Relief (5km)', units='m',
+                save_path=f"{OUTPUT_DIR}/H3_relief_raw_vs_normalized.png"
+            )
+            plt.close(fig)
+            print("  Figure saved!")
 
-    return {
-        'landscape_area': landscape_area,
-        'density': density,
-    }
+        # Find peak (intermediate relief)
+        print("\n[STEP 4/4] Identifying peak relief...")
+        peak_idx = density['normalized_density'].idxmax()
+        if peak_idx is not None:
+            peak_relief = (density.loc[peak_idx, 'bin_lower'] +
+                          density.loc[peak_idx, 'bin_upper']) / 2
+            print(f"  Peak density at relief: {peak_relief:.0f} m")
+
+        # Save data
+        density.to_csv(f"{OUTPUT_DIR}/H3_relief_density.csv", index=False)
+        print(f"  Results saved to {OUTPUT_DIR}/")
+
+        print("\n[SUCCESS] H3 analysis complete!")
+
+        return {
+            'landscape_area': landscape_area,
+            'density': density,
+        }
+
+    except Exception as e:
+        print(f"\n[ERROR] H3 analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 # ============================================================================
@@ -316,7 +389,7 @@ def analyze_relief(lakes, raster_path=None, save_figures=True):
 # ============================================================================
 
 def analyze_2d_domains(lakes, elev_raster=None, slope_raster=None,
-                        save_figures=True):
+                        save_figures=True, fine_resolution=True):
     """
     Test H4: 2D elevation × slope space reveals distinct process domains.
 
@@ -325,6 +398,8 @@ def analyze_2d_domains(lakes, elev_raster=None, slope_raster=None,
     lakes : DataFrame
     elev_raster, slope_raster : str, optional
     save_figures : bool
+    fine_resolution : bool
+        If True, use finer bins for higher resolution heatmap
 
     Returns
     -------
@@ -334,54 +409,99 @@ def analyze_2d_domains(lakes, elev_raster=None, slope_raster=None,
     print("HYPOTHESIS 4: 2D PROCESS DOMAINS")
     print("=" * 60)
 
-    if elev_raster is None:
-        elev_raster = RASTERS.get('elevation')
-    if slope_raster is None:
-        slope_raster = RASTERS.get('slope')
+    try:
+        if elev_raster is None:
+            elev_raster = RASTERS.get('elevation')
+        if slope_raster is None:
+            slope_raster = RASTERS.get('slope')
 
-    if not all([elev_raster, slope_raster]):
-        print("WARNING: Missing rasters for 2D analysis.")
-        return None
+        if not all([elev_raster, slope_raster]):
+            print("[ERROR] Missing rasters for 2D analysis.")
+            return None
 
-    if not (os.path.exists(elev_raster) and os.path.exists(slope_raster)):
-        print("WARNING: Raster files not found.")
-        return None
+        if not (os.path.exists(elev_raster) and os.path.exists(slope_raster)):
+            print("[ERROR] Raster files not found.")
+            return None
 
-    # Check alignment
-    alignment = check_raster_alignment([elev_raster, slope_raster])
-    if not alignment['aligned']:
-        print("\nWARNING: Rasters are not aligned!")
-        print("Consider reprojecting to common CRS before 2D analysis.")
-        # Could still proceed with lake attributes if available in DataFrame
+        # Check alignment
+        print("\n[STEP 1/4] Checking raster alignment...")
+        alignment = check_raster_alignment([elev_raster, slope_raster])
+        if not alignment['aligned']:
+            print("  WARNING: Rasters are not aligned!")
+            print("  Consider reprojecting to common CRS before 2D analysis.")
 
-    # Compute 2D density
-    elev_col = COLS['elevation']
-    slope_col = COLS['slope']
+        # Use finer bins if requested
+        if fine_resolution:
+            elev_breaks_2d = list(range(0, 4200, 100))  # 100m bins instead of 200m
+            slope_breaks_2d = list(range(0, 46, 2))     # 2° bins instead of 3°
+            print("  Using fine resolution: 100m elevation × 2° slope bins")
+        else:
+            elev_breaks_2d = ELEV_BREAKS
+            slope_breaks_2d = SLOPE_BREAKS
+            print("  Using standard resolution")
 
-    print("\nComputing 2D normalized density...")
-    density_2d = compute_2d_normalized_density(
-        lakes, elev_raster, slope_raster,
-        elev_col, slope_col,
-        ELEV_BREAKS, SLOPE_BREAKS
-    )
+        # Compute 2D density
+        elev_col = COLS['elevation']
+        slope_col = COLS['slope']
 
-    # Visualize
-    ensure_output_dir()
-
-    if save_figures:
-        fig, ax = plot_2d_heatmap(
-            density_2d, elev_col, slope_col,
-            var1_units='m', var2_units='°',
-            save_path=f"{OUTPUT_DIR}/H4_elevation_slope_heatmap.png"
+        print("\n[STEP 2/4] Computing 2D normalized density...")
+        print("  This may take several minutes for large rasters...")
+        density_2d = compute_2d_normalized_density(
+            lakes, elev_raster, slope_raster,
+            elev_col, slope_col,
+            elev_breaks_2d, slope_breaks_2d
         )
-        plt.close(fig)
+        print("  2D density calculation complete!")
 
-    # Save data
-    density_2d.to_csv(f"{OUTPUT_DIR}/H4_2d_density.csv", index=False)
+        # Visualize
+        ensure_output_dir()
 
-    return {
-        'density_2d': density_2d,
-    }
+        if save_figures:
+            print("\n[STEP 3/4] Generating visualizations...")
+
+            # Standard heatmap
+            fig, ax = plot_2d_heatmap(
+                density_2d, elev_col, slope_col,
+                var1_units='m', var2_units='°',
+                save_path=f"{OUTPUT_DIR}/H4_elevation_slope_heatmap.png"
+            )
+            plt.close(fig)
+            print("  Basic heatmap saved!")
+
+            # Enhanced heatmap with marginal distributions
+            fig, axes = plot_2d_heatmap_with_marginals(
+                density_2d, elev_col, slope_col,
+                var1_units='m', var2_units='°',
+                save_path=f"{OUTPUT_DIR}/H4_heatmap_with_marginals.png"
+            )
+            plt.close(fig)
+            print("  Heatmap with marginal PDFs saved!")
+
+            # Contour plot with domain annotations
+            fig, ax = plot_2d_contour_with_domains(
+                density_2d, elev_col, slope_col,
+                var1_units='m', var2_units='°',
+                save_path=f"{OUTPUT_DIR}/H4_contour_with_domains.png"
+            )
+            plt.close(fig)
+            print("  Contour plot with domains saved!")
+
+        # Save data
+        print("\n[STEP 4/4] Saving results...")
+        density_2d.to_csv(f"{OUTPUT_DIR}/H4_2d_density.csv", index=False)
+        print(f"  Results saved to {OUTPUT_DIR}/")
+
+        print("\n[SUCCESS] H4 analysis complete!")
+
+        return {
+            'density_2d': density_2d,
+        }
+
+    except Exception as e:
+        print(f"\n[ERROR] H4 analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 # ============================================================================
@@ -407,54 +527,115 @@ def analyze_powerlaw(lakes, by_elevation=True, save_figures=True):
     print("HYPOTHESIS 5: POWER LAW ANALYSIS")
     print("=" * 60)
 
-    area_col = COLS['area']
-    areas = lakes[area_col].values
+    try:
+        area_col = COLS['area']
+        areas = lakes[area_col].values
 
-    # Overall power law
-    overall_results = full_powerlaw_analysis(
-        areas,
-        xmin_threshold=POWERLAW_XMIN_THRESHOLD,
-        run_bootstrap=True,
-        n_bootstrap_sims=500
-    )
-
-    # Visualize
-    ensure_output_dir()
-
-    if save_figures:
-        fig, ax = plot_powerlaw_rank_size(
+        # Overall power law
+        print("\n[STEP 1/5] Fitting overall power law distribution...")
+        overall_results = full_powerlaw_analysis(
             areas,
-            xmin=overall_results['xmin'],
-            alpha=overall_results['alpha'],
-            title="Lake Size Distribution (All Lakes)",
-            save_path=f"{OUTPUT_DIR}/H5_powerlaw_overall.png"
-        )
-        plt.close(fig)
-
-    # By elevation bands
-    domain_results = None
-    if by_elevation:
-        print("\nFitting power law by elevation bands...")
-        elev_bands = list(range(0, 3500, 500))  # Coarser bins for more data per bin
-        domain_results = fit_powerlaw_by_elevation_bands(
-            lakes, elev_bands,
-            elev_column=COLS['elevation'],
-            area_column=area_col
+            xmin_threshold=POWERLAW_XMIN_THRESHOLD,
+            run_bootstrap=True,
+            n_bootstrap_sims=500
         )
 
-        print("\nPower law exponents by elevation:")
-        for _, row in domain_results.iterrows():
-            if pd.notna(row['alpha']):
-                print(f"  {row['domain']}: α = {row['alpha']:.3f} "
-                      f"(n={row['n_tail']:.0f})")
+        # Visualize
+        ensure_output_dir()
 
-        # Save
-        domain_results.to_csv(f"{OUTPUT_DIR}/H5_powerlaw_by_elevation.csv", index=False)
+        if save_figures:
+            print("\n[STEP 2/5] Generating basic power law visualization...")
+            fig, ax = plot_powerlaw_rank_size(
+                areas,
+                xmin=overall_results['xmin'],
+                alpha=overall_results['alpha'],
+                title="Lake Size Distribution (All Lakes)",
+                save_path=f"{OUTPUT_DIR}/H5_powerlaw_overall.png"
+            )
+            plt.close(fig)
+            print("  Rank-size plot saved!")
 
-    return {
-        'overall': overall_results,
-        'by_domain': domain_results,
-    }
+            # Educational plot explaining power law parameters
+            print("\n[STEP 3/5] Generating power law explanation figure...")
+            fig = plot_powerlaw_explained(
+                overall_results,
+                save_path=f"{OUTPUT_DIR}/H5_powerlaw_explained.png"
+            )
+            plt.close(fig)
+            print("  Power law explanation figure saved!")
+
+            # Cumulative area distribution
+            fig, ax = plot_cumulative_area_by_size(
+                lakes, area_col=area_col,
+                save_path=f"{OUTPUT_DIR}/H5_cumulative_area.png"
+            )
+            plt.close(fig)
+            print("  Cumulative area distribution saved!")
+
+        # By elevation bands
+        domain_results = None
+        if by_elevation:
+            print("\n[STEP 4/5] Fitting power law by elevation bands...")
+            elev_bands = list(range(0, 3500, 500))  # Coarser bins for more data per bin
+            domain_results = fit_powerlaw_by_elevation_bands(
+                lakes, elev_bands,
+                elev_column=COLS['elevation'],
+                area_column=area_col
+            )
+
+            print("\n[RESULTS] Power law exponents by elevation:")
+            for _, row in domain_results.iterrows():
+                if pd.notna(row['alpha']):
+                    print(f"  {row['domain']}: α = {row['alpha']:.3f} "
+                          f"(n={row['n_tail']:.0f})")
+
+            # Save tabular results
+            domain_results.to_csv(f"{OUTPUT_DIR}/H5_powerlaw_by_elevation.csv", index=False)
+
+            if save_figures:
+                print("\n[STEP 5/5] Generating elevation-specific power law visualizations...")
+
+                # Multi-panel: one CCDF per elevation band
+                fig, axes = plot_powerlaw_by_elevation_multipanel(
+                    lakes, elev_bands,
+                    area_col=area_col, elev_col=COLS['elevation'],
+                    save_path=f"{OUTPUT_DIR}/H5_powerlaw_multipanel.png"
+                )
+                plt.close(fig)
+                print("  Multi-panel CCDF by elevation saved!")
+
+                # Overlay: all elevation bands on one plot
+                fig, ax = plot_powerlaw_overlay(
+                    lakes, elev_bands,
+                    area_col=area_col, elev_col=COLS['elevation'],
+                    save_path=f"{OUTPUT_DIR}/H5_powerlaw_overlay.png"
+                )
+                plt.close(fig)
+                print("  CCDF overlay comparison saved!")
+
+                # Lake size histogram by elevation
+                fig, ax = plot_lake_size_histogram_by_elevation(
+                    lakes, elev_bands,
+                    area_col=area_col, elev_col=COLS['elevation'],
+                    save_path=f"{OUTPUT_DIR}/H5_size_histogram_by_elevation.png"
+                )
+                plt.close(fig)
+                print("  Size histogram by elevation saved!")
+
+            print(f"\n  All results saved to {OUTPUT_DIR}/")
+
+        print("\n[SUCCESS] H5 analysis complete!")
+
+        return {
+            'overall': overall_results,
+            'by_domain': domain_results,
+        }
+
+    except Exception as e:
+        print(f"\n[ERROR] H5 analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 # ============================================================================
@@ -576,6 +757,72 @@ def run_full_analysis(data_source='gdb'):
 # INTERACTIVE HELPERS
 # ============================================================================
 
+def generate_additional_visualizations(lakes, save_path_prefix=None):
+    """
+    Generate additional useful visualizations.
+
+    Parameters
+    ----------
+    lakes : DataFrame
+    save_path_prefix : str, optional
+        Prefix for output files (uses OUTPUT_DIR if None)
+
+    Returns
+    -------
+    dict
+        Dictionary of figure objects
+    """
+    print("\n" + "=" * 60)
+    print("GENERATING ADDITIONAL VISUALIZATIONS")
+    print("=" * 60)
+
+    ensure_output_dir()
+    prefix = save_path_prefix or OUTPUT_DIR
+    figures = {}
+
+    try:
+        # Geographic density map
+        print("\n[1/3] Creating geographic density map...")
+        fig, ax = plot_geographic_density_map(
+            lakes,
+            save_path=f"{prefix}/geographic_density_map.png"
+        )
+        if fig:
+            figures['geographic_map'] = fig
+            plt.close(fig)
+            print("  Geographic density map saved!")
+
+        # Cumulative area distribution
+        print("\n[2/3] Creating cumulative area distribution...")
+        fig, ax = plot_cumulative_area_by_size(
+            lakes,
+            save_path=f"{prefix}/cumulative_area_distribution.png"
+        )
+        figures['cumulative_area'] = fig
+        plt.close(fig)
+        print("  Cumulative area plot saved!")
+
+        # Lake size histogram by elevation
+        print("\n[3/3] Creating size histogram by elevation...")
+        elev_bands = list(range(0, 3500, 500))
+        fig, ax = plot_lake_size_histogram_by_elevation(
+            lakes, elev_bands,
+            save_path=f"{prefix}/size_histogram_by_elevation.png"
+        )
+        figures['size_histogram'] = fig
+        plt.close(fig)
+        print("  Size histogram by elevation saved!")
+
+        print("\n[SUCCESS] Additional visualizations complete!")
+
+    except Exception as e:
+        print(f"\n[ERROR] Visualization failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return figures
+
+
 def quick_start():
     """
     Quick start guide for interactive use.
@@ -594,7 +841,8 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    >>> results = analyze_elevation(lakes)
    >>> results = analyze_slope(lakes)
    >>> results = analyze_relief(lakes)
-   >>> results = analyze_powerlaw(lakes)
+   >>> results = analyze_powerlaw(lakes)    # Now with enhanced visualizations!
+   >>> results = analyze_2d_domains(lakes)  # Now with marginal PDFs!
 
 4. Run full pipeline:
    >>> all_results = run_full_analysis()
