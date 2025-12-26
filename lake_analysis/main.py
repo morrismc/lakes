@@ -36,36 +36,67 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Import project modules
-from .config import (
-    LAKE_GDB_PATH, LAKE_FEATURE_CLASS, RASTERS, OUTPUT_DIR,
-    COLS, ELEV_BREAKS, SLOPE_BREAKS, RELIEF_BREAKS,
-    POWERLAW_XMIN_THRESHOLD, ensure_output_dir, print_config_summary
-)
-from .data_loading import (
-    load_lake_data_from_gdb, load_lake_data_from_parquet,
-    calculate_landscape_area_by_bin, check_raster_alignment,
-    summarize_lake_data, quick_data_check, get_raster_info
-)
-from .normalization import (
-    compute_1d_normalized_density, compute_2d_normalized_density,
-    compute_1d_density_with_size_classes, classify_lake_domains,
-    compute_domain_statistics
-)
-from .visualization import (
-    plot_raw_vs_normalized, plot_1d_density, plot_2d_heatmap,
-    plot_powerlaw_rank_size, plot_domain_comparison,
-    plot_bimodality_test, create_summary_figure, setup_plot_style,
-    # Enhanced visualizations
-    plot_powerlaw_by_elevation_multipanel, plot_powerlaw_overlay,
-    plot_powerlaw_explained, plot_2d_heatmap_with_marginals,
-    plot_2d_contour_with_domains, plot_lake_size_histogram_by_elevation,
-    plot_cumulative_area_by_size, plot_geographic_density_map
-)
-from .powerlaw_analysis import (
-    full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
-    fit_powerlaw_by_domain
-)
+# Import project modules - handle both package and direct execution
+try:
+    from .config import (
+        LAKE_GDB_PATH, LAKE_FEATURE_CLASS, RASTERS, OUTPUT_DIR,
+        COLS, ELEV_BREAKS, SLOPE_BREAKS, RELIEF_BREAKS,
+        POWERLAW_XMIN_THRESHOLD, ensure_output_dir, print_config_summary
+    )
+    from .data_loading import (
+        load_lake_data_from_gdb, load_lake_data_from_parquet,
+        calculate_landscape_area_by_bin, check_raster_alignment,
+        summarize_lake_data, quick_data_check, get_raster_info
+    )
+    from .normalization import (
+        compute_1d_normalized_density, compute_2d_normalized_density,
+        compute_1d_density_with_size_classes, classify_lake_domains,
+        compute_domain_statistics
+    )
+    from .visualization import (
+        plot_raw_vs_normalized, plot_1d_density, plot_2d_heatmap,
+        plot_powerlaw_rank_size, plot_domain_comparison,
+        plot_bimodality_test, create_summary_figure, setup_plot_style,
+        # Enhanced visualizations
+        plot_powerlaw_by_elevation_multipanel, plot_powerlaw_overlay,
+        plot_powerlaw_explained, plot_2d_heatmap_with_marginals,
+        plot_2d_contour_with_domains, plot_lake_size_histogram_by_elevation,
+        plot_cumulative_area_by_size, plot_geographic_density_map
+    )
+    from .powerlaw_analysis import (
+        full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
+        fit_powerlaw_by_domain
+    )
+except ImportError:
+    from config import (
+        LAKE_GDB_PATH, LAKE_FEATURE_CLASS, RASTERS, OUTPUT_DIR,
+        COLS, ELEV_BREAKS, SLOPE_BREAKS, RELIEF_BREAKS,
+        POWERLAW_XMIN_THRESHOLD, ensure_output_dir, print_config_summary
+    )
+    from data_loading import (
+        load_lake_data_from_gdb, load_lake_data_from_parquet,
+        calculate_landscape_area_by_bin, check_raster_alignment,
+        summarize_lake_data, quick_data_check, get_raster_info
+    )
+    from normalization import (
+        compute_1d_normalized_density, compute_2d_normalized_density,
+        compute_1d_density_with_size_classes, classify_lake_domains,
+        compute_domain_statistics
+    )
+    from visualization import (
+        plot_raw_vs_normalized, plot_1d_density, plot_2d_heatmap,
+        plot_powerlaw_rank_size, plot_domain_comparison,
+        plot_bimodality_test, create_summary_figure, setup_plot_style,
+        # Enhanced visualizations
+        plot_powerlaw_by_elevation_multipanel, plot_powerlaw_overlay,
+        plot_powerlaw_explained, plot_2d_heatmap_with_marginals,
+        plot_2d_contour_with_domains, plot_lake_size_histogram_by_elevation,
+        plot_cumulative_area_by_size, plot_geographic_density_map
+    )
+    from powerlaw_analysis import (
+        full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
+        fit_powerlaw_by_domain
+    )
 
 
 # ============================================================================

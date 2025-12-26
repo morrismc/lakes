@@ -30,7 +30,11 @@ from scipy.optimize import minimize_scalar, brentq
 from collections import Counter
 import warnings
 
-from .config import COLS, POWERLAW_XMIN_THRESHOLD, MIN_LAKES_FOR_POWERLAW, RANDOM_SEED
+# Handle imports for both package and direct execution
+try:
+    from .config import COLS, POWERLAW_XMIN_THRESHOLD, MIN_LAKES_FOR_POWERLAW, RANDOM_SEED
+except ImportError:
+    from config import COLS, POWERLAW_XMIN_THRESHOLD, MIN_LAKES_FOR_POWERLAW, RANDOM_SEED
 
 
 # ============================================================================
