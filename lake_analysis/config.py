@@ -24,9 +24,13 @@ LAKE_FEATURE_CLASS = "Lakes_with_all_details"
 LAKE_PARQUET_PATH = r"F:\Lakes\Data\lakes.parquet"
 
 # Raster paths (ESRI Grid format - folders containing .adf files)
+# NOTE: For ESRI Grid rasters, point to the FOLDER (not the .adf file inside)
+# These folders typically contain: w001001.adf, hdr.adf, sta.adf, etc.
+# The folder name IS the raster name in ArcGIS
 RASTERS = {
     # Topographic variables
-    'elevation': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_dem",  # Update path if different
+    # TODO: Update 'elevation' path - need the base DEM raster
+    'elevation': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\YOUR_DEM_FOLDER",
     'slope': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_slope",
     'relief_5km': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_rlif_5k",
 
@@ -37,7 +41,7 @@ RASTERS = {
     'aridity': r"F:\Lakes\GIS\rasters\ai_lwr48",
 }
 
-# Output directory
+# Output directory (will be created if it doesn't exist)
 OUTPUT_DIR = r"F:\Lakes\Analysis\outputs"
 
 # ============================================================================

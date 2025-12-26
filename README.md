@@ -32,18 +32,31 @@ lakes/
 
 ## Installation
 
-### Using Conda (Recommended for Windows)
+### Using Existing Mamba Environment (Recommended)
+
+If you have an existing mamba/conda environment with geospatial packages (like `pygis_3.9`):
 
 ```bash
-# Create environment
-conda create -n lakes python=3.10
-conda activate lakes
+# Activate your existing environment
+mamba activate C:\Users\mmorriss\Anaconda3\envs\pygis_3.9
+
+# Install any missing packages
+mamba install -c conda-forge pyarrow  # For parquet support (if not installed)
+pip install tqdm  # Progress bars (if not installed)
+```
+
+### Creating a New Environment
+
+```bash
+# Using mamba (faster than conda)
+mamba create -n lakes python=3.10
+mamba activate lakes
 
 # Install geospatial dependencies (GDAL with drivers)
-conda install -c conda-forge gdal geopandas rasterio fiona pyarrow
+mamba install -c conda-forge gdal geopandas rasterio fiona pyarrow scipy matplotlib seaborn
 
-# Install other dependencies
-pip install scipy matplotlib seaborn tqdm
+# Install remaining packages
+pip install tqdm
 ```
 
 ### Verify GDAL Drivers
@@ -157,6 +170,12 @@ Elevation_ != -9999     # NoData filter
 - `full_powerlaw_analysis()` - Complete MLE pipeline
 - `fit_powerlaw_by_elevation_bands()` - Domain-specific fitting
 - Bootstrap confidence intervals and goodness-of-fit testing
+
+## Planned Additions
+
+- **Glacial boundary analysis** (Davis's landscape maturity hypothesis)
+  - Will add glacial chronosequence shapefiles (Wisconsin, Illinoian, pre-Illinoian)
+  - Test whether lake density decreases with landscape age
 
 ## Literature References
 
