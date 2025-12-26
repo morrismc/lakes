@@ -20,7 +20,7 @@ import matplotlib.colors as mcolors
 from matplotlib.ticker import MaxNLocator, LogLocator
 from pathlib import Path
 
-from config import (
+from .config import (
     PLOT_STYLE, PLOT_PARAMS, COLORMAPS, OUTPUT_DIR,
     COLS, ELEVATION_DOMAINS, ensure_output_dir
 )
@@ -127,19 +127,37 @@ def plot_raw_vs_normalized(result_df, value_column, units='',
 
 
 def find_local_peaks(values, prominence=0.1):
-    """Find indices of local maxima in an array."""
+    """Find indices of local maxima in an array, handling NaN values."""
+    # Convert to numpy array and handle NaN
+    values = np.asarray(values, dtype=float)
+
+    # Check if all values are NaN
+    if np.all(np.isnan(values)):
+        return []
+
     try:
         from scipy.signal import find_peaks
-        peaks, properties = find_peaks(values, prominence=prominence * np.nanmax(values))
-        # Sort by height
+        # Replace NaN with -inf for peak finding (NaN breaks comparisons)
+        clean_values = np.where(np.isnan(values), -np.inf, values)
+        max_val = np.nanmax(values)
+        if np.isnan(max_val) or max_val <= 0:
+            return []
+        peaks, properties = find_peaks(clean_values, prominence=prominence * max_val)
+        # Sort by height (using original values)
         if len(peaks) > 0:
-            sorted_idx = np.argsort(values[peaks])[::-1]
-            return peaks[sorted_idx]
+            # Filter out peaks that correspond to NaN positions
+            valid_peaks = [p for p in peaks if not np.isnan(values[p])]
+            if len(valid_peaks) > 0:
+                sorted_idx = np.argsort([values[p] for p in valid_peaks])[::-1]
+                return [valid_peaks[i] for i in sorted_idx]
         return []
     except ImportError:
-        # Simple fallback without scipy
+        # Simple fallback without scipy - handle NaN in comparisons
         peaks = []
         for i in range(1, len(values) - 1):
+            # Skip if any value is NaN
+            if np.isnan(values[i]) or np.isnan(values[i-1]) or np.isnan(values[i+1]):
+                continue
             if values[i] > values[i-1] and values[i] > values[i+1]:
                 peaks.append(i)
         return sorted(peaks, key=lambda x: values[x], reverse=True)
