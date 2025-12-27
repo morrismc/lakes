@@ -1474,6 +1474,742 @@ def plot_geographic_density_map(lake_df, lat_col=None, lon_col=None,
     return fig, ax
 
 
+# ============================================================================
+# α-ELEVATION PHASE DIAGRAM
+# ============================================================================
+
+def plot_alpha_elevation_phase_diagram(fit_results, figsize=(12, 8), save_path=None):
+    """
+    Create α-Elevation phase diagram showing power law exponent vs elevation.
+
+    This is a key visualization for understanding how lake size distributions
+    change with elevation, with comparison to theoretical predictions.
+
+    Parameters
+    ----------
+    fit_results : DataFrame
+        Output from fit_powerlaw_by_elevation_bands() with columns:
+        domain, alpha, alpha_ci_lower, alpha_ci_upper, n_tail
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, ax
+    """
+    setup_plot_style()
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Extract elevation midpoints from domain labels
+    valid_results = fit_results.dropna(subset=['alpha'])
+
+    if len(valid_results) == 0:
+        ax.text(0.5, 0.5, 'No valid power law fits', ha='center', va='center',
+                transform=ax.transAxes, fontsize=14)
+        return fig, ax
+
+    # Parse elevation bins from domain labels
+    x_positions = []
+    x_labels = []
+    for domain in valid_results['domain']:
+        domain_str = str(domain)
+        # Parse interval notation like "(0, 500]" or "0-500"
+        try:
+            if ',' in domain_str:
+                parts = domain_str.replace('(', '').replace('[', '').replace(']', '').replace(')', '').split(',')
+                low, high = float(parts[0]), float(parts[1])
+            elif '-' in domain_str:
+                parts = domain_str.split('-')
+                low, high = float(parts[0]), float(parts[1])
+            else:
+                low, high = 0, 1000
+            midpoint = (low + high) / 2
+            x_positions.append(midpoint)
+            x_labels.append(f'{int(low)}-{int(high)}')
+        except:
+            x_positions.append(len(x_positions) * 500)
+            x_labels.append(str(domain))
+
+    alphas = valid_results['alpha'].values
+
+    # Error bars from bootstrap CIs
+    if 'alpha_ci_lower' in valid_results.columns and 'alpha_ci_upper' in valid_results.columns:
+        yerr_lower = alphas - valid_results['alpha_ci_lower'].values
+        yerr_upper = valid_results['alpha_ci_upper'].values - alphas
+        yerr = [yerr_lower, yerr_upper]
+        # Replace NaN with 0 for plotting
+        yerr = [np.nan_to_num(y, nan=0) for y in yerr]
+    else:
+        yerr = None
+
+    # Plot data points with error bars
+    ax.errorbar(x_positions, alphas, yerr=yerr,
+                fmt='o', markersize=10, capsize=5, capthick=2,
+                color='darkblue', ecolor='steelblue', linewidth=2,
+                label='Observed α', zorder=3)
+
+    # Connect points with line
+    sorted_idx = np.argsort(x_positions)
+    ax.plot(np.array(x_positions)[sorted_idx], np.array(alphas)[sorted_idx],
+            '-', color='darkblue', alpha=0.5, linewidth=1.5)
+
+    # Reference lines
+    # Percolation theory prediction (τ = 2.05 for 2D percolation)
+    ax.axhline(2.05, color='red', linestyle='--', linewidth=2,
+               label='Percolation theory (τ = 2.05)')
+
+    # Cael & Seekell global estimate
+    ax.axhline(2.14, color='green', linestyle=':', linewidth=2,
+               label='Global estimate (τ = 2.14)')
+
+    # Shade region of uncertainty around theoretical value
+    ax.axhspan(2.0, 2.1, alpha=0.1, color='red', label='Percolation regime')
+
+    # Annotations for process domains
+    if len(x_positions) > 0:
+        x_range = max(x_positions) - min(x_positions)
+
+        # Low elevation annotation
+        ax.annotate('Floodplain\nDominated',
+                   xy=(min(x_positions) + x_range*0.1, ax.get_ylim()[1]*0.95),
+                   fontsize=10, ha='center', va='top',
+                   bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+
+        # High elevation annotation
+        ax.annotate('Alpine/Glacial\nDominated',
+                   xy=(max(x_positions) - x_range*0.1, ax.get_ylim()[1]*0.95),
+                   fontsize=10, ha='center', va='top',
+                   bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+    ax.set_xlabel('Elevation (m)', fontsize=14)
+    ax.set_ylabel('Power Law Exponent (α)', fontsize=14)
+    ax.set_title('α-Elevation Phase Diagram', fontsize=16, fontweight='bold')
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    # Add sample size annotations
+    for i, (x, alpha, n) in enumerate(zip(x_positions, alphas, valid_results['n_tail'])):
+        if pd.notna(n) and n > 0:
+            ax.annotate(f'n={int(n):,}', xy=(x, alpha), xytext=(5, -15),
+                       textcoords='offset points', fontsize=8, alpha=0.7)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_alpha_by_process_domain(fit_results, figsize=(14, 8), save_path=None):
+    """
+    Plot power law exponents by geomorphic process domain.
+
+    Parameters
+    ----------
+    fit_results : DataFrame
+        Output from fit_powerlaw_by_domain() with domain names and alpha values
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    valid_results = fit_results.dropna(subset=['alpha'])
+
+    if len(valid_results) == 0:
+        return fig, axes
+
+    # Left panel: Bar chart with error bars
+    ax1 = axes[0]
+    domains = valid_results['domain'].astype(str).values
+    alphas = valid_results['alpha'].values
+
+    # Error bars
+    if 'alpha_se' in valid_results.columns:
+        yerr = valid_results['alpha_se'].values * 1.96  # 95% CI
+        yerr = np.nan_to_num(yerr, nan=0)
+    else:
+        yerr = None
+
+    x_pos = np.arange(len(domains))
+    colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(domains)))
+
+    bars = ax1.bar(x_pos, alphas, yerr=yerr, capsize=5, color=colors,
+                   edgecolor='black', linewidth=1.5)
+
+    # Reference lines
+    ax1.axhline(2.05, color='red', linestyle='--', linewidth=2,
+               label='Percolation (τ=2.05)')
+    ax1.axhline(2.14, color='green', linestyle=':', linewidth=2,
+               label='Global (τ=2.14)')
+
+    ax1.set_xticks(x_pos)
+    ax1.set_xticklabels(domains, rotation=45, ha='right', fontsize=10)
+    ax1.set_ylabel('Power Law Exponent (α)', fontsize=12)
+    ax1.set_title('A) Power Law by Process Domain', fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=9)
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # Right panel: Sample size context
+    ax2 = axes[1]
+    n_total = valid_results['n_total'].values if 'n_total' in valid_results.columns else valid_results['n_tail'].values
+    n_tail = valid_results['n_tail'].values
+
+    x = np.arange(len(domains))
+    width = 0.35
+
+    ax2.bar(x - width/2, n_total, width, label='Total lakes', color='lightblue', edgecolor='navy')
+    ax2.bar(x + width/2, n_tail, width, label='In power law tail', color='darkblue', edgecolor='navy')
+
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(domains, rotation=45, ha='right', fontsize=10)
+    ax2.set_ylabel('Number of Lakes', fontsize=12)
+    ax2.set_title('B) Sample Size by Domain', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=10)
+    ax2.set_yscale('log')
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+# ============================================================================
+# SLOPE-RELIEF HEATMAP
+# ============================================================================
+
+def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_relief',
+                               slope_units='°', relief_units='m',
+                               figsize=(14, 10), save_path=None):
+    """
+    Create Slope-Relief 2D heatmap with normalized lake density.
+
+    This identifies "sweet spots" for lake formation in slope-relief space.
+
+    Parameters
+    ----------
+    result_df : DataFrame
+        Output from compute_2d_normalized_density() for slope × relief
+    slope_name, relief_name : str
+        Column name prefixes
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, (ax_main, ax_top, ax_right)
+    """
+    setup_plot_style()
+
+    # Create figure with gridspec for marginals
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(3, 3, width_ratios=[0.15, 1, 0.05], height_ratios=[0.3, 1, 0.05],
+                          hspace=0.05, wspace=0.05)
+
+    ax_main = fig.add_subplot(gs[1, 1])
+    ax_top = fig.add_subplot(gs[0, 1], sharex=ax_main)
+    ax_right = fig.add_subplot(gs[1, 0], sharey=ax_main)
+    ax_cbar = fig.add_subplot(gs[1, 2])
+
+    # Find the column names
+    slope_mid = f'{slope_name}_mid'
+    relief_mid = f'{relief_name}_mid'
+
+    # Check if columns exist, try alternatives
+    if slope_mid not in result_df.columns:
+        slope_cols = [c for c in result_df.columns if 'slope' in c.lower() and 'mid' in c.lower()]
+        if slope_cols:
+            slope_mid = slope_cols[0]
+    if relief_mid not in result_df.columns:
+        relief_cols = [c for c in result_df.columns if 'relief' in c.lower() and 'mid' in c.lower()]
+        if relief_cols:
+            relief_mid = relief_cols[0]
+
+    # Pivot data
+    pivot_df = result_df.pivot_table(
+        index=relief_mid,
+        columns=slope_mid,
+        values='normalized_density'
+    )
+
+    # Log transform
+    data = pivot_df.values.copy()
+    with np.errstate(divide='ignore', invalid='ignore'):
+        data_log = np.log10(data)
+    data_log[~np.isfinite(data_log)] = np.nan
+
+    # Main heatmap
+    extent = [pivot_df.columns.min(), pivot_df.columns.max(),
+              pivot_df.index.min(), pivot_df.index.max()]
+    im = ax_main.imshow(data_log, aspect='auto', cmap='magma', origin='lower',
+                        extent=extent, interpolation='nearest')
+
+    # Find and mark "sweet spot" (maximum density)
+    max_idx = np.unravel_index(np.nanargmax(data), data.shape)
+    sweet_slope = pivot_df.columns[max_idx[1]]
+    sweet_relief = pivot_df.index[max_idx[0]]
+    ax_main.scatter([sweet_slope], [sweet_relief], s=200, c='lime', marker='*',
+                   edgecolors='white', linewidths=2, zorder=5,
+                   label=f'Peak: ({sweet_slope:.0f}°, {sweet_relief:.0f}m)')
+    ax_main.legend(loc='upper right', fontsize=10)
+
+    # Colorbar
+    cbar = plt.colorbar(im, cax=ax_cbar)
+    cbar.set_label('log₁₀(Lakes per 1,000 km²)', fontsize=11)
+
+    # Top marginal: density vs slope
+    marginal_top = result_df.groupby(slope_mid).agg({
+        'n_lakes': 'sum',
+        'area_km2': 'sum'
+    }).reset_index()
+    marginal_top['density'] = (marginal_top['n_lakes'] / marginal_top['area_km2']) * 1000
+
+    ax_top.fill_between(marginal_top[slope_mid], marginal_top['density'],
+                        alpha=0.5, color='steelblue')
+    ax_top.plot(marginal_top[slope_mid], marginal_top['density'],
+                'o-', color='steelblue', linewidth=2, markersize=3)
+    ax_top.set_ylabel('Density\n(lakes/1000 km²)', fontsize=9)
+    ax_top.tick_params(labelbottom=False)
+    ax_top.set_title('Lake Density in Slope × Relief Space', fontsize=14, fontweight='bold')
+
+    # Right marginal: density vs relief
+    marginal_right = result_df.groupby(relief_mid).agg({
+        'n_lakes': 'sum',
+        'area_km2': 'sum'
+    }).reset_index()
+    marginal_right['density'] = (marginal_right['n_lakes'] / marginal_right['area_km2']) * 1000
+
+    ax_right.fill_betweenx(marginal_right[relief_mid], marginal_right['density'],
+                           alpha=0.5, color='darkred')
+    ax_right.plot(marginal_right['density'], marginal_right[relief_mid],
+                  'o-', color='darkred', linewidth=2, markersize=3)
+    ax_right.set_xlabel('Density', fontsize=9)
+    ax_right.tick_params(labelleft=False)
+    ax_right.invert_xaxis()
+
+    # Labels
+    ax_main.set_xlabel(f'Slope ({slope_units})', fontsize=12)
+    ax_main.set_ylabel(f'Relief ({relief_units})', fontsize=12)
+
+    # Add annotations for process domains
+    ax_main.annotate('Low gradient\nfloodplains', xy=(3, 100), fontsize=9,
+                    ha='center', color='white', fontweight='bold',
+                    bbox=dict(boxstyle='round', facecolor='green', alpha=0.6))
+    ax_main.annotate('Moderate terrain\n(optimal)', xy=(10, 400), fontsize=9,
+                    ha='center', color='white', fontweight='bold',
+                    bbox=dict(boxstyle='round', facecolor='blue', alpha=0.6))
+    ax_main.annotate('Steep terrain\n(few lakes)', xy=(25, 1200), fontsize=9,
+                    ha='center', color='white', fontweight='bold',
+                    bbox=dict(boxstyle='round', facecolor='red', alpha=0.6))
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, (ax_main, ax_top, ax_right)
+
+
+# ============================================================================
+# SENSITIVITY ANALYSIS VISUALIZATION
+# ============================================================================
+
+def plot_xmin_sensitivity(sensitivity_results, figsize=(14, 10), save_path=None):
+    """
+    Visualize sensitivity of power law parameters to x_min threshold.
+
+    Parameters
+    ----------
+    sensitivity_results : DataFrame
+        Contains columns: xmin, alpha, alpha_se, n_tail, ks_statistic
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    xmins = sensitivity_results['xmin'].values
+    alphas = sensitivity_results['alpha'].values
+
+    # Panel A: Alpha vs x_min
+    ax1 = axes[0, 0]
+    ax1.plot(xmins, alphas, 'o-', linewidth=2, markersize=6, color='darkblue')
+
+    if 'alpha_se' in sensitivity_results.columns:
+        se = sensitivity_results['alpha_se'].values
+        ax1.fill_between(xmins, alphas - 1.96*se, alphas + 1.96*se,
+                        alpha=0.3, color='steelblue', label='95% CI')
+
+    # Reference lines
+    ax1.axhline(2.14, color='red', linestyle='--', linewidth=2,
+               label='Cael & Seekell (τ=2.14)')
+    ax1.axhline(2.05, color='green', linestyle=':', linewidth=2,
+               label='Percolation (τ=2.05)')
+    ax1.axvline(0.46, color='orange', linestyle='--', linewidth=2, alpha=0.7,
+               label='C&S threshold (0.46 km²)')
+
+    ax1.set_xlabel('x_min (km²)', fontsize=12)
+    ax1.set_ylabel('Power Law Exponent (α)', fontsize=12)
+    ax1.set_title('A) α Sensitivity to Minimum Area', fontsize=14, fontweight='bold')
+    ax1.set_xscale('log')
+    ax1.legend(loc='best', fontsize=9)
+    ax1.grid(True, alpha=0.3)
+
+    # Panel B: Sample size vs x_min
+    ax2 = axes[0, 1]
+    n_tail = sensitivity_results['n_tail'].values
+    ax2.plot(xmins, n_tail, 's-', linewidth=2, markersize=6, color='darkgreen')
+
+    ax2.set_xlabel('x_min (km²)', fontsize=12)
+    ax2.set_ylabel('Number of Lakes in Tail', fontsize=12)
+    ax2.set_title('B) Sample Size vs Minimum Area', fontsize=14, fontweight='bold')
+    ax2.set_xscale('log')
+    ax2.set_yscale('log')
+    ax2.axvline(0.46, color='orange', linestyle='--', linewidth=2, alpha=0.7)
+    ax2.grid(True, alpha=0.3)
+
+    # Panel C: KS statistic vs x_min
+    ax3 = axes[1, 0]
+    if 'ks_statistic' in sensitivity_results.columns:
+        ks = sensitivity_results['ks_statistic'].values
+        ax3.plot(xmins, ks, 'd-', linewidth=2, markersize=6, color='purple')
+
+        # Mark optimal (minimum KS)
+        min_ks_idx = np.nanargmin(ks)
+        ax3.scatter([xmins[min_ks_idx]], [ks[min_ks_idx]], s=150, c='red',
+                   marker='*', zorder=5, label=f'Optimal: {xmins[min_ks_idx]:.3f} km²')
+        ax3.legend(loc='best', fontsize=10)
+
+    ax3.set_xlabel('x_min (km²)', fontsize=12)
+    ax3.set_ylabel('KS Statistic', fontsize=12)
+    ax3.set_title('C) Goodness of Fit vs Minimum Area', fontsize=14, fontweight='bold')
+    ax3.set_xscale('log')
+    ax3.axvline(0.46, color='orange', linestyle='--', linewidth=2, alpha=0.7)
+    ax3.grid(True, alpha=0.3)
+
+    # Panel D: Summary table
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+
+    # Create summary statistics
+    key_thresholds = [0.024, 0.1, 0.46, 1.0]
+    table_data = [['x_min (km²)', 'α', 'n (tail)', 'KS stat']]
+
+    for thresh in key_thresholds:
+        idx = np.argmin(np.abs(xmins - thresh))
+        row = [
+            f'{xmins[idx]:.3f}',
+            f'{alphas[idx]:.3f}' if pd.notna(alphas[idx]) else 'N/A',
+            f'{n_tail[idx]:,.0f}' if pd.notna(n_tail[idx]) else 'N/A',
+        ]
+        if 'ks_statistic' in sensitivity_results.columns:
+            row.append(f'{ks[idx]:.4f}' if pd.notna(ks[idx]) else 'N/A')
+        else:
+            row.append('N/A')
+        table_data.append(row)
+
+    table = ax4.table(cellText=table_data, loc='center', cellLoc='center',
+                      colWidths=[0.25, 0.2, 0.25, 0.2])
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1.2, 1.8)
+
+    # Style header
+    for j in range(4):
+        table[(0, j)].set_facecolor('#4472C4')
+        table[(0, j)].set_text_props(color='white', fontweight='bold')
+
+    ax4.set_title('D) Key Threshold Comparison', fontsize=14, fontweight='bold', y=0.85)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+# ============================================================================
+# SIGNIFICANCE TESTING VISUALIZATIONS
+# ============================================================================
+
+def plot_significance_tests(test_results, figsize=(16, 10), save_path=None):
+    """
+    Comprehensive visualization of statistical significance tests.
+
+    Parameters
+    ----------
+    test_results : dict
+        Contains test statistics, p-values, and effect sizes
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+
+    # Panel A: P-value summary
+    ax1 = axes[0, 0]
+    if 'p_values' in test_results:
+        tests = list(test_results['p_values'].keys())
+        p_vals = list(test_results['p_values'].values())
+
+        colors = ['green' if p < 0.05 else 'orange' if p < 0.1 else 'red' for p in p_vals]
+        bars = ax1.barh(tests, p_vals, color=colors, edgecolor='black')
+
+        # Significance thresholds
+        ax1.axvline(0.05, color='red', linestyle='--', linewidth=2, label='α = 0.05')
+        ax1.axvline(0.10, color='orange', linestyle=':', linewidth=2, label='α = 0.10')
+
+        ax1.set_xlabel('p-value', fontsize=12)
+        ax1.set_title('A) Statistical Significance', fontsize=14, fontweight='bold')
+        ax1.legend(loc='upper right', fontsize=9)
+        ax1.set_xlim(0, 1)
+    else:
+        ax1.text(0.5, 0.5, 'No p-values provided', ha='center', va='center',
+                transform=ax1.transAxes)
+
+    # Panel B: Effect sizes
+    ax2 = axes[0, 1]
+    if 'effect_sizes' in test_results:
+        effects = test_results['effect_sizes']
+        tests = list(effects.keys())
+        sizes = list(effects.values())
+
+        colors = plt.cm.RdYlGn_r(np.array(sizes) / max(max(sizes), 1))
+        ax2.barh(tests, sizes, color=colors, edgecolor='black')
+
+        ax2.set_xlabel('Effect Size', fontsize=12)
+        ax2.set_title('B) Effect Sizes', fontsize=14, fontweight='bold')
+
+    # Panel C: Bootstrap distributions
+    ax3 = axes[0, 2]
+    if 'bootstrap_distributions' in test_results:
+        for name, dist in test_results['bootstrap_distributions'].items():
+            ax3.hist(dist, bins=50, alpha=0.5, label=name, density=True)
+        ax3.set_xlabel('Parameter Value', fontsize=12)
+        ax3.set_ylabel('Density', fontsize=12)
+        ax3.set_title('C) Bootstrap Distributions', fontsize=14, fontweight='bold')
+        ax3.legend(loc='best', fontsize=9)
+
+    # Panel D: Confidence intervals comparison
+    ax4 = axes[1, 0]
+    if 'confidence_intervals' in test_results:
+        ci_data = test_results['confidence_intervals']
+        names = list(ci_data.keys())
+
+        for i, (name, ci) in enumerate(ci_data.items()):
+            mid = (ci[0] + ci[1]) / 2
+            err = [[mid - ci[0]], [ci[1] - mid]]
+            ax4.errorbar([mid], [i], xerr=err, fmt='o', markersize=8, capsize=5,
+                        color=plt.cm.tab10(i), label=name)
+
+        ax4.set_yticks(range(len(names)))
+        ax4.set_yticklabels(names)
+        ax4.set_xlabel('Value', fontsize=12)
+        ax4.set_title('D) 95% Confidence Intervals', fontsize=14, fontweight='bold')
+        ax4.grid(True, alpha=0.3, axis='x')
+
+    # Panel E: Likelihood ratio tests
+    ax5 = axes[1, 1]
+    if 'likelihood_ratios' in test_results:
+        lr_data = test_results['likelihood_ratios']
+        comparisons = list(lr_data.keys())
+        lr_values = [lr_data[c]['ratio'] for c in comparisons]
+        favors = [lr_data[c]['favors'] for c in comparisons]
+
+        colors = ['green' if 'power' in f.lower() else 'red' for f in favors]
+        ax5.barh(comparisons, lr_values, color=colors, edgecolor='black')
+        ax5.axvline(0, color='black', linewidth=1)
+        ax5.set_xlabel('Log Likelihood Ratio', fontsize=12)
+        ax5.set_title('E) Distribution Comparison', fontsize=14, fontweight='bold')
+
+        # Add interpretation
+        ax5.annotate('Favors\nPower Law', xy=(ax5.get_xlim()[1]*0.7, 0.5),
+                    fontsize=10, ha='center', color='green')
+        ax5.annotate('Favors\nAlternative', xy=(ax5.get_xlim()[0]*0.7, 0.5),
+                    fontsize=10, ha='center', color='red')
+
+    # Panel F: Summary interpretation
+    ax6 = axes[1, 2]
+    ax6.axis('off')
+
+    summary_text = """
+INTERPRETATION GUIDE
+
+Significance Levels:
+• p < 0.05: Strong evidence
+• p < 0.10: Moderate evidence
+• p ≥ 0.10: Weak/no evidence
+
+Power Law Fit:
+• KS p > 0.1: Power law plausible
+• KS p < 0.1: Power law may be rejected
+
+Effect Size Guidelines:
+• Small: < 0.2
+• Medium: 0.2 - 0.5
+• Large: > 0.5
+
+Key Results:
+"""
+    if 'summary' in test_results:
+        summary_text += test_results['summary']
+
+    ax6.text(0.05, 0.95, summary_text, transform=ax6.transAxes,
+            fontsize=10, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    ax6.set_title('F) Interpretation Guide', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_powerlaw_gof_summary(gof_results, figsize=(12, 8), save_path=None):
+    """
+    Visualize power law goodness-of-fit results.
+
+    Parameters
+    ----------
+    gof_results : dict
+        Contains p_value, observed_ks, synthetic_ks distribution
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    # Panel A: KS distribution with observed value
+    ax1 = axes[0, 0]
+    if 'synthetic_ks_values' in gof_results:
+        ax1.hist(gof_results['synthetic_ks_values'], bins=50, density=True,
+                alpha=0.7, color='steelblue', edgecolor='navy',
+                label='Synthetic KS values')
+        ax1.axvline(gof_results['observed_ks'], color='red', linewidth=3,
+                   label=f'Observed KS = {gof_results["observed_ks"]:.4f}')
+        ax1.set_xlabel('KS Statistic', fontsize=12)
+        ax1.set_ylabel('Density', fontsize=12)
+        ax1.set_title('A) Goodness-of-Fit Test', fontsize=14, fontweight='bold')
+        ax1.legend(loc='upper right', fontsize=10)
+
+    # Panel B: P-value interpretation
+    ax2 = axes[0, 1]
+    p_val = gof_results.get('p_value', 0.5)
+
+    # Create a gauge-like visualization
+    theta = np.linspace(0, np.pi, 100)
+    r = 1
+
+    # Background arc
+    ax2.fill_between(theta, 0, r, alpha=0.1, color='gray')
+
+    # Colored regions
+    ax2.fill_between(theta[theta < np.pi*0.1], 0, r, alpha=0.5, color='red')
+    ax2.fill_between(theta[(theta >= np.pi*0.1) & (theta < np.pi*0.5)], 0, r,
+                    alpha=0.5, color='orange')
+    ax2.fill_between(theta[theta >= np.pi*0.5], 0, r, alpha=0.5, color='green')
+
+    # Needle for p-value
+    needle_angle = np.pi * p_val
+    ax2.plot([0, np.cos(needle_angle)], [0, np.sin(needle_angle)],
+            'k-', linewidth=3)
+    ax2.plot([np.cos(needle_angle)], [np.sin(needle_angle)], 'ko', markersize=10)
+
+    ax2.set_xlim(-1.2, 1.2)
+    ax2.set_ylim(-0.2, 1.2)
+    ax2.set_aspect('equal')
+    ax2.axis('off')
+    ax2.set_title(f'B) p-value = {p_val:.3f}', fontsize=14, fontweight='bold')
+
+    # Interpretation text
+    if p_val >= 0.1:
+        interp = "Power law is PLAUSIBLE"
+        color = 'green'
+    elif p_val >= 0.05:
+        interp = "Power law is MARGINAL"
+        color = 'orange'
+    else:
+        interp = "Power law is REJECTED"
+        color = 'red'
+
+    ax2.text(0, -0.1, interp, ha='center', fontsize=14, fontweight='bold', color=color)
+
+    # Panel C: CCDF with fit
+    ax3 = axes[1, 0]
+    if 'data' in gof_results and 'xmin' in gof_results:
+        data = gof_results['data']
+        xmin = gof_results['xmin']
+        alpha = gof_results['alpha']
+
+        sorted_data = np.sort(data)[::-1]
+        ranks = np.arange(1, len(sorted_data) + 1)
+        ccdf = ranks / len(sorted_data)
+
+        ax3.scatter(sorted_data, ccdf, s=5, alpha=0.5, c='steelblue', label='Data')
+
+        # Fit line
+        x_line = np.logspace(np.log10(xmin), np.log10(sorted_data.max()), 100)
+        y_line = (len(data[data >= xmin]) / len(data)) * (x_line / xmin) ** (1 - alpha)
+        ax3.plot(x_line, y_line, 'r--', linewidth=2, label=f'Fit (α={alpha:.2f})')
+        ax3.axvline(xmin, color='green', linestyle=':', linewidth=2, label=f'x_min={xmin:.3f}')
+
+        ax3.set_xscale('log')
+        ax3.set_yscale('log')
+        ax3.set_xlabel('Value', fontsize=12)
+        ax3.set_ylabel('P(X ≥ x)', fontsize=12)
+        ax3.set_title('C) CCDF with Fit', fontsize=14, fontweight='bold')
+        ax3.legend(loc='lower left', fontsize=10)
+        ax3.grid(True, alpha=0.3)
+
+    # Panel D: Summary statistics
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+
+    summary_lines = [
+        f"POWER LAW FIT SUMMARY",
+        f"{'='*40}",
+        f"",
+        f"Fitted Parameters:",
+        f"  x_min = {gof_results.get('xmin', 'N/A'):.4f}",
+        f"  α = {gof_results.get('alpha', 'N/A'):.3f}",
+        f"  n (tail) = {gof_results.get('n_tail', 'N/A'):,}",
+        f"",
+        f"Goodness of Fit:",
+        f"  KS statistic = {gof_results.get('observed_ks', 'N/A'):.4f}",
+        f"  p-value = {gof_results.get('p_value', 'N/A'):.3f}",
+        f"",
+        f"Interpretation:",
+        f"  {interp}",
+    ]
+
+    ax4.text(0.05, 0.95, '\n'.join(summary_lines), transform=ax4.transAxes,
+            fontsize=11, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+    ax4.set_title('D) Summary', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
@@ -1487,3 +2223,7 @@ if __name__ == "__main__":
     print("  - plot_2d_heatmap()")
     print("  - plot_powerlaw_rank_size()")
     print("  - plot_domain_comparison()")
+    print("  - plot_alpha_elevation_phase_diagram()  # NEW")
+    print("  - plot_slope_relief_heatmap()           # NEW")
+    print("  - plot_xmin_sensitivity()               # NEW")
+    print("  - plot_significance_tests()             # NEW")
