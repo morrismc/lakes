@@ -705,10 +705,227 @@ def generate_powerlaw_report(results, output_path=None):
     return report
 
 
+# ============================================================================
+# SENSITIVITY ANALYSIS
+# ============================================================================
+
+def xmin_sensitivity_analysis(lake_areas, xmin_values=None, compute_uncertainty=True,
+                               n_bootstrap=500):
+    """
+    Analyze sensitivity of power law parameters to x_min threshold.
+
+    This is critical for understanding how the choice of minimum area
+    affects conclusions about the power law distribution.
+
+    Parameters
+    ----------
+    lake_areas : array-like
+        Lake areas in km²
+    xmin_values : array-like, optional
+        Values of x_min to test. If None, uses logarithmically spaced values.
+    compute_uncertainty : bool
+        If True, compute bootstrap confidence intervals for each x_min
+    n_bootstrap : int
+        Number of bootstrap samples for uncertainty estimation
+
+    Returns
+    -------
+    DataFrame
+        Results for each x_min value including alpha, n_tail, ks_statistic
+    """
+    np.random.seed(RANDOM_SEED)
+
+    areas = np.asarray(lake_areas)
+    areas = areas[areas > 0]
+
+    if xmin_values is None:
+        # Use logarithmically spaced values from minimum to reasonable upper bound
+        min_area = max(0.01, np.percentile(areas, 1))
+        max_area = np.percentile(areas, 50)  # Don't go too high
+        xmin_values = np.logspace(np.log10(min_area), np.log10(max_area), 20)
+
+    results = []
+
+    print(f"Running sensitivity analysis for {len(xmin_values)} x_min values...")
+
+    for i, xmin in enumerate(xmin_values):
+        if (i + 1) % 5 == 0:
+            print(f"  Processing {i + 1}/{len(xmin_values)}...")
+
+        tail = areas[areas >= xmin]
+        n_tail = len(tail)
+
+        if n_tail < MIN_LAKES_FOR_POWERLAW:
+            results.append({
+                'xmin': xmin,
+                'alpha': np.nan,
+                'alpha_se': np.nan,
+                'alpha_ci_lower': np.nan,
+                'alpha_ci_upper': np.nan,
+                'n_tail': n_tail,
+                'ks_statistic': np.nan,
+                'pct_data': n_tail / len(areas) * 100,
+            })
+            continue
+
+        # Estimate alpha
+        alpha = estimate_alpha_mle(areas, xmin)
+
+        # KS statistic
+        ks = compute_ks_statistic(areas, xmin, alpha)
+
+        result = {
+            'xmin': xmin,
+            'alpha': alpha,
+            'n_tail': n_tail,
+            'ks_statistic': ks,
+            'pct_data': n_tail / len(areas) * 100,
+        }
+
+        # Bootstrap uncertainty
+        if compute_uncertainty and np.isfinite(alpha):
+            uncertainty = estimate_alpha_uncertainty(areas, xmin, alpha, n_bootstrap)
+            result['alpha_se'] = uncertainty['se']
+            result['alpha_ci_lower'] = uncertainty['ci_lower']
+            result['alpha_ci_upper'] = uncertainty['ci_upper']
+
+        results.append(result)
+
+    print("  Sensitivity analysis complete!")
+
+    return pd.DataFrame(results)
+
+
+def compare_to_cael_seekell(lake_areas, xmin=0.46):
+    """
+    Compare CONUS lake size distribution to Cael & Seekell (2016) global result.
+
+    Cael & Seekell found τ = 2.14 ± 0.01 for global lakes ≥ 0.46 km².
+
+    Parameters
+    ----------
+    lake_areas : array-like
+        Lake areas in km²
+    xmin : float
+        Minimum area threshold (default 0.46 km² from C&S)
+
+    Returns
+    -------
+    dict
+        Comparison results including z-test for difference from global value
+    """
+    areas = np.asarray(lake_areas)
+    areas = areas[areas > 0]
+
+    # Fit to CONUS data
+    alpha_conus = estimate_alpha_mle(areas, xmin)
+    n_tail = np.sum(areas >= xmin)
+
+    # Bootstrap uncertainty
+    uncertainty = estimate_alpha_uncertainty(areas, xmin, alpha_conus)
+
+    # Global values from Cael & Seekell (2016)
+    alpha_global = 2.14
+    se_global = 0.01
+
+    # Z-test for difference
+    if uncertainty['se'] > 0:
+        z_stat = (alpha_conus - alpha_global) / np.sqrt(uncertainty['se']**2 + se_global**2)
+        p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+    else:
+        z_stat = np.nan
+        p_value = np.nan
+
+    result = {
+        'alpha_conus': alpha_conus,
+        'alpha_se_conus': uncertainty['se'],
+        'alpha_ci_lower': uncertainty['ci_lower'],
+        'alpha_ci_upper': uncertainty['ci_upper'],
+        'n_tail_conus': n_tail,
+        'alpha_global': alpha_global,
+        'se_global': se_global,
+        'difference': alpha_conus - alpha_global,
+        'z_statistic': z_stat,
+        'p_value': p_value,
+        'significant_at_005': p_value < 0.05 if pd.notna(p_value) else False,
+    }
+
+    # Interpretation
+    if pd.notna(p_value):
+        if p_value < 0.05:
+            if alpha_conus > alpha_global:
+                result['interpretation'] = ("CONUS has significantly FEWER large lakes "
+                                            "than global average (steeper distribution)")
+            else:
+                result['interpretation'] = ("CONUS has significantly MORE large lakes "
+                                            "than global average (shallower distribution)")
+        else:
+            result['interpretation'] = "CONUS distribution is consistent with global average"
+
+    return result
+
+
+def fit_powerlaw_by_process_domain(lake_df, elev_col=None, area_col=None,
+                                    fixed_xmin=None, compute_uncertainty=True):
+    """
+    Fit power law to lakes classified by geomorphic process domain.
+
+    Uses ELEVATION_DOMAINS from config to classify lakes.
+
+    Parameters
+    ----------
+    lake_df : DataFrame
+        Lake data with elevation and area columns
+    elev_col, area_col : str
+        Column names (defaults from config)
+    fixed_xmin : float, optional
+        If provided, use same x_min for all domains (enables fair comparison)
+    compute_uncertainty : bool
+        If True, compute bootstrap confidence intervals
+
+    Returns
+    -------
+    DataFrame
+        Power law parameters for each process domain
+    """
+    if elev_col is None:
+        elev_col = COLS['elevation']
+    if area_col is None:
+        area_col = COLS['area']
+
+    # Import ELEVATION_DOMAINS here to avoid circular import
+    try:
+        from .config import ELEVATION_DOMAINS
+    except ImportError:
+        from config import ELEVATION_DOMAINS
+
+    # Classify lakes into domains
+    lake_df = lake_df.copy()
+
+    def classify_domain(elev):
+        for domain_name, (low, high) in ELEVATION_DOMAINS.items():
+            if low <= elev < high:
+                return domain_name
+        return 'unclassified'
+
+    lake_df['process_domain'] = lake_df[elev_col].apply(classify_domain)
+
+    # Fit power law for each domain
+    return fit_powerlaw_by_domain(
+        lake_df, 'process_domain',
+        area_column=area_col,
+        fixed_xmin=fixed_xmin,
+        compute_uncertainty=compute_uncertainty
+    )
+
+
 if __name__ == "__main__":
     print("Power Law Analysis module loaded.")
     print("\nKey functions:")
     print("  - full_powerlaw_analysis(areas)")
     print("  - fit_powerlaw_by_domain(df, domain_col)")
+    print("  - fit_powerlaw_by_process_domain(df)      # NEW")
+    print("  - xmin_sensitivity_analysis(areas)        # NEW")
+    print("  - compare_to_cael_seekell(areas)          # NEW")
     print("  - estimate_xmin(data)")
     print("  - compare_distributions(data, xmin)")

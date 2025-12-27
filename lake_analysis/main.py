@@ -61,11 +61,16 @@ try:
         plot_powerlaw_by_elevation_multipanel, plot_powerlaw_overlay,
         plot_powerlaw_explained, plot_2d_heatmap_with_marginals,
         plot_2d_contour_with_domains, plot_lake_size_histogram_by_elevation,
-        plot_cumulative_area_by_size, plot_geographic_density_map
+        plot_cumulative_area_by_size, plot_geographic_density_map,
+        # New visualizations
+        plot_alpha_elevation_phase_diagram, plot_alpha_by_process_domain,
+        plot_slope_relief_heatmap, plot_xmin_sensitivity,
+        plot_significance_tests, plot_powerlaw_gof_summary
     )
     from .powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
-        fit_powerlaw_by_domain
+        fit_powerlaw_by_domain, fit_powerlaw_by_process_domain,
+        xmin_sensitivity_analysis, compare_to_cael_seekell
     )
 except ImportError:
     from config import (
@@ -91,11 +96,16 @@ except ImportError:
         plot_powerlaw_by_elevation_multipanel, plot_powerlaw_overlay,
         plot_powerlaw_explained, plot_2d_heatmap_with_marginals,
         plot_2d_contour_with_domains, plot_lake_size_histogram_by_elevation,
-        plot_cumulative_area_by_size, plot_geographic_density_map
+        plot_cumulative_area_by_size, plot_geographic_density_map,
+        # New visualizations
+        plot_alpha_elevation_phase_diagram, plot_alpha_by_process_domain,
+        plot_slope_relief_heatmap, plot_xmin_sensitivity,
+        plot_significance_tests, plot_powerlaw_gof_summary
     )
     from powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
-        fit_powerlaw_by_domain
+        fit_powerlaw_by_domain, fit_powerlaw_by_process_domain,
+        xmin_sensitivity_analysis, compare_to_cael_seekell
     )
 
 
@@ -670,6 +680,216 @@ def analyze_powerlaw(lakes, by_elevation=True, save_figures=True):
 
 
 # ============================================================================
+# HYPOTHESIS 6: SLOPE-RELIEF DOMAINS
+# ============================================================================
+
+def analyze_slope_relief(lakes, slope_raster=None, relief_raster=None,
+                          save_figures=True, fine_resolution=True):
+    """
+    Analyze lake density in slope × relief space.
+
+    This identifies "sweet spots" for lake formation - the optimal
+    combination of local slope and relief.
+
+    Parameters
+    ----------
+    lakes : DataFrame
+    slope_raster, relief_raster : str, optional
+    save_figures : bool
+    fine_resolution : bool
+
+    Returns
+    -------
+    dict
+    """
+    print("\n" + "=" * 60)
+    print("SLOPE-RELIEF DOMAIN ANALYSIS")
+    print("=" * 60)
+
+    try:
+        if slope_raster is None:
+            slope_raster = RASTERS.get('slope')
+        if relief_raster is None:
+            relief_raster = RASTERS.get('relief_5km')
+
+        if not all([slope_raster, relief_raster]):
+            print("[ERROR] Missing rasters for slope-relief analysis.")
+            return None
+
+        if not (os.path.exists(slope_raster) and os.path.exists(relief_raster)):
+            print("[ERROR] Raster files not found.")
+            return None
+
+        # Define bins
+        if fine_resolution:
+            slope_breaks = list(range(0, 46, 2))     # 2° bins
+            relief_breaks = list(range(0, 2100, 100))  # 100m bins
+            print("  Using fine resolution: 2° slope × 100m relief bins")
+        else:
+            slope_breaks = SLOPE_BREAKS
+            relief_breaks = RELIEF_BREAKS
+
+        # Compute 2D density
+        slope_col = COLS['slope']
+        relief_col = COLS.get('relief_5km', 'F5km_relief')
+
+        print("\n[STEP 1/3] Computing 2D normalized density in slope × relief space...")
+        print("  This may take several minutes...")
+        density_2d = compute_2d_normalized_density(
+            lakes, slope_raster, relief_raster,
+            slope_col, relief_col,
+            slope_breaks, relief_breaks
+        )
+        print("  2D density calculation complete!")
+
+        # Visualize
+        ensure_output_dir()
+
+        if save_figures:
+            print("\n[STEP 2/3] Generating visualizations...")
+
+            # Slope-relief heatmap with marginals
+            fig, axes = plot_slope_relief_heatmap(
+                density_2d, slope_col, relief_col,
+                slope_units='°', relief_units='m',
+                save_path=f"{OUTPUT_DIR}/slope_relief_heatmap.png"
+            )
+            plt.close(fig)
+            print("  Slope-relief heatmap saved!")
+
+        # Save data
+        print("\n[STEP 3/3] Saving results...")
+        density_2d.to_csv(f"{OUTPUT_DIR}/slope_relief_density.csv", index=False)
+
+        print("\n[SUCCESS] Slope-relief analysis complete!")
+
+        return {
+            'density_2d': density_2d,
+        }
+
+    except Exception as e:
+        print(f"\n[ERROR] Slope-relief analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# ============================================================================
+# POWER LAW SENSITIVITY ANALYSIS
+# ============================================================================
+
+def analyze_powerlaw_sensitivity(lakes, save_figures=True):
+    """
+    Analyze sensitivity of power law parameters to x_min threshold.
+
+    This is critical for understanding how conclusions depend on
+    the choice of minimum lake area.
+
+    Parameters
+    ----------
+    lakes : DataFrame
+    save_figures : bool
+
+    Returns
+    -------
+    dict
+    """
+    print("\n" + "=" * 60)
+    print("POWER LAW SENSITIVITY ANALYSIS")
+    print("=" * 60)
+
+    try:
+        area_col = COLS['area']
+        areas = lakes[area_col].values
+        areas = areas[areas > 0]
+
+        # Run sensitivity analysis
+        print("\n[STEP 1/4] Running x_min sensitivity analysis...")
+        xmin_values = np.logspace(np.log10(0.01), np.log10(5.0), 25)
+        sensitivity_results = xmin_sensitivity_analysis(
+            areas, xmin_values=xmin_values, compute_uncertainty=True
+        )
+
+        # Compare to Cael & Seekell (2016)
+        print("\n[STEP 2/4] Comparing to Cael & Seekell (2016) global result...")
+        cs_comparison = compare_to_cael_seekell(areas, xmin=0.46)
+
+        print(f"\n  CONUS α = {cs_comparison['alpha_conus']:.3f} ± {cs_comparison['alpha_se_conus']:.3f}")
+        print(f"  Global α = {cs_comparison['alpha_global']:.3f} ± {cs_comparison['se_global']:.3f}")
+        print(f"  Difference = {cs_comparison['difference']:.3f}")
+        print(f"  p-value = {cs_comparison['p_value']:.4f}")
+        print(f"  {cs_comparison.get('interpretation', '')}")
+
+        # Fit by process domain
+        print("\n[STEP 3/4] Fitting power law by process domain...")
+        domain_results = fit_powerlaw_by_process_domain(
+            lakes, fixed_xmin=0.46, compute_uncertainty=True
+        )
+
+        print("\n  Results by domain:")
+        for _, row in domain_results.iterrows():
+            if pd.notna(row['alpha']):
+                print(f"    {row['domain']}: α = {row['alpha']:.3f} "
+                      f"(95% CI: [{row.get('alpha_ci_lower', np.nan):.3f}, "
+                      f"{row.get('alpha_ci_upper', np.nan):.3f}])")
+
+        # Visualize
+        ensure_output_dir()
+
+        if save_figures:
+            print("\n[STEP 4/4] Generating visualizations...")
+
+            # Sensitivity plot
+            fig, axes = plot_xmin_sensitivity(
+                sensitivity_results,
+                save_path=f"{OUTPUT_DIR}/powerlaw_xmin_sensitivity.png"
+            )
+            plt.close(fig)
+            print("  x_min sensitivity plot saved!")
+
+            # α-Elevation phase diagram
+            elev_bands = list(range(0, 3500, 500))
+            elev_domain_results = fit_powerlaw_by_elevation_bands(
+                lakes, elev_bands,
+                elev_column=COLS['elevation'],
+                area_column=area_col
+            )
+
+            fig, ax = plot_alpha_elevation_phase_diagram(
+                elev_domain_results,
+                save_path=f"{OUTPUT_DIR}/alpha_elevation_phase_diagram.png"
+            )
+            plt.close(fig)
+            print("  α-elevation phase diagram saved!")
+
+            # Process domain plot
+            fig, axes = plot_alpha_by_process_domain(
+                domain_results,
+                save_path=f"{OUTPUT_DIR}/alpha_by_process_domain.png"
+            )
+            plt.close(fig)
+            print("  α by process domain plot saved!")
+
+        # Save results
+        sensitivity_results.to_csv(f"{OUTPUT_DIR}/powerlaw_sensitivity.csv", index=False)
+        domain_results.to_csv(f"{OUTPUT_DIR}/powerlaw_by_process_domain.csv", index=False)
+
+        print("\n[SUCCESS] Sensitivity analysis complete!")
+
+        return {
+            'sensitivity': sensitivity_results,
+            'cael_seekell_comparison': cs_comparison,
+            'by_process_domain': domain_results,
+        }
+
+    except Exception as e:
+        print(f"\n[ERROR] Sensitivity analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# ============================================================================
 # DOMAIN CLASSIFICATION
 # ============================================================================
 
@@ -761,6 +981,12 @@ def run_full_analysis(data_source='gdb'):
 
     # H5: Power law
     results['H5_powerlaw'] = analyze_powerlaw(lakes)
+
+    # H6: Slope-Relief domains
+    results['H6_slope_relief'] = analyze_slope_relief(lakes)
+
+    # Power law sensitivity analysis
+    results['powerlaw_sensitivity'] = analyze_powerlaw_sensitivity(lakes)
 
     # Domain classification
     results['domains'] = analyze_domains(lakes)
@@ -872,18 +1098,28 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    >>> results = analyze_elevation(lakes)
    >>> results = analyze_slope(lakes)
    >>> results = analyze_relief(lakes)
-   >>> results = analyze_powerlaw(lakes)    # Now with enhanced visualizations!
-   >>> results = analyze_2d_domains(lakes)  # Now with marginal PDFs!
+   >>> results = analyze_powerlaw(lakes)    # Enhanced with multiple plots
+   >>> results = analyze_2d_domains(lakes)  # With marginal PDFs
 
-4. Run full pipeline:
+4. NEW analyses:
+   >>> results = analyze_slope_relief(lakes)        # Slope × relief heatmap
+   >>> results = analyze_powerlaw_sensitivity(lakes) # x_min sensitivity
+
+5. Run full pipeline:
    >>> all_results = run_full_analysis()
 
-5. Classify domains:
+6. Classify domains:
    >>> lakes_classified = analyze_domains(lakes)
 
+Key Outputs:
+- α-Elevation phase diagram (compares to percolation theory τ=2.05)
+- Slope-Relief heatmap with "sweet spot" identification
+- x_min sensitivity analysis (how threshold affects α)
+- Comparison to Cael & Seekell (2016) global result
+
 Tips:
+- MIN_LAKE_AREA = 0.024 km² (NHD consistent threshold)
 - Update paths in config.py before running
-- Use quick_data_check() to verify data accessibility
 - Results are saved to OUTPUT_DIR specified in config.py
 """)
 
