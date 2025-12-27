@@ -20,10 +20,17 @@ import matplotlib.colors as mcolors
 from matplotlib.ticker import MaxNLocator, LogLocator
 from pathlib import Path
 
-from .config import (
-    PLOT_STYLE, PLOT_PARAMS, COLORMAPS, OUTPUT_DIR,
-    COLS, ELEVATION_DOMAINS, ensure_output_dir
-)
+# Handle imports for both package and direct execution
+try:
+    from .config import (
+        PLOT_STYLE, PLOT_PARAMS, COLORMAPS, OUTPUT_DIR,
+        COLS, ELEVATION_DOMAINS, ensure_output_dir
+    )
+except ImportError:
+    from config import (
+        PLOT_STYLE, PLOT_PARAMS, COLORMAPS, OUTPUT_DIR,
+        COLS, ELEVATION_DOMAINS, ensure_output_dir
+    )
 
 
 # ============================================================================

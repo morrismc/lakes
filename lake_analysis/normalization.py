@@ -21,16 +21,29 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from .config import (
-    COLS, ELEV_BREAKS, SLOPE_BREAKS, RELIEF_BREAKS,
-    RASTER_TILE_SIZE, TARGET_CRS, RASTER_METADATA
-)
-from .data_loading import (
-    calculate_landscape_area_by_bin,
-    load_raster_chunked,
-    get_raster_info,
-    get_raster_nodata
-)
+# Handle imports for both package and direct execution
+try:
+    from .config import (
+        COLS, ELEV_BREAKS, SLOPE_BREAKS, RELIEF_BREAKS,
+        RASTER_TILE_SIZE, TARGET_CRS, RASTER_METADATA
+    )
+    from .data_loading import (
+        calculate_landscape_area_by_bin,
+        load_raster_chunked,
+        get_raster_info,
+        get_raster_nodata
+    )
+except ImportError:
+    from config import (
+        COLS, ELEV_BREAKS, SLOPE_BREAKS, RELIEF_BREAKS,
+        RASTER_TILE_SIZE, TARGET_CRS, RASTER_METADATA
+    )
+    from data_loading import (
+        calculate_landscape_area_by_bin,
+        load_raster_chunked,
+        get_raster_info,
+        get_raster_nodata
+    )
 
 
 # ============================================================================

@@ -31,11 +31,19 @@ from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.crs import CRS
 from pathlib import Path
 
-from .config import (
-    LAKE_GDB_PATH, LAKE_FEATURE_CLASS, LAKE_PARQUET_PATH,
-    RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
-    NODATA_VALUE, MIN_LAKE_AREA, RASTER_TILE_SIZE
-)
+# Handle imports for both package and direct execution
+try:
+    from .config import (
+        LAKE_GDB_PATH, LAKE_FEATURE_CLASS, LAKE_PARQUET_PATH,
+        RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
+        NODATA_VALUE, MIN_LAKE_AREA, RASTER_TILE_SIZE
+    )
+except ImportError:
+    from config import (
+        LAKE_GDB_PATH, LAKE_FEATURE_CLASS, LAKE_PARQUET_PATH,
+        RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
+        NODATA_VALUE, MIN_LAKE_AREA, RASTER_TILE_SIZE
+    )
 
 
 def get_raster_nodata(raster_name_or_path):
