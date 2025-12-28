@@ -35,13 +35,13 @@ from pathlib import Path
 try:
     from .config import (
         LAKE_GDB_PATH, LAKE_FEATURE_CLASS, LAKE_PARQUET_PATH,
-        RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
+        LAKE_CONUS_PARQUET_PATH, RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
         NODATA_VALUE, MIN_LAKE_AREA, RASTER_TILE_SIZE
     )
 except ImportError:
     from config import (
         LAKE_GDB_PATH, LAKE_FEATURE_CLASS, LAKE_PARQUET_PATH,
-        RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
+        LAKE_CONUS_PARQUET_PATH, RASTERS, RASTER_METADATA, COLS, TARGET_CRS,
         NODATA_VALUE, MIN_LAKE_AREA, RASTER_TILE_SIZE
     )
 
@@ -918,6 +918,159 @@ def clip_lakes_to_conus(lakes_gdf, conus_boundary=None):
     print(f"  Result: {len(lakes_clipped):,} lakes within CONUS")
 
     return lakes_clipped
+
+
+# CONUS bounding box (NAD83 geographic coordinates)
+CONUS_BOUNDS = {
+    'min_lon': -125.0,
+    'max_lon': -66.5,
+    'min_lat': 24.5,
+    'max_lat': 49.5,
+}
+
+
+def create_conus_lake_dataset(source='gdb', output_path=None, use_bbox=True):
+    """
+    Create a CONUS-only lake dataset and save to parquet.
+
+    This should be run ONCE to create the clipped dataset, which is then
+    used for all subsequent analyses.
+
+    Parameters
+    ----------
+    source : str
+        'gdb' to load from geodatabase, 'parquet' to load from existing parquet
+    output_path : str, optional
+        Output path for CONUS parquet (defaults to LAKE_CONUS_PARQUET_PATH)
+    use_bbox : bool
+        If True, use simple bounding box filter (fast)
+        If False, use actual CONUS shapefile for precise clipping (slower)
+
+    Returns
+    -------
+    DataFrame
+        CONUS-only lake dataset
+    """
+    print("\n" + "=" * 60)
+    print("CREATING CONUS LAKE DATASET")
+    print("=" * 60)
+
+    if output_path is None:
+        output_path = LAKE_CONUS_PARQUET_PATH
+
+    # Ensure output directory exists
+    output_dir = Path(output_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load full dataset
+    print(f"\n[STEP 1/3] Loading full lake dataset from {source}...")
+    if source == 'gdb':
+        lakes = load_lake_data_from_gdb()
+    else:
+        lakes = load_lake_data_from_parquet()
+
+    n_original = len(lakes)
+    print(f"  Loaded {n_original:,} lakes")
+
+    # Filter to CONUS
+    print(f"\n[STEP 2/3] Filtering to CONUS extent...")
+
+    lat_col = COLS.get('lat', 'Latitude')
+    lon_col = COLS.get('lon', 'Longitude')
+
+    if use_bbox:
+        # Simple bounding box filter (fast)
+        print(f"  Using bounding box: lon=[{CONUS_BOUNDS['min_lon']}, {CONUS_BOUNDS['max_lon']}], "
+              f"lat=[{CONUS_BOUNDS['min_lat']}, {CONUS_BOUNDS['max_lat']}]")
+
+        mask = (
+            (lakes[lon_col] >= CONUS_BOUNDS['min_lon']) &
+            (lakes[lon_col] <= CONUS_BOUNDS['max_lon']) &
+            (lakes[lat_col] >= CONUS_BOUNDS['min_lat']) &
+            (lakes[lat_col] <= CONUS_BOUNDS['max_lat'])
+        )
+        lakes_conus = lakes[mask].copy()
+    else:
+        # Use actual shapefile (slower but more precise)
+        print("  Using CONUS shapefile for precise clipping...")
+        if hasattr(lakes, 'geometry'):
+            lakes_conus = clip_lakes_to_conus(lakes)
+        else:
+            # If not a GeoDataFrame, fall back to bbox
+            print("  Warning: No geometry column, falling back to bounding box")
+            mask = (
+                (lakes[lon_col] >= CONUS_BOUNDS['min_lon']) &
+                (lakes[lon_col] <= CONUS_BOUNDS['max_lon']) &
+                (lakes[lat_col] >= CONUS_BOUNDS['min_lat']) &
+                (lakes[lat_col] <= CONUS_BOUNDS['max_lat'])
+            )
+            lakes_conus = lakes[mask].copy()
+
+    n_conus = len(lakes_conus)
+    n_removed = n_original - n_conus
+    print(f"  CONUS lakes: {n_conus:,} ({n_removed:,} removed)")
+
+    # Summary of what was removed
+    if n_removed > 0:
+        outside = lakes[~lakes.index.isin(lakes_conus.index)]
+        if lat_col in outside.columns:
+            ak_count = len(outside[outside[lat_col] > 50])
+            hi_count = len(outside[(outside[lat_col] < 24) & (outside[lon_col] < -150)])
+            other = n_removed - ak_count - hi_count
+            print(f"  Removed: ~{ak_count:,} Alaska, ~{hi_count:,} Hawaii, ~{other:,} other/territories")
+
+    # Save to parquet
+    print(f"\n[STEP 3/3] Saving to {output_path}...")
+
+    # Convert to regular DataFrame if GeoDataFrame (parquet doesn't need geometry)
+    if hasattr(lakes_conus, 'geometry'):
+        # Keep geometry as WKT for potential future use
+        lakes_conus = pd.DataFrame(lakes_conus)
+        if 'geometry' in lakes_conus.columns:
+            lakes_conus['geometry_wkt'] = lakes_conus['geometry'].astype(str)
+            lakes_conus = lakes_conus.drop(columns=['geometry'])
+
+    lakes_conus.to_parquet(output_path, index=False)
+    file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+    print(f"  Saved! File size: {file_size_mb:.1f} MB")
+
+    print("\n" + "=" * 60)
+    print(f"SUCCESS: CONUS lake dataset created with {n_conus:,} lakes")
+    print(f"Path: {output_path}")
+    print("=" * 60)
+
+    return lakes_conus
+
+
+def load_conus_lake_data(create_if_missing=True):
+    """
+    Load the CONUS-only lake dataset.
+
+    If the dataset doesn't exist and create_if_missing=True, it will be created.
+
+    Parameters
+    ----------
+    create_if_missing : bool
+        If True, create the CONUS dataset if it doesn't exist
+
+    Returns
+    -------
+    DataFrame
+        CONUS lake data
+    """
+    if os.path.exists(LAKE_CONUS_PARQUET_PATH):
+        print(f"Loading CONUS lake data from: {LAKE_CONUS_PARQUET_PATH}")
+        lakes = pd.read_parquet(LAKE_CONUS_PARQUET_PATH)
+        print(f"  Loaded {len(lakes):,} CONUS lakes")
+        return lakes
+    elif create_if_missing:
+        print("CONUS lake dataset not found. Creating it now...")
+        return create_conus_lake_dataset()
+    else:
+        raise FileNotFoundError(
+            f"CONUS lake dataset not found: {LAKE_CONUS_PARQUET_PATH}\n"
+            "Run create_conus_lake_dataset() first to create it."
+        )
 
 
 def get_target_crs_info():

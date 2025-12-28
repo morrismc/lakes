@@ -23,6 +23,10 @@ LAKE_FEATURE_CLASS = "Lakes_with_all_details"
 # Alternative: If you export to parquet later for faster loading
 LAKE_PARQUET_PATH = r"F:\Lakes\Data\lakes.parquet"
 
+# CONUS-clipped lake dataset (created once via create_conus_lake_dataset())
+# This excludes Alaska, Hawaii, and territories for Lower 48 analysis
+LAKE_CONUS_PARQUET_PATH = r"F:\Lakes\Data\lakes_conus.parquet"
+
 # Raster paths
 # NOTE: For ESRI Grid rasters, point to the FOLDER (not the .adf file inside)
 # For other formats (.bil, .asc), point to the actual file
