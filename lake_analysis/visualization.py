@@ -537,20 +537,22 @@ def plot_powerlaw_ccdf(lake_areas, xmin=None, alpha=None,
     ax.scatter(sorted_areas, ccdf, s=5, alpha=0.5, c='steelblue', label='Data')
 
     if xmin is not None and alpha is not None:
-        # Theoretical CCDF for power law: P(X >= x) = (x/xmin)^(1-alpha)
+        # Theoretical CCDF for power law: P(X >= x) = p_tail * (x/xmin)^(1-alpha)
+        # where p_tail is the fraction of data >= xmin
+        p_tail = np.sum(areas >= xmin) / len(areas)
         x_line = np.logspace(np.log10(xmin), np.log10(max(areas)), 100)
-        y_line = (x_line / xmin) ** (1 - alpha)
+        y_line = p_tail * (x_line / xmin) ** (1 - alpha)
 
         ax.plot(x_line, y_line, 'r--', linewidth=2.5,
                 label=f'Power Law Fit (α={alpha:.2f})')
         ax.axvline(xmin, color='green', linestyle=':', linewidth=2,
                    label=f'x_min = {xmin:.3f} km²')
 
-    # Add reference line for Cael & Seekell global
-    x_ref = np.logspace(-1, 2, 50)
-    y_ref = (x_ref / 0.46) ** (1 - 2.14)
-    ax.plot(x_ref, y_ref, 'k--', linewidth=1.5, alpha=0.5,
-            label='Global ref. (τ=2.14)')
+        # Add reference line for Cael & Seekell global (scaled to same p_tail for comparison)
+        x_ref = np.logspace(np.log10(xmin), np.log10(max(areas)), 50)
+        y_ref = p_tail * (x_ref / xmin) ** (1 - 2.14)
+        ax.plot(x_ref, y_ref, 'k--', linewidth=1.5, alpha=0.5,
+                label='Global ref. (τ=2.14)')
 
     ax.set_xscale('log')
     ax.set_yscale('log')
@@ -902,9 +904,11 @@ def plot_powerlaw_by_elevation_multipanel(lake_df, elev_bands, area_col=None,
         if len(tail) > 10:
             alpha = 1 + len(tail) / np.sum(np.log(tail / xmin))
 
-            # Plot fit line
+            # Plot fit line - MUST scale by fraction of data in tail
+            p_tail = len(tail) / len(areas)  # Fraction of data >= xmin
             x_line = np.logspace(np.log10(xmin), np.log10(sorted_areas.max()), 50)
-            y_line = (x_line / xmin) ** (1 - alpha)
+            # CCDF for power law: P(X >= x) = p_tail * (x/xmin)^(1-alpha) for x >= xmin
+            y_line = p_tail * (x_line / xmin) ** (1 - alpha)
             ax.plot(x_line, y_line, 'r--', linewidth=2, label=f'α = {alpha:.2f}')
             ax.legend(loc='lower left', fontsize=10)
 
