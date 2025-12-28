@@ -92,6 +92,30 @@ RASTER_METADATA = {
     },
 }
 
+# ============================================================================
+# SHAPEFILES
+# ============================================================================
+# Additional vector data for analysis
+
+SHAPEFILES = {
+    # Glacial extent boundaries by stage (Quaternary glaciation)
+    # TODO: Update path when shapefile is ready
+    'glacial_stages': None,  # e.g., r"F:\Lakes\GIS\glacial\glacial_stages.shp"
+
+    # CONUS boundary for clipping (if needed)
+    'conus_boundary': None,  # e.g., r"F:\Lakes\GIS\boundaries\conus.shp"
+}
+
+# Glacial stage classification
+# These will be used when glacial_stages shapefile is provided
+GLACIAL_STAGES = {
+    'LGM': 'Last Glacial Maximum (LGM)',
+    'Wisconsin': 'Wisconsin glaciation',
+    'Illinoian': 'Illinoian glaciation',
+    'Pre-Illinoian': 'Pre-Illinoian glaciation',
+    'unglaciated': 'Never glaciated',
+}
+
 # Output directory (will be created if it doesn't exist)
 OUTPUT_DIR = r"F:\Lakes\Analysis\outputs"
 
