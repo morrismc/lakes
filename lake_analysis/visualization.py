@@ -1647,11 +1647,28 @@ def plot_alpha_elevation_phase_diagram(fit_results, figsize=(12, 8), save_path=N
     ax.legend(loc='best', fontsize=10)
     ax.grid(True, alpha=0.3)
 
-    # Add sample size annotations
-    for i, (x, alpha, n) in enumerate(zip(x_positions, alphas, valid_results['n_tail'])):
-        if pd.notna(n) and n > 0:
-            ax.annotate(f'n={int(n):,}', xy=(x, alpha), xytext=(5, -15),
-                       textcoords='offset points', fontsize=8, alpha=0.7)
+    # Add sample size annotations - show both total and tail counts if available
+    n_tail_col = valid_results['n_tail'] if 'n_tail' in valid_results.columns else None
+    n_total_col = valid_results['n_total'] if 'n_total' in valid_results.columns else None
+
+    for i, (x, alpha) in enumerate(zip(x_positions, alphas)):
+        # Build annotation text
+        if n_total_col is not None and pd.notna(n_total_col.iloc[i]):
+            n_total = int(n_total_col.iloc[i])
+            if n_tail_col is not None and pd.notna(n_tail_col.iloc[i]):
+                n_tail = int(n_tail_col.iloc[i])
+                label = f'n≥xmin: {n_tail:,}\n(of {n_total:,})'
+            else:
+                label = f'n={n_total:,}'
+        elif n_tail_col is not None and pd.notna(n_tail_col.iloc[i]):
+            n_tail = int(n_tail_col.iloc[i])
+            label = f'n≥xmin: {n_tail:,}'
+        else:
+            continue
+
+        ax.annotate(label, xy=(x, alpha), xytext=(5, -22),
+                   textcoords='offset points', fontsize=7, alpha=0.9,
+                   bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8, edgecolor='gray', linewidth=0.5))
 
     plt.tight_layout()
 
