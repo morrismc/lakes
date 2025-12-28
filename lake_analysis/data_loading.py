@@ -821,6 +821,207 @@ def quick_data_check():
     print("\n" + "=" * 60)
 
 
+# ============================================================================
+# CONUS CLIPPING AND PROJECTION UTILITIES
+# ============================================================================
+
+def load_conus_boundary(shapefile_path=None, target_crs=None):
+    """
+    Load the CONUS boundary shapefile and optionally reproject.
+
+    The Census Bureau shapefile includes all US territories, so this
+    filters to just the contiguous 48 states.
+
+    Parameters
+    ----------
+    shapefile_path : str, optional
+        Path to shapefile (defaults to config SHAPEFILES['conus_boundary'])
+    target_crs : str, optional
+        Target CRS for reprojection (e.g., 'EPSG:5070' for Albers)
+
+    Returns
+    -------
+    GeoDataFrame
+        CONUS boundary polygon
+    """
+    try:
+        from .config import SHAPEFILES
+    except ImportError:
+        from config import SHAPEFILES
+
+    if shapefile_path is None:
+        shapefile_path = SHAPEFILES.get('conus_boundary')
+
+    if shapefile_path is None or not os.path.exists(shapefile_path):
+        raise FileNotFoundError(f"CONUS boundary shapefile not found: {shapefile_path}")
+
+    print(f"Loading CONUS boundary from: {shapefile_path}")
+    boundary = gpd.read_file(shapefile_path)
+
+    # The cb_2024_us_nation shapefile is just the nation boundary
+    # If it has multiple features (Alaska, Hawaii, territories), filter for CONUS
+    # For nation-level file, typically just one feature - may need to clip by extent
+
+    # CONUS approximate bounding box (NAD83 geographic)
+    conus_bounds = {
+        'min_lon': -125.0,
+        'max_lon': -66.0,
+        'min_lat': 24.0,
+        'max_lat': 50.0,
+    }
+
+    # If the boundary includes Alaska/Hawaii/territories, clip to CONUS extent
+    # This is a rough clip - for precise work, use a proper CONUS polygon
+    if len(boundary) == 1:
+        # Single polygon - clip to CONUS bounding box
+        from shapely.geometry import box
+        conus_box = box(conus_bounds['min_lon'], conus_bounds['min_lat'],
+                        conus_bounds['max_lon'], conus_bounds['max_lat'])
+        boundary['geometry'] = boundary.geometry.intersection(conus_box)
+
+    print(f"  Original CRS: {boundary.crs}")
+
+    # Reproject if target CRS specified
+    if target_crs is not None:
+        boundary = boundary.to_crs(target_crs)
+        print(f"  Reprojected to: {boundary.crs}")
+
+    return boundary
+
+
+def clip_lakes_to_conus(lakes_gdf, conus_boundary=None):
+    """
+    Clip lake dataset to CONUS boundary.
+
+    Parameters
+    ----------
+    lakes_gdf : GeoDataFrame
+        Lake data with geometry
+    conus_boundary : GeoDataFrame, optional
+        CONUS boundary polygon (loads from config if None)
+
+    Returns
+    -------
+    GeoDataFrame
+        Lakes within CONUS only
+    """
+    if conus_boundary is None:
+        conus_boundary = load_conus_boundary()
+
+    # Ensure same CRS
+    if lakes_gdf.crs != conus_boundary.crs:
+        print(f"  Reprojecting boundary from {conus_boundary.crs} to {lakes_gdf.crs}")
+        conus_boundary = conus_boundary.to_crs(lakes_gdf.crs)
+
+    print(f"  Clipping {len(lakes_gdf):,} lakes to CONUS boundary...")
+    lakes_clipped = gpd.clip(lakes_gdf, conus_boundary)
+    print(f"  Result: {len(lakes_clipped):,} lakes within CONUS")
+
+    return lakes_clipped
+
+
+def get_target_crs_info():
+    """
+    Return information about the target CRS for analysis.
+
+    The rasters use NAD_1983_Albers (EPSG:5070 or similar), which is an
+    equal-area projection ideal for area-based analyses.
+
+    Returns
+    -------
+    dict
+        CRS information and recommendations
+    """
+    return {
+        'recommended_crs': 'EPSG:5070',  # NAD83 / Conus Albers
+        'crs_name': 'NAD83 / Conus Albers',
+        'units': 'meters',
+        'properties': 'Equal-area projection, preserves area measurements',
+        'notes': [
+            'Your topographic rasters (elevation, slope, relief) use NAD_1983_Albers',
+            'This is essentially EPSG:5070 or a custom Albers definition',
+            'For consistency, reproject all data to match the raster CRS',
+            'The CONUS shapefile (NAD83/EPSG:4269) needs reprojection for clipping rasters',
+        ],
+        'workflow': [
+            '1. Load CONUS boundary (NAD83 geographic)',
+            '2. Reproject CONUS to match raster CRS (Albers)',
+            '3. Clip rasters using reprojected CONUS boundary',
+            '4. Clip/filter lakes using same boundary',
+            '5. All data now in consistent Albers CRS',
+        ],
+    }
+
+
+def check_crs_consistency(print_report=True):
+    """
+    Check CRS consistency across all data sources.
+
+    Returns
+    -------
+    dict
+        CRS information for each data source
+    """
+    try:
+        from .config import RASTERS, SHAPEFILES, LAKE_GDB_PATH, LAKE_FEATURE_CLASS
+    except ImportError:
+        from config import RASTERS, SHAPEFILES, LAKE_GDB_PATH, LAKE_FEATURE_CLASS
+
+    report = {'rasters': {}, 'shapefiles': {}, 'lakes': None}
+
+    # Check rasters
+    for name, path in RASTERS.items():
+        if path and os.path.exists(path):
+            try:
+                with rasterio.open(path) as src:
+                    report['rasters'][name] = str(src.crs)
+            except Exception as e:
+                report['rasters'][name] = f"Error: {e}"
+
+    # Check shapefiles
+    for name, path in SHAPEFILES.items():
+        if path and os.path.exists(path):
+            try:
+                gdf = gpd.read_file(path, rows=1)
+                report['shapefiles'][name] = str(gdf.crs)
+            except Exception as e:
+                report['shapefiles'][name] = f"Error: {e}"
+
+    # Check lakes
+    if os.path.exists(LAKE_GDB_PATH):
+        try:
+            gdf = gpd.read_file(LAKE_GDB_PATH, layer=LAKE_FEATURE_CLASS, rows=1)
+            report['lakes'] = str(gdf.crs)
+        except Exception as e:
+            report['lakes'] = f"Error: {e}"
+
+    if print_report:
+        print("\n" + "=" * 60)
+        print("CRS CONSISTENCY CHECK")
+        print("=" * 60)
+
+        print("\nRasters:")
+        for name, crs in report['rasters'].items():
+            print(f"  {name}: {crs}")
+
+        print("\nShapefiles:")
+        for name, crs in report['shapefiles'].items():
+            print(f"  {name}: {crs}")
+
+        print(f"\nLakes: {report['lakes']}")
+
+        # Check consistency
+        raster_crs = set(report['rasters'].values())
+        if len(raster_crs) > 1:
+            print("\n⚠ WARNING: Rasters have different CRS!")
+        else:
+            print(f"\n✓ All rasters use: {list(raster_crs)[0]}")
+
+        print("=" * 60)
+
+    return report
+
+
 if __name__ == "__main__":
     # Run quick data check when module is executed directly
     quick_data_check()

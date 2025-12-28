@@ -102,8 +102,19 @@ SHAPEFILES = {
     # TODO: Update path when shapefile is ready
     'glacial_stages': None,  # e.g., r"F:\Lakes\GIS\glacial\glacial_stages.shp"
 
-    # CONUS boundary for clipping (if needed)
-    'conus_boundary': None,  # e.g., r"F:\Lakes\GIS\boundaries\conus.shp"
+    # CONUS boundary for clipping (Census Bureau 2024, 1:5m resolution)
+    # CRS: NAD83 (EPSG:4269) - geographic coordinates
+    'conus_boundary': r"F:\Lakes\GIS\shapefiles\cb_2024_us_all_5m\cb_2024_us_nation_5m\cb_2024_us_nation_5m.shp",
+}
+
+# Shapefile metadata
+SHAPEFILE_METADATA = {
+    'conus_boundary': {
+        'crs': 'EPSG:4269',  # NAD83 geographic
+        'source': 'US Census Bureau TIGER/Line 2024',
+        'resolution': '1:5,000,000',
+        'notes': 'Nation boundary - includes Alaska, Hawaii, territories. Filter for CONUS only.',
+    },
 }
 
 # Glacial stage classification
