@@ -231,32 +231,34 @@ def compute_2d_normalized_density(lake_df, raster1_path, raster2_path,
     Notes
     -----
     MEMORY WARNING: This can be very intensive for large rasters!
-    Both rasters must have the same dimensions and alignment.
+    Rasters can have different dimensions - intersection will be computed.
     """
     print(f"\nComputing 2D normalized density: {var1_col} × {var2_col}")
+
+    import rasterio
+    from rasterio.windows import Window
 
     # Get raster info
     info1 = get_raster_info(raster1_path)
     info2 = get_raster_info(raster2_path)
 
-    # Check alignment
-    if (info1['width'] != info2['width']) or (info1['height'] != info2['height']):
-        raise ValueError(
-            f"Rasters must have same dimensions!\n"
-            f"  {var1_col}: {info1['width']}x{info1['height']}\n"
-            f"  {var2_col}: {info2['width']}x{info2['height']}"
-        )
+    # Check if dimensions match
+    dims_match = (info1['width'] == info2['width']) and (info1['height'] == info2['height'])
+
+    if not dims_match:
+        print(f"  WARNING: Rasters have different dimensions!")
+        print(f"    {var1_col}: {info1['width']}x{info1['height']}")
+        print(f"    {var2_col}: {info2['width']}x{info2['height']}")
+        print(f"  Computing intersection extent...")
 
     pixel_area_km2 = info1['pixel_area_km2']
     print(f"  Pixel area: {pixel_area_km2:.6f} km²")
 
     # Initialize 2D counts for landscape
-    # Shape: (n_bins_var1+1, n_bins_var2+1) to catch out-of-range values
     landscape_counts = np.zeros((len(var1_breaks) + 1, len(var2_breaks) + 1), dtype=np.int64)
 
     # Process rasters in parallel chunks
     print(f"  Processing rasters in tiles...")
-    import rasterio
 
     # Get NoData values from RASTER_METADATA (more reliable than raster file metadata)
     nodata1 = get_raster_nodata(raster1_path)
@@ -270,22 +272,72 @@ def compute_2d_normalized_density(lake_df, raster1_path, raster2_path,
         if nodata2 is None:
             nodata2 = src2.nodata
 
+        # Compute intersection of raster extents if dimensions differ
+        if dims_match:
+            # Same dimensions - use full extent
+            common_height = src1.height
+            common_width = src1.width
+            offset1_row, offset1_col = 0, 0
+            offset2_row, offset2_col = 0, 0
+        else:
+            # Different dimensions - compute intersection in geographic coordinates
+            bounds1 = src1.bounds
+            bounds2 = src2.bounds
+
+            # Intersection bounds
+            left = max(bounds1.left, bounds2.left)
+            bottom = max(bounds1.bottom, bounds2.bottom)
+            right = min(bounds1.right, bounds2.right)
+            top = min(bounds1.top, bounds2.top)
+
+            if left >= right or bottom >= top:
+                raise ValueError("Rasters do not overlap!")
+
+            print(f"    Intersection: ({left:.0f}, {bottom:.0f}) to ({right:.0f}, {top:.0f})")
+
+            # Convert intersection bounds to pixel coordinates for each raster
+            # Raster 1
+            row1_start = int((bounds1.top - top) / abs(src1.res[1]))
+            row1_end = int((bounds1.top - bottom) / abs(src1.res[1]))
+            col1_start = int((left - bounds1.left) / src1.res[0])
+            col1_end = int((right - bounds1.left) / src1.res[0])
+
+            # Raster 2
+            row2_start = int((bounds2.top - top) / abs(src2.res[1]))
+            row2_end = int((bounds2.top - bottom) / abs(src2.res[1]))
+            col2_start = int((left - bounds2.left) / src2.res[0])
+            col2_end = int((right - bounds2.left) / src2.res[0])
+
+            # Ensure we use the same number of pixels from both rasters
+            common_height = min(row1_end - row1_start, row2_end - row2_start)
+            common_width = min(col1_end - col1_start, col2_end - col2_start)
+
+            offset1_row, offset1_col = row1_start, col1_start
+            offset2_row, offset2_col = row2_start, col2_start
+
+            print(f"    Common area: {common_width}x{common_height} pixels")
+            print(f"    Raster1 offset: row={offset1_row}, col={offset1_col}")
+            print(f"    Raster2 offset: row={offset2_row}, col={offset2_col}")
+
         n_tiles = 0
         total_valid_pixels = 0
-        for row_off in range(0, src1.height, tile_size):
-            for col_off in range(0, src1.width, tile_size):
-                # Calculate window
-                win_height = min(tile_size, src1.height - row_off)
-                win_width = min(tile_size, src1.width - col_off)
-                window = rasterio.windows.Window(col_off, row_off, win_width, win_height)
+
+        for row_off in range(0, common_height, tile_size):
+            for col_off in range(0, common_width, tile_size):
+                # Calculate window size
+                win_height = min(tile_size, common_height - row_off)
+                win_width = min(tile_size, common_width - col_off)
+
+                # Windows for each raster (with offsets)
+                window1 = Window(offset1_col + col_off, offset1_row + row_off, win_width, win_height)
+                window2 = Window(offset2_col + col_off, offset2_row + row_off, win_width, win_height)
 
                 # Read both rasters
-                data1 = src1.read(1, window=window).astype(float)
-                data2 = src2.read(1, window=window).astype(float)
+                data1 = src1.read(1, window=window1).astype(float)
+                data2 = src2.read(1, window=window2).astype(float)
 
                 # Handle nodata - use custom values from RASTER_METADATA
                 if nodata1 is not None:
-                    # Handle special case for float min (slope raster)
                     if nodata1 < -1e30:
                         data1[data1 < -1e30] = np.nan
                     else:
@@ -610,6 +662,170 @@ def compute_domain_statistics(lake_df, domain_col='domain'):
 
     stats.columns = ['_'.join(col).strip() for col in stats.columns.values]
     stats = stats.reset_index()
+
+    return stats
+
+
+# ============================================================================
+# GLACIAL STAGE CLASSIFICATION
+# ============================================================================
+
+def classify_lakes_by_glacial_stage(lake_df, glacial_shapefile=None,
+                                     lat_col=None, lon_col=None):
+    """
+    Classify lakes by Quaternary glacial stage using a shapefile.
+
+    This adds a 'glacial_stage' column to the lake dataframe based on
+    spatial intersection with glacial extent polygons.
+
+    Parameters
+    ----------
+    lake_df : GeoDataFrame or DataFrame
+        Lake data. If DataFrame, must have lat/lon columns for conversion.
+    glacial_shapefile : str, optional
+        Path to glacial stages shapefile. If None, uses config path.
+    lat_col, lon_col : str, optional
+        Column names for latitude/longitude (default from config)
+
+    Returns
+    -------
+    DataFrame
+        Original data with added 'glacial_stage' column
+
+    Notes
+    -----
+    Expected shapefile attributes:
+    - 'stage' or 'glacial_stage': Classification (LGM, Wisconsin, etc.)
+
+    If shapefile is not provided, returns dataframe with 'glacial_stage' = 'unknown'
+    """
+    import geopandas as gpd
+
+    # Try to get shapefile path from config
+    if glacial_shapefile is None:
+        try:
+            from .config import SHAPEFILES
+        except ImportError:
+            from config import SHAPEFILES
+        glacial_shapefile = SHAPEFILES.get('glacial_stages')
+
+    # If still no shapefile, return with 'unknown' classification
+    if glacial_shapefile is None:
+        print("  WARNING: No glacial stages shapefile provided.")
+        print("  Set SHAPEFILES['glacial_stages'] in config.py or pass shapefile path.")
+        df = lake_df.copy()
+        df['glacial_stage'] = 'unknown'
+        return df
+
+    import os
+    if not os.path.exists(glacial_shapefile):
+        print(f"  WARNING: Glacial stages shapefile not found: {glacial_shapefile}")
+        df = lake_df.copy()
+        df['glacial_stage'] = 'unknown'
+        return df
+
+    print(f"\nClassifying lakes by glacial stage...")
+    print(f"  Shapefile: {glacial_shapefile}")
+
+    # Get lat/lon columns
+    if lat_col is None or lon_col is None:
+        try:
+            from .config import COLS
+        except ImportError:
+            from config import COLS
+        lat_col = lat_col or 'Latitude'
+        lon_col = lon_col or 'Longitude'
+
+    # Convert to GeoDataFrame if needed
+    if not isinstance(lake_df, gpd.GeoDataFrame):
+        print("  Converting lakes to GeoDataFrame...")
+        gdf_lakes = gpd.GeoDataFrame(
+            lake_df,
+            geometry=gpd.points_from_xy(lake_df[lon_col], lake_df[lat_col]),
+            crs='EPSG:4326'
+        )
+    else:
+        gdf_lakes = lake_df.copy()
+
+    # Load glacial stages shapefile
+    print("  Loading glacial stages shapefile...")
+    gdf_glacial = gpd.read_file(glacial_shapefile)
+
+    # Reproject if needed
+    if gdf_lakes.crs != gdf_glacial.crs:
+        print(f"  Reprojecting glacial polygons from {gdf_glacial.crs} to {gdf_lakes.crs}...")
+        gdf_glacial = gdf_glacial.to_crs(gdf_lakes.crs)
+
+    # Find the glacial stage column
+    stage_col = None
+    for candidate in ['stage', 'glacial_stage', 'STAGE', 'GLACIAL_STAGE', 'Stage']:
+        if candidate in gdf_glacial.columns:
+            stage_col = candidate
+            break
+
+    if stage_col is None:
+        print(f"  WARNING: Could not find glacial stage column in shapefile.")
+        print(f"  Available columns: {list(gdf_glacial.columns)}")
+        df = lake_df.copy()
+        df['glacial_stage'] = 'unknown'
+        return df
+
+    print(f"  Using glacial stage column: '{stage_col}'")
+    print(f"  Glacial stages in shapefile: {gdf_glacial[stage_col].unique()}")
+
+    # Spatial join
+    print("  Performing spatial join...")
+    result = gpd.sjoin(
+        gdf_lakes, gdf_glacial[[stage_col, 'geometry']],
+        how='left', predicate='within'
+    )
+
+    # Handle lakes outside glacial extent
+    result['glacial_stage'] = result[stage_col].fillna('unglaciated')
+
+    # Drop geometry and extra columns for return
+    result = pd.DataFrame(result.drop(columns=['geometry', 'index_right'], errors='ignore'))
+
+    # Summary
+    print("\nGlacial Stage Classification Summary:")
+    print(result['glacial_stage'].value_counts())
+
+    return result
+
+
+def analyze_by_glacial_stage(lake_df, area_col=None, elev_col=None):
+    """
+    Compute summary statistics by glacial stage.
+
+    Parameters
+    ----------
+    lake_df : DataFrame
+        Lake data with 'glacial_stage' column
+
+    Returns
+    -------
+    DataFrame
+        Statistics for each glacial stage
+    """
+    if area_col is None:
+        area_col = COLS['area']
+    if elev_col is None:
+        elev_col = COLS['elevation']
+
+    if 'glacial_stage' not in lake_df.columns:
+        print("  ERROR: 'glacial_stage' column not found. Run classify_lakes_by_glacial_stage first.")
+        return None
+
+    stats = lake_df.groupby('glacial_stage').agg({
+        area_col: ['count', 'mean', 'median', 'sum', 'std'],
+        elev_col: ['mean', 'median', 'min', 'max'],
+    })
+
+    stats.columns = ['_'.join(col).strip() for col in stats.columns.values]
+    stats = stats.reset_index()
+
+    print("\nStatistics by Glacial Stage:")
+    print(stats.to_string())
 
     return stats
 
