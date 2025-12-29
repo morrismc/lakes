@@ -927,5 +927,488 @@ if __name__ == "__main__":
     print("  - fit_powerlaw_by_process_domain(df)      # NEW")
     print("  - xmin_sensitivity_analysis(areas)        # NEW")
     print("  - compare_to_cael_seekell(areas)          # NEW")
-    print("  - estimate_xmin(data)")
-    print("  - compare_distributions(data, xmin)")
+    print("  - xmin_sensitivity_by_elevation(df)       # NEW - Full elevation analysis")
+
+
+# ============================================================================
+# COMPREHENSIVE X_MIN SENSITIVITY BY ELEVATION
+# ============================================================================
+
+def compute_powerlaw_metrics(lake_areas, xmin):
+    """
+    For a given dataset and x_min, compute comprehensive power law metrics.
+
+    Parameters
+    ----------
+    lake_areas : array-like
+        Lake areas in km²
+    xmin : float
+        Lower cutoff for power law
+
+    Returns
+    -------
+    dict
+        Contains: alpha, alpha_se, ks_statistic, n_tail, n_total, pct_tail
+    """
+    areas = np.asarray(lake_areas)
+    areas = areas[areas > 0]
+    n_total = len(areas)
+    tail = areas[areas >= xmin]
+    n_tail = len(tail)
+
+    if n_tail < 10:
+        return {
+            'alpha': np.nan,
+            'alpha_se': np.nan,
+            'ks_statistic': np.nan,
+            'n_tail': n_tail,
+            'n_total': n_total,
+            'pct_tail': n_tail / n_total * 100 if n_total > 0 else 0,
+        }
+
+    # MLE alpha
+    alpha = estimate_alpha_mle(areas, xmin)
+
+    # Standard error (analytical approximation)
+    alpha_se = (alpha - 1) / np.sqrt(n_tail)
+
+    # KS statistic
+    ks = compute_ks_statistic(areas, xmin, alpha)
+
+    return {
+        'alpha': alpha,
+        'alpha_se': alpha_se,
+        'ks_statistic': ks,
+        'n_tail': n_tail,
+        'n_total': n_total,
+        'pct_tail': n_tail / n_total * 100,
+    }
+
+
+def find_optimal_xmin_detailed(lake_areas, xmin_candidates, ks_tolerance=0.01):
+    """
+    Sweep through x_min candidates, compute KS for each.
+    Return optimal x_min and the "plateau range" where KS is near minimum.
+
+    Parameters
+    ----------
+    lake_areas : array-like
+        Lake areas
+    xmin_candidates : array-like
+        x_min values to test
+    ks_tolerance : float
+        Consider x_min values within this of minimum KS as acceptable
+
+    Returns
+    -------
+    dict
+        optimal_xmin, optimal_alpha, optimal_ks, acceptable_range, full_results
+    """
+    areas = np.asarray(lake_areas)
+    areas = areas[areas > 0]
+
+    results = []
+    for xmin in xmin_candidates:
+        metrics = compute_powerlaw_metrics(areas, xmin)
+        metrics['xmin'] = xmin
+        results.append(metrics)
+
+    results_df = pd.DataFrame(results)
+
+    # Find optimal (minimum KS)
+    valid = results_df.dropna(subset=['ks_statistic'])
+    if len(valid) == 0:
+        return {
+            'optimal_xmin': np.nan,
+            'optimal_alpha': np.nan,
+            'optimal_ks': np.nan,
+            'acceptable_range': (np.nan, np.nan),
+            'full_results': results_df,
+        }
+
+    min_ks_idx = valid['ks_statistic'].idxmin()
+    optimal_xmin = valid.loc[min_ks_idx, 'xmin']
+    optimal_alpha = valid.loc[min_ks_idx, 'alpha']
+    optimal_ks = valid.loc[min_ks_idx, 'ks_statistic']
+
+    # Find acceptable range (within tolerance of minimum)
+    acceptable_mask = valid['ks_statistic'] <= (optimal_ks + ks_tolerance)
+    acceptable = valid[acceptable_mask]
+    if len(acceptable) > 0:
+        acceptable_range = (acceptable['xmin'].min(), acceptable['xmin'].max())
+    else:
+        acceptable_range = (optimal_xmin, optimal_xmin)
+
+    return {
+        'optimal_xmin': optimal_xmin,
+        'optimal_alpha': optimal_alpha,
+        'optimal_ks': optimal_ks,
+        'acceptable_range': acceptable_range,
+        'full_results': results_df,
+    }
+
+
+def analyze_elevation_band_xmin(lakes_df, elev_min, elev_max, xmin_candidates,
+                                 elev_col=None, area_col=None, ks_tolerance=0.01,
+                                 fixed_xmin_values=None):
+    """
+    Comprehensive x_min sensitivity analysis for a single elevation band.
+
+    Parameters
+    ----------
+    lakes_df : DataFrame
+        Lake data
+    elev_min, elev_max : float
+        Elevation range
+    xmin_candidates : array-like
+        x_min values to test
+    elev_col, area_col : str
+        Column names
+    ks_tolerance : float
+        Tolerance for acceptable x_min range
+    fixed_xmin_values : list, optional
+        Additional fixed x_min values to compute alpha at (e.g., [0.5, 1.0, 2.0])
+
+    Returns
+    -------
+    dict
+        Comprehensive results for this elevation band
+    """
+    if elev_col is None:
+        elev_col = COLS['elevation']
+    if area_col is None:
+        area_col = COLS['area']
+
+    if fixed_xmin_values is None:
+        fixed_xmin_values = [0.1, 0.5, 1.0, 2.0]
+
+    # Filter to elevation band
+    mask = (lakes_df[elev_col] >= elev_min) & (lakes_df[elev_col] < elev_max)
+    band_lakes = lakes_df.loc[mask, area_col].values
+    band_lakes = band_lakes[band_lakes > 0]
+
+    n_total = len(band_lakes)
+
+    if n_total < MIN_LAKES_FOR_POWERLAW:
+        return {
+            'elev_min': elev_min,
+            'elev_max': elev_max,
+            'elev_mid': (elev_min + elev_max) / 2,
+            'n_total': n_total,
+            'optimal_xmin': np.nan,
+            'optimal_alpha': np.nan,
+            'optimal_ks': np.nan,
+            'acceptable_range': (np.nan, np.nan),
+            'alpha_at_fixed_xmin': {},
+            'full_results': pd.DataFrame(),
+            'status': 'insufficient_data',
+        }
+
+    # Run detailed x_min analysis
+    xmin_analysis = find_optimal_xmin_detailed(band_lakes, xmin_candidates, ks_tolerance)
+
+    # Compute alpha at fixed x_min values for comparison
+    alpha_at_fixed = {}
+    for fixed_xmin in fixed_xmin_values:
+        metrics = compute_powerlaw_metrics(band_lakes, fixed_xmin)
+        alpha_at_fixed[fixed_xmin] = {
+            'alpha': metrics['alpha'],
+            'alpha_se': metrics['alpha_se'],
+            'n_tail': metrics['n_tail'],
+            'ks_statistic': metrics['ks_statistic'],
+        }
+
+    # Test stability within acceptable range
+    full_results = xmin_analysis['full_results']
+    acc_range = xmin_analysis['acceptable_range']
+
+    if pd.notna(acc_range[0]) and pd.notna(acc_range[1]):
+        in_range = full_results[
+            (full_results['xmin'] >= acc_range[0]) &
+            (full_results['xmin'] <= acc_range[1])
+        ]
+        if len(in_range) > 0:
+            alpha_range = (in_range['alpha'].min(), in_range['alpha'].max())
+            alpha_stability = alpha_range[1] - alpha_range[0]
+        else:
+            alpha_range = (np.nan, np.nan)
+            alpha_stability = np.nan
+    else:
+        alpha_range = (np.nan, np.nan)
+        alpha_stability = np.nan
+
+    return {
+        'elev_min': elev_min,
+        'elev_max': elev_max,
+        'elev_mid': (elev_min + elev_max) / 2,
+        'n_total': n_total,
+        'optimal_xmin': xmin_analysis['optimal_xmin'],
+        'optimal_alpha': xmin_analysis['optimal_alpha'],
+        'optimal_ks': xmin_analysis['optimal_ks'],
+        'acceptable_range': acc_range,
+        'alpha_range_in_acceptable': alpha_range,
+        'alpha_stability': alpha_stability,
+        'alpha_at_fixed_xmin': alpha_at_fixed,
+        'full_results': full_results,
+        'status': 'success',
+    }
+
+
+def xmin_sensitivity_by_elevation(lakes_df, elevation_bands=None, xmin_candidates=None,
+                                   elev_col=None, area_col=None, ks_tolerance=0.01,
+                                   fixed_xmin_values=None, show_progress=True):
+    """
+    Run comprehensive x_min sensitivity analysis across elevation bands.
+
+    This analysis addresses key questions:
+    1. Does optimal x_min differ by elevation?
+    2. How sensitive is alpha to x_min choice in each band?
+    3. Are alpha differences robust or threshold-dependent?
+
+    Parameters
+    ----------
+    lakes_df : DataFrame
+        Lake data with elevation and area columns
+    elevation_bands : list of tuples, optional
+        List of (min, max) elevation ranges. Defaults to standard bands.
+    xmin_candidates : array-like, optional
+        x_min values to test. Defaults to log-spaced 0.01 to 10 km².
+    elev_col, area_col : str
+        Column names (defaults from config)
+    ks_tolerance : float
+        Tolerance for acceptable x_min range identification
+    fixed_xmin_values : list, optional
+        Additional fixed x_min values to compare
+    show_progress : bool
+        If True, show progress messages
+
+    Returns
+    -------
+    dict
+        Results keyed by elevation band with comprehensive metrics
+    """
+    if elev_col is None:
+        elev_col = COLS['elevation']
+    if area_col is None:
+        area_col = COLS['area']
+
+    if elevation_bands is None:
+        elevation_bands = [
+            (0, 500), (500, 1000), (1000, 1500),
+            (1500, 2000), (2000, 2500), (2500, 3000)
+        ]
+
+    if xmin_candidates is None:
+        xmin_candidates = np.logspace(-2, 1, 30)  # 0.01 to 10 km²
+
+    if fixed_xmin_values is None:
+        fixed_xmin_values = [0.1, 0.5, 1.0, 2.0]
+
+    results = {}
+    n_bands = len(elevation_bands)
+
+    if show_progress:
+        print("\n" + "=" * 60)
+        print("X_MIN SENSITIVITY ANALYSIS BY ELEVATION")
+        print("=" * 60)
+        print(f"Analyzing {n_bands} elevation bands...")
+        print(f"Testing {len(xmin_candidates)} x_min values per band")
+
+    for i, (elev_min, elev_max) in enumerate(elevation_bands):
+        band_key = f"{elev_min}-{elev_max}m"
+
+        if show_progress:
+            print(f"\n[{i+1}/{n_bands}] Processing {band_key}...")
+
+        band_result = analyze_elevation_band_xmin(
+            lakes_df, elev_min, elev_max, xmin_candidates,
+            elev_col=elev_col, area_col=area_col,
+            ks_tolerance=ks_tolerance,
+            fixed_xmin_values=fixed_xmin_values
+        )
+
+        results[band_key] = band_result
+
+        if show_progress and band_result['status'] == 'success':
+            print(f"    n_total: {band_result['n_total']:,}")
+            print(f"    optimal x_min: {band_result['optimal_xmin']:.3f} km²")
+            print(f"    optimal alpha: {band_result['optimal_alpha']:.3f}")
+            print(f"    acceptable range: [{band_result['acceptable_range'][0]:.3f}, "
+                  f"{band_result['acceptable_range'][1]:.3f}] km²")
+            if pd.notna(band_result['alpha_stability']):
+                print(f"    alpha stability: ±{band_result['alpha_stability']/2:.3f}")
+
+    if show_progress:
+        print("\n" + "=" * 60)
+        print("X_MIN SENSITIVITY ANALYSIS COMPLETE")
+        print("=" * 60)
+
+    return results
+
+
+def compare_xmin_methods(xmin_results):
+    """
+    Compare alpha estimates using different x_min selection methods.
+
+    Methods compared:
+    1. Band-specific optimal x_min
+    2. Fixed x_min = 0.5 km² (smaller threshold)
+    3. Fixed x_min = 1.0 km² (round number)
+    4. Fixed x_min = 2.0 km² (larger threshold)
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+
+    Returns
+    -------
+    DataFrame
+        Comparison of alpha estimates across methods
+    """
+    comparison = []
+
+    for band_key, results in xmin_results.items():
+        if results['status'] != 'success':
+            continue
+
+        row = {
+            'elevation_band': band_key,
+            'n_total': results['n_total'],
+            'alpha_optimal': results['optimal_alpha'],
+            'xmin_optimal': results['optimal_xmin'],
+            'ks_optimal': results['optimal_ks'],
+        }
+
+        # Add fixed x_min results
+        for xmin_fixed, metrics in results['alpha_at_fixed_xmin'].items():
+            row[f'alpha_xmin_{xmin_fixed}'] = metrics['alpha']
+            row[f'n_tail_xmin_{xmin_fixed}'] = metrics['n_tail']
+
+        # Compute differences from optimal
+        for xmin_fixed in results['alpha_at_fixed_xmin'].keys():
+            if pd.notna(row.get(f'alpha_xmin_{xmin_fixed}')):
+                row[f'diff_xmin_{xmin_fixed}'] = (
+                    row[f'alpha_xmin_{xmin_fixed}'] - results['optimal_alpha']
+                )
+
+        comparison.append(row)
+
+    return pd.DataFrame(comparison)
+
+
+def test_alpha_robustness(xmin_results):
+    """
+    Test robustness of alpha estimates across elevation bands.
+
+    For each band, reports:
+    - Alpha at optimal x_min
+    - Alpha range within acceptable x_min range
+    - Whether the band shows "unusual" alpha that might be threshold-dependent
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+
+    Returns
+    -------
+    DataFrame
+        Robustness metrics for each elevation band
+    """
+    robustness = []
+
+    for band_key, results in xmin_results.items():
+        if results['status'] != 'success':
+            continue
+
+        row = {
+            'elevation_band': band_key,
+            'elev_mid': results['elev_mid'],
+            'alpha_optimal': results['optimal_alpha'],
+            'alpha_range_low': results['alpha_range_in_acceptable'][0],
+            'alpha_range_high': results['alpha_range_in_acceptable'][1],
+            'alpha_stability': results['alpha_stability'],
+            'xmin_optimal': results['optimal_xmin'],
+            'xmin_range_low': results['acceptable_range'][0],
+            'xmin_range_high': results['acceptable_range'][1],
+        }
+
+        # Classify robustness
+        if pd.notna(results['alpha_stability']):
+            if results['alpha_stability'] < 0.05:
+                row['robustness'] = 'high'
+            elif results['alpha_stability'] < 0.1:
+                row['robustness'] = 'moderate'
+            else:
+                row['robustness'] = 'low'
+        else:
+            row['robustness'] = 'unknown'
+
+        robustness.append(row)
+
+    return pd.DataFrame(robustness)
+
+
+def generate_xmin_summary_table(xmin_results, include_fixed=True):
+    """
+    Generate publication-ready summary table.
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    include_fixed : bool
+        If True, include alpha at fixed x_min values
+
+    Returns
+    -------
+    DataFrame
+        Summary table suitable for publication
+    """
+    rows = []
+
+    for band_key, results in xmin_results.items():
+        if results['status'] != 'success':
+            row = {
+                'Elevation Band': band_key,
+                'n_total': results['n_total'],
+                'Status': 'Insufficient data',
+            }
+            rows.append(row)
+            continue
+
+        row = {
+            'Elevation Band': band_key,
+            'n_total': results['n_total'],
+            'Optimal x_min (km²)': f"{results['optimal_xmin']:.3f}",
+            'x_min Range (km²)': f"[{results['acceptable_range'][0]:.2f}, {results['acceptable_range'][1]:.2f}]",
+            'α (optimal)': f"{results['optimal_alpha']:.3f}",
+            'KS Statistic': f"{results['optimal_ks']:.4f}",
+            'α Stability': f"±{results['alpha_stability']/2:.3f}" if pd.notna(results['alpha_stability']) else 'N/A',
+        }
+
+        if include_fixed:
+            for xmin_fixed, metrics in results['alpha_at_fixed_xmin'].items():
+                if pd.notna(metrics['alpha']):
+                    row[f'α (x_min={xmin_fixed})'] = f"{metrics['alpha']:.3f}"
+                else:
+                    row[f'α (x_min={xmin_fixed})'] = 'N/A'
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+if __name__ == "__main__":
+    print("Power Law Analysis module loaded.")
+    print("\nKey functions:")
+    print("  - full_powerlaw_analysis(areas)")
+    print("  - fit_powerlaw_by_domain(df, domain_col)")
+    print("  - fit_powerlaw_by_process_domain(df)")
+    print("  - xmin_sensitivity_analysis(areas)")
+    print("  - compare_to_cael_seekell(areas)")
+    print("  - xmin_sensitivity_by_elevation(df)    # Comprehensive elevation analysis")
+    print("  - compare_xmin_methods(results)")
+    print("  - test_alpha_robustness(results)")
+    print("  - generate_xmin_summary_table(results)")

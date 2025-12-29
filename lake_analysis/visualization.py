@@ -2476,6 +2476,604 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     return fig, axes
 
 
+# ============================================================================
+# X_MIN SENSITIVITY BY ELEVATION VISUALIZATIONS
+# ============================================================================
+
+def plot_xmin_sensitivity_by_elevation(xmin_results, figsize=(16, 12), save_path=None):
+    """
+    Multi-panel visualization of x_min sensitivity analysis by elevation band.
+
+    Creates a grid of panels, one per elevation band, showing:
+    - KS statistic vs x_min
+    - Optimal x_min marked
+    - α values at key thresholds
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation() containing:
+        - 'by_elevation': dict of DataFrames per elevation band
+        - 'elevation_bands': list of (min, max) tuples
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+
+    by_elevation = xmin_results.get('by_elevation', {})
+    n_bands = len(by_elevation)
+
+    if n_bands == 0:
+        print("Warning: No elevation band results to plot")
+        return None, None
+
+    # Determine grid layout
+    n_cols = min(3, n_bands)
+    n_rows = int(np.ceil(n_bands / n_cols))
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_bands == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = axes.reshape(1, -1)
+
+    # Color palette for consistent coloring
+    cmap = plt.cm.viridis
+    colors = [cmap(i / max(1, n_bands - 1)) for i in range(n_bands)]
+
+    for idx, (band_name, band_data) in enumerate(by_elevation.items()):
+        row, col = divmod(idx, n_cols)
+        ax = axes[row, col]
+
+        if 'sensitivity' not in band_data or band_data['sensitivity'] is None:
+            ax.text(0.5, 0.5, f'{band_name}\nNo data', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            ax.set_frame_on(False)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            continue
+
+        sens = band_data['sensitivity']
+        xmins = sens['xmin'].values
+        ks_vals = sens['ks_statistic'].values
+        alphas = sens['alpha'].values
+
+        # Plot KS curve
+        ax.plot(xmins, ks_vals, 'o-', linewidth=2, markersize=4,
+                color=colors[idx], label='KS statistic')
+
+        # Mark optimal x_min
+        optimal = band_data.get('optimal', {})
+        if optimal and 'xmin' in optimal:
+            opt_xmin = optimal['xmin']
+            opt_ks = optimal.get('ks', np.nanmin(ks_vals))
+            ax.scatter([opt_xmin], [opt_ks], s=150, c='red', marker='*', zorder=10,
+                      label=f'Optimal: {opt_xmin:.3f}')
+
+        # Mark tolerance range if available
+        if 'tolerance_range' in band_data:
+            tol = band_data['tolerance_range']
+            ax.axvspan(tol.get('xmin_lower', xmins[0]), tol.get('xmin_upper', xmins[-1]),
+                      alpha=0.2, color='green', label='Within tolerance')
+
+        # Reference lines
+        ax.axvline(0.46, color='orange', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax.axvline(0.024, color='purple', linestyle=':', linewidth=1.5, alpha=0.7)
+
+        # Labels and formatting
+        ax.set_xlabel('x_min (km²)', fontsize=10)
+        ax.set_ylabel('KS Statistic', fontsize=10)
+        ax.set_title(f'{band_name}', fontsize=12, fontweight='bold')
+        ax.set_xscale('log')
+        ax.grid(True, alpha=0.3)
+
+        # Add sample size annotation
+        n_total = band_data.get('n_total', 0)
+        n_tail = band_data.get('n_tail_at_optimal', optimal.get('n_tail', 0))
+        ax.annotate(f'n={n_total:,}\n(tail: {n_tail:,})',
+                   xy=(0.02, 0.98), xycoords='axes fraction',
+                   ha='left', va='top', fontsize=8,
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        if idx == 0:
+            ax.legend(loc='upper right', fontsize=8)
+
+    # Hide unused axes
+    for idx in range(n_bands, n_rows * n_cols):
+        row, col = divmod(idx, n_cols)
+        axes[row, col].set_visible(False)
+
+    fig.suptitle('KS Statistic vs x_min by Elevation Band', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_ks_curves_overlay(xmin_results, figsize=(12, 8), save_path=None):
+    """
+    Overlay KS curves for all elevation bands on a single plot.
+
+    Allows direct comparison of how optimal x_min varies by elevation.
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, ax
+    """
+    setup_plot_style()
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    by_elevation = xmin_results.get('by_elevation', {})
+    n_bands = len(by_elevation)
+
+    if n_bands == 0:
+        print("Warning: No elevation band results to plot")
+        return fig, ax
+
+    # Color palette
+    cmap = plt.cm.plasma
+    colors = [cmap(i / max(1, n_bands - 1)) for i in range(n_bands)]
+
+    # Track optimal points for summary
+    optimal_points = []
+
+    for idx, (band_name, band_data) in enumerate(by_elevation.items()):
+        if 'sensitivity' not in band_data or band_data['sensitivity'] is None:
+            continue
+
+        sens = band_data['sensitivity']
+        xmins = sens['xmin'].values
+        ks_vals = sens['ks_statistic'].values
+
+        ax.plot(xmins, ks_vals, '-', linewidth=2, color=colors[idx],
+                label=band_name, alpha=0.8)
+
+        # Mark optimal
+        optimal = band_data.get('optimal', {})
+        if optimal and 'xmin' in optimal:
+            opt_xmin = optimal['xmin']
+            opt_ks = optimal.get('ks', np.nanmin(ks_vals))
+            ax.scatter([opt_xmin], [opt_ks], s=100, c=[colors[idx]],
+                      marker='o', edgecolor='black', linewidth=1.5, zorder=10)
+            optimal_points.append((opt_xmin, opt_ks, band_name))
+
+    # Reference lines
+    ax.axvline(0.46, color='red', linestyle='--', linewidth=2, alpha=0.7,
+               label='Cael & Seekell (0.46 km²)')
+    ax.axvline(0.024, color='gray', linestyle=':', linewidth=2, alpha=0.7,
+               label='NHD threshold (0.024 km²)')
+
+    ax.set_xlabel('x_min (km²)', fontsize=12)
+    ax.set_ylabel('KS Statistic', fontsize=12)
+    ax.set_title('KS Curves by Elevation: Finding Optimal x_min', fontsize=14, fontweight='bold')
+    ax.set_xscale('log')
+    ax.legend(loc='upper right', fontsize=10, ncol=2)
+    ax.grid(True, alpha=0.3)
+
+    # Add interpretation note
+    ax.annotate('Lower KS = Better fit\nCircles mark optimal x_min for each band',
+               xy=(0.02, 0.02), xycoords='axes fraction',
+               ha='left', va='bottom', fontsize=10,
+               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_optimal_xmin_vs_elevation(xmin_results, figsize=(12, 8), save_path=None):
+    """
+    Plot how optimal x_min varies with elevation.
+
+    This reveals whether different geomorphic processes at different
+    elevations produce lakes with different size distributions.
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    by_elevation = xmin_results.get('by_elevation', {})
+
+    # Extract data for plotting
+    elevations = []
+    opt_xmins = []
+    opt_alphas = []
+    n_tails = []
+    ks_stats = []
+
+    for band_name, band_data in by_elevation.items():
+        # Parse elevation from band name (e.g., "0-500m" -> 250)
+        try:
+            parts = band_name.replace('m', '').split('-')
+            elev_mid = (float(parts[0]) + float(parts[1])) / 2
+        except:
+            continue
+
+        optimal = band_data.get('optimal', {})
+        if optimal and 'xmin' in optimal:
+            elevations.append(elev_mid)
+            opt_xmins.append(optimal['xmin'])
+            opt_alphas.append(optimal.get('alpha', np.nan))
+            n_tails.append(optimal.get('n_tail', np.nan))
+            ks_stats.append(optimal.get('ks', np.nan))
+
+    if len(elevations) == 0:
+        print("Warning: No optimal x_min data to plot")
+        return fig, axes
+
+    elevations = np.array(elevations)
+    opt_xmins = np.array(opt_xmins)
+    opt_alphas = np.array(opt_alphas)
+
+    # Panel A: Optimal x_min vs elevation
+    ax1 = axes[0, 0]
+    ax1.plot(elevations, opt_xmins, 'o-', linewidth=2, markersize=10, color='darkblue')
+    ax1.axhline(0.46, color='red', linestyle='--', linewidth=2, label='C&S threshold')
+    ax1.axhline(0.024, color='gray', linestyle=':', linewidth=2, label='NHD threshold')
+    ax1.set_xlabel('Elevation (m)', fontsize=12)
+    ax1.set_ylabel('Optimal x_min (km²)', fontsize=12)
+    ax1.set_title('A) Optimal x_min by Elevation', fontsize=14, fontweight='bold')
+    ax1.set_yscale('log')
+    ax1.legend(loc='best')
+    ax1.grid(True, alpha=0.3)
+
+    # Panel B: α at optimal x_min vs elevation
+    ax2 = axes[0, 1]
+    ax2.plot(elevations, opt_alphas, 's-', linewidth=2, markersize=10, color='darkgreen')
+    ax2.axhline(2.14, color='red', linestyle='--', linewidth=2, label='Cael & Seekell (2.14)')
+    ax2.axhline(2.05, color='orange', linestyle=':', linewidth=2, label='Percolation (2.05)')
+    ax2.set_xlabel('Elevation (m)', fontsize=12)
+    ax2.set_ylabel('α at Optimal x_min', fontsize=12)
+    ax2.set_title('B) Power Law Exponent by Elevation', fontsize=14, fontweight='bold')
+    ax2.legend(loc='best')
+    ax2.grid(True, alpha=0.3)
+
+    # Panel C: Sample size in tail vs elevation
+    ax3 = axes[1, 0]
+    ax3.bar(elevations, n_tails, width=200, alpha=0.7, color='steelblue', edgecolor='darkblue')
+    ax3.set_xlabel('Elevation (m)', fontsize=12)
+    ax3.set_ylabel('n (tail at optimal x_min)', fontsize=12)
+    ax3.set_title('C) Tail Sample Size by Elevation', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3, axis='y')
+
+    # Panel D: Summary scatter (x_min vs α colored by elevation)
+    ax4 = axes[1, 1]
+    scatter = ax4.scatter(opt_xmins, opt_alphas, c=elevations, s=150,
+                          cmap='viridis', edgecolor='black', linewidth=1)
+    cbar = plt.colorbar(scatter, ax=ax4, label='Elevation (m)')
+
+    # Reference lines
+    ax4.axhline(2.14, color='red', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax4.axhline(2.05, color='orange', linestyle=':', linewidth=1.5, alpha=0.7)
+    ax4.axvline(0.46, color='red', linestyle='--', linewidth=1.5, alpha=0.7)
+
+    ax4.set_xlabel('Optimal x_min (km²)', fontsize=12)
+    ax4.set_ylabel('α at Optimal x_min', fontsize=12)
+    ax4.set_title('D) x_min vs α (colored by elevation)', fontsize=14, fontweight='bold')
+    ax4.set_xscale('log')
+    ax4.grid(True, alpha=0.3)
+
+    fig.suptitle('Does Optimal x_min Vary with Elevation?', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_alpha_stability_by_elevation(xmin_results, figsize=(14, 8), save_path=None):
+    """
+    Visualize α stability across x_min choices for each elevation band.
+
+    Shows the range of α values within the "acceptable" x_min range
+    (within tolerance of optimal KS).
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, ax
+    """
+    setup_plot_style()
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    by_elevation = xmin_results.get('by_elevation', {})
+
+    bands = []
+    alphas_opt = []
+    alphas_low = []
+    alphas_high = []
+    alphas_fixed_046 = []
+    alphas_fixed_024 = []
+
+    for band_name, band_data in by_elevation.items():
+        bands.append(band_name)
+
+        optimal = band_data.get('optimal', {})
+        alphas_opt.append(optimal.get('alpha', np.nan))
+
+        # Get α range from tolerance range
+        tol = band_data.get('tolerance_range', {})
+        alphas_low.append(tol.get('alpha_min', optimal.get('alpha', np.nan) - 0.05))
+        alphas_high.append(tol.get('alpha_max', optimal.get('alpha', np.nan) + 0.05))
+
+        # Get α at fixed thresholds
+        fixed = band_data.get('fixed_xmin', {})
+        alphas_fixed_046.append(fixed.get(0.46, {}).get('alpha', np.nan))
+        alphas_fixed_024.append(fixed.get(0.024, {}).get('alpha', np.nan))
+
+    x = np.arange(len(bands))
+    width = 0.25
+
+    # Plot bars for different α estimates
+    ax.bar(x - width, alphas_opt, width, label='α at optimal x_min', color='steelblue', alpha=0.8)
+    ax.bar(x, alphas_fixed_046, width, label='α at x_min=0.46', color='coral', alpha=0.8)
+    ax.bar(x + width, alphas_fixed_024, width, label='α at x_min=0.024', color='lightgreen', alpha=0.8)
+
+    # Add error bars for tolerance range
+    errors_low = np.array(alphas_opt) - np.array(alphas_low)
+    errors_high = np.array(alphas_high) - np.array(alphas_opt)
+    ax.errorbar(x - width, alphas_opt, yerr=[errors_low, errors_high],
+                fmt='none', capsize=4, capthick=2, color='black', zorder=10)
+
+    # Reference lines
+    ax.axhline(2.14, color='red', linestyle='--', linewidth=2, label='Cael & Seekell (2.14)')
+    ax.axhline(2.05, color='orange', linestyle=':', linewidth=2, label='Percolation (2.05)')
+
+    ax.set_xlabel('Elevation Band', fontsize=12)
+    ax.set_ylabel('Power Law Exponent (α)', fontsize=12)
+    ax.set_title('α Stability: How Sensitive is α to x_min Choice?', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(bands, rotation=45, ha='right')
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # Add interpretation
+    ax.annotate('Error bars show α range within\nKS tolerance of optimal',
+               xy=(0.02, 0.98), xycoords='axes fraction',
+               ha='left', va='top', fontsize=10,
+               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_xmin_elevation_summary(xmin_results, figsize=(16, 12), save_path=None):
+    """
+    Comprehensive summary figure for x_min sensitivity by elevation analysis.
+
+    Creates a 6-panel figure answering key questions:
+    1. Does optimal x_min differ by elevation?
+    2. How sensitive is α to x_min choice?
+    3. Are conclusions robust to threshold choice?
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+
+    fig = plt.figure(figsize=figsize)
+
+    # Create grid layout
+    gs = fig.add_gridspec(3, 2, hspace=0.35, wspace=0.25)
+
+    by_elevation = xmin_results.get('by_elevation', {})
+    comparison = xmin_results.get('method_comparison', {})
+    robustness = xmin_results.get('robustness', {})
+
+    # Extract data
+    bands = list(by_elevation.keys())
+    n_bands = len(bands)
+
+    elevations = []
+    opt_xmins = []
+    opt_alphas = []
+    fixed_alphas_046 = []
+    n_totals = []
+
+    for band_name, band_data in by_elevation.items():
+        try:
+            parts = band_name.replace('m', '').split('-')
+            elev_mid = (float(parts[0]) + float(parts[1])) / 2
+        except:
+            elev_mid = 0
+
+        elevations.append(elev_mid)
+
+        optimal = band_data.get('optimal', {})
+        opt_xmins.append(optimal.get('xmin', np.nan))
+        opt_alphas.append(optimal.get('alpha', np.nan))
+        n_totals.append(band_data.get('n_total', 0))
+
+        fixed = band_data.get('fixed_xmin', {})
+        fixed_alphas_046.append(fixed.get(0.46, {}).get('alpha', np.nan))
+
+    elevations = np.array(elevations)
+    opt_xmins = np.array(opt_xmins)
+    opt_alphas = np.array(opt_alphas)
+
+    # Panel A: Optimal x_min vs elevation
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.plot(elevations, opt_xmins, 'o-', linewidth=2, markersize=10, color='darkblue')
+    ax1.axhline(0.46, color='red', linestyle='--', linewidth=2, alpha=0.7, label='C&S (0.46)')
+    ax1.axhline(0.024, color='gray', linestyle=':', linewidth=2, alpha=0.7, label='NHD (0.024)')
+    ax1.set_xlabel('Elevation (m)', fontsize=11)
+    ax1.set_ylabel('Optimal x_min (km²)', fontsize=11)
+    ax1.set_title('A) Does optimal x_min vary?', fontsize=12, fontweight='bold')
+    ax1.set_yscale('log')
+    ax1.legend(loc='best', fontsize=9)
+    ax1.grid(True, alpha=0.3)
+
+    # Panel B: α at optimal vs fixed x_min
+    ax2 = fig.add_subplot(gs[0, 1])
+    x = np.arange(n_bands)
+    width = 0.35
+    ax2.bar(x - width/2, opt_alphas, width, label='α at optimal x_min', color='steelblue')
+    ax2.bar(x + width/2, fixed_alphas_046, width, label='α at x_min=0.46', color='coral')
+    ax2.axhline(2.14, color='red', linestyle='--', linewidth=2)
+    ax2.axhline(2.05, color='orange', linestyle=':', linewidth=2)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(bands, rotation=45, ha='right', fontsize=8)
+    ax2.set_ylabel('α', fontsize=11)
+    ax2.set_title('B) How does α change with x_min method?', fontsize=12, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=9)
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    # Panel C: KS curves overlay
+    ax3 = fig.add_subplot(gs[1, 0])
+    cmap = plt.cm.viridis
+    colors = [cmap(i / max(1, n_bands - 1)) for i in range(n_bands)]
+
+    for idx, (band_name, band_data) in enumerate(by_elevation.items()):
+        if 'sensitivity' not in band_data or band_data['sensitivity'] is None:
+            continue
+        sens = band_data['sensitivity']
+        ax3.plot(sens['xmin'].values, sens['ks_statistic'].values,
+                '-', linewidth=2, color=colors[idx], label=band_name, alpha=0.8)
+
+    ax3.axvline(0.46, color='red', linestyle='--', linewidth=2, alpha=0.7)
+    ax3.set_xlabel('x_min (km²)', fontsize=11)
+    ax3.set_ylabel('KS Statistic', fontsize=11)
+    ax3.set_title('C) KS curves by elevation', fontsize=12, fontweight='bold')
+    ax3.set_xscale('log')
+    ax3.legend(loc='upper right', fontsize=8, ncol=2)
+    ax3.grid(True, alpha=0.3)
+
+    # Panel D: α vs x_min curves overlay
+    ax4 = fig.add_subplot(gs[1, 1])
+    for idx, (band_name, band_data) in enumerate(by_elevation.items()):
+        if 'sensitivity' not in band_data or band_data['sensitivity'] is None:
+            continue
+        sens = band_data['sensitivity']
+        ax4.plot(sens['xmin'].values, sens['alpha'].values,
+                '-', linewidth=2, color=colors[idx], label=band_name, alpha=0.8)
+
+    ax4.axhline(2.14, color='red', linestyle='--', linewidth=2, alpha=0.7)
+    ax4.axhline(2.05, color='orange', linestyle=':', linewidth=2, alpha=0.7)
+    ax4.axvline(0.46, color='red', linestyle='--', linewidth=1.5, alpha=0.5)
+    ax4.set_xlabel('x_min (km²)', fontsize=11)
+    ax4.set_ylabel('α', fontsize=11)
+    ax4.set_title('D) α sensitivity to x_min', fontsize=12, fontweight='bold')
+    ax4.set_xscale('log')
+    ax4.grid(True, alpha=0.3)
+
+    # Panel E: Sample size by elevation
+    ax5 = fig.add_subplot(gs[2, 0])
+    ax5.bar(elevations, n_totals, width=200, alpha=0.7, color='teal', edgecolor='darkcyan')
+    ax5.set_xlabel('Elevation (m)', fontsize=11)
+    ax5.set_ylabel('Total Lakes', fontsize=11)
+    ax5.set_title('E) Sample size by elevation', fontsize=12, fontweight='bold')
+    ax5.grid(True, alpha=0.3, axis='y')
+
+    # Add total count
+    total = sum(n_totals)
+    ax5.annotate(f'Total: {total:,}', xy=(0.95, 0.95), xycoords='axes fraction',
+                ha='right', va='top', fontsize=11, fontweight='bold',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    # Panel F: Robustness summary
+    ax6 = fig.add_subplot(gs[2, 1])
+    ax6.axis('off')
+
+    # Create summary text
+    summary_lines = [
+        "Key Findings:",
+        "",
+    ]
+
+    if robustness:
+        robust = robustness.get('robust_bands', [])
+        sensitive = robustness.get('sensitive_bands', [])
+        summary_lines.extend([
+            f"• Robust bands: {len(robust)}",
+            f"• Sensitive bands: {len(sensitive)}",
+        ])
+
+    if comparison:
+        agreement = comparison.get('methods_agree', 'Unknown')
+        summary_lines.append(f"• Methods agree: {agreement}")
+
+    # Add interpretation
+    mean_opt_alpha = np.nanmean(opt_alphas)
+    mean_fixed_alpha = np.nanmean(fixed_alphas_046)
+    diff = abs(mean_opt_alpha - mean_fixed_alpha)
+
+    summary_lines.extend([
+        "",
+        f"Mean α (optimal x_min): {mean_opt_alpha:.3f}",
+        f"Mean α (fixed 0.46): {mean_fixed_alpha:.3f}",
+        f"Difference: {diff:.3f}",
+        "",
+        "Conclusion:" if diff < 0.1 else "Warning:",
+        "Results are ROBUST to x_min" if diff < 0.1 else "Results SENSITIVE to x_min"
+    ])
+
+    summary_text = '\n'.join(summary_lines)
+    ax6.text(0.1, 0.95, summary_text, transform=ax6.transAxes,
+            fontsize=11, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9, edgecolor='orange'))
+    ax6.set_title('F) Robustness Summary', fontsize=12, fontweight='bold')
+
+    fig.suptitle('x_min Sensitivity Analysis by Elevation', fontsize=16, fontweight='bold')
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, (ax1, ax2, ax3, ax4, ax5, ax6)
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
@@ -2489,8 +3087,14 @@ if __name__ == "__main__":
     print("  - plot_2d_heatmap()")
     print("  - plot_powerlaw_rank_size()")
     print("  - plot_domain_comparison()")
-    print("  - plot_three_panel_summary()            # NEW")
+    print("  - plot_three_panel_summary()")
     print("  - plot_alpha_elevation_phase_diagram()")
     print("  - plot_slope_relief_heatmap()")
     print("  - plot_xmin_sensitivity()")
     print("  - plot_significance_tests()")
+    print("  # NEW x_min by elevation visualizations:")
+    print("  - plot_xmin_sensitivity_by_elevation()")
+    print("  - plot_ks_curves_overlay()")
+    print("  - plot_optimal_xmin_vs_elevation()")
+    print("  - plot_alpha_stability_by_elevation()")
+    print("  - plot_xmin_elevation_summary()")
