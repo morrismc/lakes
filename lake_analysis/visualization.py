@@ -537,20 +537,22 @@ def plot_powerlaw_ccdf(lake_areas, xmin=None, alpha=None,
     ax.scatter(sorted_areas, ccdf, s=5, alpha=0.5, c='steelblue', label='Data')
 
     if xmin is not None and alpha is not None:
-        # Theoretical CCDF for power law: P(X >= x) = (x/xmin)^(1-alpha)
+        # Theoretical CCDF for power law: P(X >= x) = p_tail * (x/xmin)^(1-alpha)
+        # where p_tail is the fraction of data >= xmin
+        p_tail = np.sum(areas >= xmin) / len(areas)
         x_line = np.logspace(np.log10(xmin), np.log10(max(areas)), 100)
-        y_line = (x_line / xmin) ** (1 - alpha)
+        y_line = p_tail * (x_line / xmin) ** (1 - alpha)
 
         ax.plot(x_line, y_line, 'r--', linewidth=2.5,
                 label=f'Power Law Fit (α={alpha:.2f})')
         ax.axvline(xmin, color='green', linestyle=':', linewidth=2,
                    label=f'x_min = {xmin:.3f} km²')
 
-    # Add reference line for Cael & Seekell global
-    x_ref = np.logspace(-1, 2, 50)
-    y_ref = (x_ref / 0.46) ** (1 - 2.14)
-    ax.plot(x_ref, y_ref, 'k--', linewidth=1.5, alpha=0.5,
-            label='Global ref. (τ=2.14)')
+        # Add reference line for Cael & Seekell global (scaled to same p_tail for comparison)
+        x_ref = np.logspace(np.log10(xmin), np.log10(max(areas)), 50)
+        y_ref = p_tail * (x_ref / xmin) ** (1 - 2.14)
+        ax.plot(x_ref, y_ref, 'k--', linewidth=1.5, alpha=0.5,
+                label='Global ref. (τ=2.14)')
 
     ax.set_xscale('log')
     ax.set_yscale('log')
@@ -633,16 +635,23 @@ def plot_domain_comparison(lake_df, domain_col='domain',
     ax.set_title('A) Lake Count by Domain', fontsize=14)
     ax.tick_params(axis='x', rotation=45)
 
-    # Panel B: Area distribution by domain
+    # Panel B: Area distribution by domain - LINE PLOT for clarity
     ax = axes[0, 1]
+    bins = np.linspace(-3, 3, 50)  # Log10 area bins
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+
     for domain in domains:
         subset = lake_df[lake_df[domain_col] == domain][area_col]
-        ax.hist(np.log10(subset), bins=30, alpha=0.5,
+        log_areas = np.log10(subset[subset > 0])
+        counts, _ = np.histogram(log_areas, bins=bins)
+        ax.plot(bin_centers, counts, '-', linewidth=2,
                 label=domain, color=color_map[domain])
+
     ax.set_xlabel('log₁₀(Area km²)', fontsize=12)
     ax.set_ylabel('Frequency', fontsize=12)
     ax.set_title('B) Lake Size Distribution', fontsize=14)
-    ax.legend(loc='upper right')
+    ax.legend(loc='upper right', fontsize=9)
+    ax.set_yscale('log')  # Log scale helps see all domains
 
     # Panel C: Elevation distribution by domain
     ax = axes[1, 0]
@@ -902,9 +911,11 @@ def plot_powerlaw_by_elevation_multipanel(lake_df, elev_bands, area_col=None,
         if len(tail) > 10:
             alpha = 1 + len(tail) / np.sum(np.log(tail / xmin))
 
-            # Plot fit line
+            # Plot fit line - MUST scale by fraction of data in tail
+            p_tail = len(tail) / len(areas)  # Fraction of data >= xmin
             x_line = np.logspace(np.log10(xmin), np.log10(sorted_areas.max()), 50)
-            y_line = (x_line / xmin) ** (1 - alpha)
+            # CCDF for power law: P(X >= x) = p_tail * (x/xmin)^(1-alpha) for x >= xmin
+            y_line = p_tail * (x_line / xmin) ** (1 - alpha)
             ax.plot(x_line, y_line, 'r--', linewidth=2, label=f'α = {alpha:.2f}')
             ax.legend(loc='lower left', fontsize=10)
 
@@ -1791,14 +1802,15 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
     """
     setup_plot_style()
 
-    # Create figure with gridspec for marginals - improved spacing
+    # Create figure with gridspec for marginals
     fig = plt.figure(figsize=figsize)
-    gs = fig.add_gridspec(3, 3, width_ratios=[0.2, 1, 0.06], height_ratios=[0.25, 1, 0.06],
-                          hspace=0.08, wspace=0.08)
+    # Layout: [left margin | main | colorbar] x [top margin | main | bottom]
+    gs = fig.add_gridspec(2, 3, width_ratios=[0.15, 1, 0.05], height_ratios=[0.2, 1],
+                          hspace=0.05, wspace=0.05)
 
     ax_main = fig.add_subplot(gs[1, 1])
     ax_top = fig.add_subplot(gs[0, 1])
-    ax_right = fig.add_subplot(gs[1, 0])
+    ax_left = fig.add_subplot(gs[1, 0])
     ax_cbar = fig.add_subplot(gs[1, 2])
 
     # Find the column names
@@ -1815,12 +1827,16 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
         if relief_cols:
             relief_mid = relief_cols[0]
 
-    # Pivot data
+    # Pivot data - slope on x (columns), relief on y (index)
     pivot_df = result_df.pivot_table(
         index=relief_mid,
         columns=slope_mid,
         values='normalized_density'
     )
+
+    # Sort indices to ensure correct ordering
+    pivot_df = pivot_df.sort_index(ascending=True)
+    pivot_df = pivot_df[sorted(pivot_df.columns)]
 
     # Log transform
     data = pivot_df.values.copy()
@@ -1828,20 +1844,28 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
         data_log = np.log10(data)
     data_log[~np.isfinite(data_log)] = np.nan
 
-    # Main heatmap
-    extent = [pivot_df.columns.min(), pivot_df.columns.max(),
-              pivot_df.index.min(), pivot_df.index.max()]
-    im = ax_main.imshow(data_log, aspect='auto', cmap='magma', origin='lower',
-                        extent=extent, interpolation='nearest')
+    # Main heatmap using pcolormesh for accurate coordinate mapping
+    slope_edges = np.array(sorted(pivot_df.columns))
+    relief_edges = np.array(sorted(pivot_df.index))
 
-    # Find and mark "sweet spot" (maximum density)
-    max_idx = np.unravel_index(np.nanargmax(data), data.shape)
-    sweet_slope = pivot_df.columns[max_idx[1]]
-    sweet_relief = pivot_df.index[max_idx[0]]
-    ax_main.scatter([sweet_slope], [sweet_relief], s=200, c='lime', marker='*',
-                   edgecolors='white', linewidths=2, zorder=5,
-                   label=f'Peak: ({sweet_slope:.0f}°, {sweet_relief:.0f}m)')
-    ax_main.legend(loc='upper right', fontsize=10)
+    # Create mesh grid
+    im = ax_main.pcolormesh(slope_edges, relief_edges, data_log,
+                            cmap='magma', shading='nearest')
+
+    # Find and mark "sweet spot" (maximum density) - use linear data for finding max
+    valid_mask = np.isfinite(data)
+    if valid_mask.any():
+        max_idx = np.unravel_index(np.nanargmax(data), data.shape)
+        sweet_relief = pivot_df.index[max_idx[0]]
+        sweet_slope = pivot_df.columns[max_idx[1]]
+        ax_main.scatter([sweet_slope], [sweet_relief], s=200, c='lime', marker='*',
+                       edgecolors='white', linewidths=2, zorder=5,
+                       label=f'Peak: ({sweet_slope:.0f}°, {sweet_relief:.0f}m)')
+        ax_main.legend(loc='upper right', fontsize=10)
+
+    # Set axis limits based on data
+    ax_main.set_xlim(slope_edges.min(), slope_edges.max())
+    ax_main.set_ylim(relief_edges.min(), relief_edges.max())
 
     # Colorbar
     cbar = plt.colorbar(im, cax=ax_cbar)
@@ -1851,8 +1875,9 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
     marginal_top = result_df.groupby(slope_mid).agg({
         'n_lakes': 'sum',
         'area_km2': 'sum'
-    }).reset_index()
+    }).reset_index().sort_values(slope_mid)
     marginal_top['density'] = (marginal_top['n_lakes'] / marginal_top['area_km2']) * 1000
+    marginal_top['density'] = marginal_top['density'].fillna(0)
 
     # Apply smoothing for cleaner marginal PDFs
     try:
@@ -1867,51 +1892,58 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
                 '-', color='steelblue', linewidth=2)
     ax_top.set_ylabel('Density\n(lakes/1000 km²)', fontsize=9)
     ax_top.tick_params(labelbottom=False)
-    ax_top.set_xlim(extent[0], extent[1])
+    ax_top.set_xlim(ax_main.get_xlim())
     ax_top.set_ylim(bottom=0)
     ax_top.spines['top'].set_visible(False)
     ax_top.spines['right'].set_visible(False)
     ax_top.set_title('Lake Density in Slope × Relief Space', fontsize=14, fontweight='bold', pad=10)
 
-    # Right marginal: density vs relief
-    marginal_right = result_df.groupby(relief_mid).agg({
+    # Left marginal: density vs relief (horizontal bar going left)
+    marginal_left = result_df.groupby(relief_mid).agg({
         'n_lakes': 'sum',
         'area_km2': 'sum'
-    }).reset_index()
-    marginal_right['density'] = (marginal_right['n_lakes'] / marginal_right['area_km2']) * 1000
+    }).reset_index().sort_values(relief_mid)
+    marginal_left['density'] = (marginal_left['n_lakes'] / marginal_left['area_km2']) * 1000
+    marginal_left['density'] = marginal_left['density'].fillna(0)
 
     # Apply smoothing
     try:
         from scipy.ndimage import gaussian_filter1d
-        density_smooth_right = gaussian_filter1d(marginal_right['density'].values, sigma=1.5)
+        density_smooth_left = gaussian_filter1d(marginal_left['density'].values, sigma=1.5)
     except ImportError:
-        density_smooth_right = marginal_right['density'].values
+        density_smooth_left = marginal_left['density'].values
 
-    ax_right.fill_betweenx(marginal_right[relief_mid], density_smooth_right,
-                           alpha=0.4, color='darkred')
-    ax_right.plot(density_smooth_right, marginal_right[relief_mid],
-                  '-', color='darkred', linewidth=2)
-    ax_right.set_xlabel('Density\n(lakes/1000 km²)', fontsize=9)
-    ax_right.tick_params(labelleft=False)
-    ax_right.invert_xaxis()
-    ax_right.set_ylim(extent[2], extent[3])
-    ax_right.set_xlim(left=0)
-    ax_right.spines['top'].set_visible(False)
-    ax_right.spines['left'].set_visible(False)
+    ax_left.fill_betweenx(marginal_left[relief_mid], density_smooth_left,
+                          alpha=0.4, color='darkred')
+    ax_left.plot(density_smooth_left, marginal_left[relief_mid],
+                 '-', color='darkred', linewidth=2)
+    ax_left.set_xlabel('Density\n(lakes/1000 km²)', fontsize=9)
+    ax_left.tick_params(labelleft=False)
+    ax_left.invert_xaxis()  # Density increases to the left
+    ax_left.set_ylim(ax_main.get_ylim())
+    ax_left.set_xlim(left=0)
+    ax_left.spines['top'].set_visible(False)
+    ax_left.spines['right'].set_visible(False)
 
     # Labels
     ax_main.set_xlabel(f'Slope ({slope_units})', fontsize=12)
     ax_main.set_ylabel(f'Relief ({relief_units})', fontsize=12)
 
-    # Add annotations for process domains
-    ax_main.annotate('Low gradient\nfloodplains', xy=(3, 100), fontsize=9,
-                    ha='center', color='white', fontweight='bold',
+    # Add annotations for process domains - position based on actual data range
+    slope_range = slope_edges.max() - slope_edges.min()
+    relief_range = relief_edges.max() - relief_edges.min()
+
+    ax_main.annotate('Low gradient\nfloodplains',
+                    xy=(slope_edges.min() + slope_range*0.1, relief_edges.min() + relief_range*0.1),
+                    fontsize=9, ha='center', color='white', fontweight='bold',
                     bbox=dict(boxstyle='round', facecolor='green', alpha=0.6))
-    ax_main.annotate('Moderate terrain\n(optimal)', xy=(10, 400), fontsize=9,
-                    ha='center', color='white', fontweight='bold',
+    ax_main.annotate('Moderate terrain\n(optimal)',
+                    xy=(slope_edges.min() + slope_range*0.25, relief_edges.min() + relief_range*0.35),
+                    fontsize=9, ha='center', color='white', fontweight='bold',
                     bbox=dict(boxstyle='round', facecolor='blue', alpha=0.6))
-    ax_main.annotate('Steep terrain\n(few lakes)', xy=(25, 1200), fontsize=9,
-                    ha='center', color='white', fontweight='bold',
+    ax_main.annotate('Steep terrain\n(few lakes)',
+                    xy=(slope_edges.min() + slope_range*0.6, relief_edges.min() + relief_range*0.7),
+                    fontsize=9, ha='center', color='white', fontweight='bold',
                     bbox=dict(boxstyle='round', facecolor='red', alpha=0.6))
 
     if save_path:
@@ -2327,9 +2359,11 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
                               figsize=(16, 5), save_path=None):
     """
     Create 3-panel summary figure showing:
-    A) Lake distribution on the landscape (geographic map or elevation histogram)
-    B) Hypsometry of the lower 48 (landscape area by elevation)
+    A) Lake count by elevation (distribution on landscape)
+    B) Hypsometry of the lower 48 (landscape/terrain area by elevation)
     C) Normalized lake density by elevation
+
+    All panels share the same x-axis (Elevation) for easy comparison.
 
     Parameters
     ----------
@@ -2355,24 +2389,26 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     if elev_col is None:
         elev_col = COLS['elevation']
 
-    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    # Create figure with shared x-axis
+    fig, axes = plt.subplots(1, 3, figsize=figsize, sharex=True)
 
-    # Panel A: Lake count by elevation (distribution on landscape)
-    ax1 = axes[0]
+    # Calculate midpoints and common x-axis limits
     midpoints = (elev_density['bin_lower'] + elev_density['bin_upper']) / 2
     bar_width = (elev_density['bin_upper'] - elev_density['bin_lower']).iloc[0] * 0.8
+    x_min, x_max = elev_density['bin_lower'].min(), elev_density['bin_upper'].max()
 
+    # Panel A: Lake count by elevation
+    ax1 = axes[0]
     ax1.bar(midpoints, elev_density['n_lakes'],
-            width=bar_width, alpha=0.7, color='steelblue', edgecolor='navy')
-    ax1.set_xlabel('Elevation (m)', fontsize=12)
+            width=bar_width, alpha=0.7, color='steelblue', edgecolor='darkblue', linewidth=0.5)
     ax1.set_ylabel('Number of Lakes', fontsize=12)
-    ax1.set_title('A) Lake Distribution by Elevation', fontsize=14, fontweight='bold')
+    ax1.set_title('A) Lake Distribution', fontsize=14, fontweight='bold')
 
     # Add total count annotation
     total = elev_density['n_lakes'].sum()
-    ax1.annotate(f'Total: {total:,} lakes', xy=(0.95, 0.95), xycoords='axes fraction',
-                 ha='right', va='top', fontsize=10,
-                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    ax1.annotate(f'n = {total:,}', xy=(0.95, 0.95), xycoords='axes fraction',
+                 ha='right', va='top', fontsize=11, fontweight='bold',
+                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
 
     # Panel B: Hypsometry (landscape area by elevation)
     ax2 = axes[1]
@@ -2383,44 +2419,53 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     else:
         hyps_area = np.ones(len(midpoints))  # Fallback
 
-    ax2.fill_between(midpoints, hyps_area, alpha=0.5, color='sienna')
-    ax2.plot(midpoints, hyps_area, '-', color='sienna', linewidth=2)
-    ax2.set_xlabel('Elevation (m)', fontsize=12)
+    ax2.bar(midpoints, hyps_area, width=bar_width, alpha=0.7, color='sienna',
+            edgecolor='saddlebrown', linewidth=0.5)
     ax2.set_ylabel('Landscape Area (×10³ km²)', fontsize=12)
     ax2.set_title('B) Hypsometry (Lower 48)', fontsize=14, fontweight='bold')
 
     # Add total area annotation
     total_area = sum(hyps_area) * 1000  # Convert back to km²
-    ax2.annotate(f'Total: {total_area/1e6:.2f}M km²', xy=(0.95, 0.95), xycoords='axes fraction',
-                 ha='right', va='top', fontsize=10,
-                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    ax2.annotate(f'{total_area/1e6:.2f}M km²', xy=(0.95, 0.95), xycoords='axes fraction',
+                 ha='right', va='top', fontsize=11, fontweight='bold',
+                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
 
     # Panel C: Normalized lake density
     ax3 = axes[2]
-    ax3.plot(midpoints, elev_density['normalized_density'],
-             'o-', linewidth=2.5, markersize=6, color='darkred')
-    ax3.fill_between(midpoints, elev_density['normalized_density'],
-                     alpha=0.2, color='darkred')
-    ax3.set_xlabel('Elevation (m)', fontsize=12)
+    ax3.bar(midpoints, elev_density['normalized_density'], width=bar_width,
+            alpha=0.7, color='darkred', edgecolor='maroon', linewidth=0.5)
     ax3.set_ylabel('Lakes per 1,000 km²', fontsize=12)
     ax3.set_title('C) Normalized Lake Density', fontsize=14, fontweight='bold')
 
     # Find and annotate peaks
-    peaks = find_local_peaks(elev_density['normalized_density'].values, prominence=0.1)
+    peaks = find_local_peaks(elev_density['normalized_density'].values, prominence=0.5)
     if len(peaks) > 0:
         for peak_idx in peaks[:2]:  # Top 2 peaks
-            peak_x = midpoints.iloc[peak_idx]
-            peak_y = elev_density['normalized_density'].iloc[peak_idx]
-            ax3.annotate(f'{peak_y:.1f}',
-                        xy=(peak_x, peak_y),
-                        xytext=(0, 10), textcoords='offset points',
-                        ha='center', fontsize=9, fontweight='bold')
+            if peak_idx < len(midpoints):
+                peak_x = midpoints.iloc[peak_idx]
+                peak_y = elev_density['normalized_density'].iloc[peak_idx]
+                ax3.annotate(f'{peak_y:.1f}',
+                            xy=(peak_x, peak_y),
+                            xytext=(0, 8), textcoords='offset points',
+                            ha='center', fontsize=9, fontweight='bold',
+                            color='darkred')
 
-    # Add conceptual annotation
-    ax3.annotate('Normalization reveals\ntrue lake concentration',
-                xy=(0.95, 0.95), xycoords='axes fraction',
-                ha='right', va='top', fontsize=9, style='italic',
-                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    # Add explanation
+    ax3.annotate('A ÷ B = C', xy=(0.95, 0.95), xycoords='axes fraction',
+                ha='right', va='top', fontsize=11, fontweight='bold',
+                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9, edgecolor='orange'))
+
+    # Set common x-axis label and limits
+    for ax in axes:
+        ax.set_xlim(x_min, x_max)
+        ax.grid(True, alpha=0.3, axis='y')
+
+    # Only bottom axis needs elevation label
+    axes[1].set_xlabel('Elevation (m)', fontsize=12)
+
+    # Add main title
+    fig.suptitle('Lake Density Normalization: Correcting for Landscape Availability',
+                 fontsize=16, fontweight='bold', y=1.02)
 
     plt.tight_layout()
 

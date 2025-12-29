@@ -45,6 +45,7 @@ try:
     )
     from .data_loading import (
         load_lake_data_from_gdb, load_lake_data_from_parquet,
+        load_conus_lake_data, create_conus_lake_dataset,
         calculate_landscape_area_by_bin, check_raster_alignment,
         summarize_lake_data, quick_data_check, get_raster_info
     )
@@ -81,6 +82,7 @@ except ImportError:
     )
     from data_loading import (
         load_lake_data_from_gdb, load_lake_data_from_parquet,
+        load_conus_lake_data, create_conus_lake_dataset,
         calculate_landscape_area_by_bin, check_raster_alignment,
         summarize_lake_data, quick_data_check, get_raster_info
     )
@@ -115,14 +117,16 @@ except ImportError:
 # DATA LOADING
 # ============================================================================
 
-def load_data(source='gdb'):
+def load_data(source='conus'):
     """
     Load lake data from specified source.
 
     Parameters
     ----------
     source : str
-        'gdb' for geodatabase, 'parquet' for parquet file
+        'conus' for CONUS-only parquet (recommended, fastest)
+        'gdb' for full geodatabase
+        'parquet' for full parquet file
 
     Returns
     -------
@@ -134,7 +138,9 @@ def load_data(source='gdb'):
 
     try:
         print(f"\n[STEP 1] Loading from {source}...")
-        if source == 'gdb':
+        if source == 'conus':
+            lakes = load_conus_lake_data(create_if_missing=True)
+        elif source == 'gdb':
             lakes = load_lake_data_from_gdb()
         else:
             lakes = load_lake_data_from_parquet()
