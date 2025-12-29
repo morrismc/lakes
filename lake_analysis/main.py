@@ -26,7 +26,10 @@ Project Hypotheses:
 import warnings
 import os
 import sys
+import time
 from pathlib import Path
+from contextlib import contextmanager
+from datetime import timedelta
 
 # Add module directory to path if running directly
 if __name__ == "__main__":
@@ -35,6 +38,182 @@ if __name__ == "__main__":
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+
+
+# ============================================================================
+# RUNTIME TRACKING AND PROGRESS UTILITIES
+# ============================================================================
+
+class AnalysisTimer:
+    """
+    Track runtime for analysis steps with formatted output.
+
+    Usage:
+        timer = AnalysisTimer()
+        timer.start("Loading data")
+        # ... do work ...
+        timer.stop()
+        timer.summary()
+    """
+
+    def __init__(self):
+        self.steps = []
+        self.current_step = None
+        self.start_time = None
+        self.overall_start = None
+
+    def start(self, step_name):
+        """Start timing a new step."""
+        if self.overall_start is None:
+            self.overall_start = time.time()
+
+        self.current_step = step_name
+        self.start_time = time.time()
+
+    def stop(self):
+        """Stop timing current step and record."""
+        if self.start_time is None:
+            return
+
+        elapsed = time.time() - self.start_time
+        self.steps.append({
+            'step': self.current_step,
+            'duration': elapsed,
+        })
+        self.start_time = None
+        self.current_step = None
+        return elapsed
+
+    def elapsed_str(self, seconds):
+        """Format seconds as human-readable string."""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            return f"{seconds/60:.1f}min"
+        else:
+            return str(timedelta(seconds=int(seconds)))
+
+    def summary(self):
+        """Print summary of all step timings."""
+        if not self.steps:
+            print("\nNo timing data recorded.")
+            return
+
+        total = sum(s['duration'] for s in self.steps)
+        overall = time.time() - self.overall_start if self.overall_start else total
+
+        print("\n" + "=" * 60)
+        print("RUNTIME SUMMARY")
+        print("=" * 60)
+        print(f"{'Step':<40} {'Duration':>15}")
+        print("-" * 60)
+
+        for step in self.steps:
+            duration_str = self.elapsed_str(step['duration'])
+            pct = (step['duration'] / total) * 100 if total > 0 else 0
+            print(f"{step['step']:<40} {duration_str:>10} ({pct:>4.1f}%)")
+
+        print("-" * 60)
+        print(f"{'Total (all steps)':<40} {self.elapsed_str(total):>15}")
+        print(f"{'Overall runtime':<40} {self.elapsed_str(overall):>15}")
+        print("=" * 60)
+
+        return {
+            'steps': self.steps.copy(),
+            'total': total,
+            'overall': overall,
+        }
+
+
+@contextmanager
+def timed_step(timer, step_name):
+    """Context manager for timing analysis steps."""
+    timer.start(step_name)
+    try:
+        yield
+    finally:
+        elapsed = timer.stop()
+        if elapsed:
+            print(f"  [DONE] {step_name} completed in {timer.elapsed_str(elapsed)}")
+
+
+class ProgressBar:
+    """
+    Simple text-based progress bar for long-running operations.
+
+    Usage:
+        progress = ProgressBar(total=100, desc="Processing")
+        for i in range(100):
+            # do work
+            progress.update()
+        progress.close()
+    """
+
+    def __init__(self, total, desc="Progress", width=40):
+        self.total = total
+        self.desc = desc
+        self.width = width
+        self.current = 0
+        self.start_time = time.time()
+
+    def update(self, n=1):
+        """Update progress by n steps."""
+        self.current += n
+        self._display()
+
+    def _display(self):
+        """Display current progress."""
+        if self.total == 0:
+            return
+
+        pct = self.current / self.total
+        filled = int(self.width * pct)
+        bar = "█" * filled + "░" * (self.width - filled)
+
+        elapsed = time.time() - self.start_time
+        if self.current > 0:
+            eta = (elapsed / self.current) * (self.total - self.current)
+            eta_str = f"ETA: {eta:.0f}s" if eta < 60 else f"ETA: {eta/60:.1f}min"
+        else:
+            eta_str = "ETA: --"
+
+        print(f"\r  {self.desc}: |{bar}| {self.current}/{self.total} ({pct*100:.0f}%) {eta_str}",
+              end="", flush=True)
+
+    def close(self):
+        """Finish and print newline."""
+        elapsed = time.time() - self.start_time
+        print(f"\r  {self.desc}: Completed {self.total} items in {elapsed:.1f}s" + " " * 20)
+
+
+def print_step_header(step_num, total_steps, title):
+    """Print a formatted step header with progress."""
+    bar_width = 30
+    pct = step_num / total_steps
+    filled = int(bar_width * pct)
+    bar = "█" * filled + "░" * (bar_width - filled)
+
+    print(f"\n[{bar}] Step {step_num}/{total_steps}")
+    print("-" * 60)
+    print(f"  {title}")
+    print("-" * 60)
+
+
+# Global timer instance for easy access
+_global_timer = None
+
+def get_timer():
+    """Get or create the global timer instance."""
+    global _global_timer
+    if _global_timer is None:
+        _global_timer = AnalysisTimer()
+    return _global_timer
+
+def reset_timer():
+    """Reset the global timer."""
+    global _global_timer
+    _global_timer = AnalysisTimer()
+    return _global_timer
 
 # Import project modules - handle both package and direct execution
 try:
@@ -67,12 +246,19 @@ try:
         plot_alpha_elevation_phase_diagram, plot_alpha_by_process_domain,
         plot_slope_relief_heatmap, plot_xmin_sensitivity,
         plot_significance_tests, plot_powerlaw_gof_summary,
-        plot_three_panel_summary
+        plot_three_panel_summary,
+        # x_min sensitivity by elevation visualizations
+        plot_xmin_sensitivity_by_elevation, plot_ks_curves_overlay,
+        plot_optimal_xmin_vs_elevation, plot_alpha_stability_by_elevation,
+        plot_xmin_elevation_summary
     )
     from .powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
         fit_powerlaw_by_domain, fit_powerlaw_by_process_domain,
-        xmin_sensitivity_analysis, compare_to_cael_seekell
+        xmin_sensitivity_analysis, compare_to_cael_seekell,
+        # x_min sensitivity by elevation analysis
+        xmin_sensitivity_by_elevation, compare_xmin_methods,
+        test_alpha_robustness, generate_xmin_summary_table
     )
 except ImportError:
     from config import (
@@ -104,12 +290,19 @@ except ImportError:
         plot_alpha_elevation_phase_diagram, plot_alpha_by_process_domain,
         plot_slope_relief_heatmap, plot_xmin_sensitivity,
         plot_significance_tests, plot_powerlaw_gof_summary,
-        plot_three_panel_summary
+        plot_three_panel_summary,
+        # x_min sensitivity by elevation visualizations
+        plot_xmin_sensitivity_by_elevation, plot_ks_curves_overlay,
+        plot_optimal_xmin_vs_elevation, plot_alpha_stability_by_elevation,
+        plot_xmin_elevation_summary
     )
     from powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
         fit_powerlaw_by_domain, fit_powerlaw_by_process_domain,
-        xmin_sensitivity_analysis, compare_to_cael_seekell
+        xmin_sensitivity_analysis, compare_to_cael_seekell,
+        # x_min sensitivity by elevation analysis
+        xmin_sensitivity_by_elevation, compare_xmin_methods,
+        test_alpha_robustness, generate_xmin_summary_table
     )
 
 
@@ -1041,24 +1234,34 @@ def analyze_domains(lakes, save_figures=True):
 # FULL ANALYSIS PIPELINE
 # ============================================================================
 
-def run_full_analysis(data_source='gdb'):
+def run_full_analysis(data_source='conus', include_xmin_by_elevation=True):
     """
     Run complete analysis pipeline for all hypotheses.
 
     All plots are generated by default - no separate function call needed.
+    Includes runtime tracking and progress indicators.
 
     Parameters
     ----------
     data_source : str
-        'gdb' or 'parquet'
+        'conus' (recommended), 'gdb', or 'parquet'
+    include_xmin_by_elevation : bool
+        If True, run the comprehensive x_min sensitivity by elevation analysis
 
     Returns
     -------
     dict
         All results
     """
+    # Initialize timer
+    timer = reset_timer()
+    total_steps = 13 if include_xmin_by_elevation else 12
+
     print("\n" + "=" * 70)
     print("LAKE DISTRIBUTION ANALYSIS - FULL PIPELINE")
+    print("=" * 70)
+    print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Total steps: {total_steps}")
     print("=" * 70)
 
     # Setup
@@ -1067,86 +1270,291 @@ def run_full_analysis(data_source='gdb'):
     print_config_summary()
 
     results = {}
+    step = 0
 
-    # Load data
-    lakes = load_data(source=data_source)
-    results['lakes'] = lakes
+    # Step 1: Load data
+    step += 1
+    print_step_header(step, total_steps, "Loading Lake Data")
+    with timed_step(timer, "Load data"):
+        lakes = load_data(source=data_source)
+        results['lakes'] = lakes
 
-    # H1: Elevation bimodality
-    results['H1_elevation'] = analyze_elevation(lakes)
+    # Step 2: H1 - Elevation bimodality
+    step += 1
+    print_step_header(step, total_steps, "H1: Elevation Bimodality Analysis")
+    with timed_step(timer, "H1: Elevation analysis"):
+        results['H1_elevation'] = analyze_elevation(lakes)
 
-    # H2: Slope threshold
-    results['H2_slope'] = analyze_slope(lakes)
+    # Step 3: H2 - Slope threshold
+    step += 1
+    print_step_header(step, total_steps, "H2: Slope Threshold Analysis")
+    with timed_step(timer, "H2: Slope analysis"):
+        results['H2_slope'] = analyze_slope(lakes)
 
-    # H3: Relief controls
-    results['H3_relief'] = analyze_relief(lakes)
+    # Step 4: H3 - Relief controls
+    step += 1
+    print_step_header(step, total_steps, "H3: Relief Controls Analysis")
+    with timed_step(timer, "H3: Relief analysis"):
+        results['H3_relief'] = analyze_relief(lakes)
 
-    # H4: 2D process domains - Elevation × Slope (now included by default)
-    print("\n[INFO] Running 2D elevation × slope analysis...")
-    results['H4_2d'] = analyze_2d_domains(lakes)
+    # Step 5: H4 - 2D process domains
+    step += 1
+    print_step_header(step, total_steps, "H4: 2D Elevation x Slope Domains")
+    with timed_step(timer, "H4: 2D domain analysis"):
+        results['H4_2d'] = analyze_2d_domains(lakes)
 
-    # H5: Power law
-    results['H5_powerlaw'] = analyze_powerlaw(lakes)
+    # Step 6: H5 - Power law
+    step += 1
+    print_step_header(step, total_steps, "H5: Power Law Analysis")
+    with timed_step(timer, "H5: Power law analysis"):
+        results['H5_powerlaw'] = analyze_powerlaw(lakes)
 
-    # H6: Slope-Relief domains
-    results['H6_slope_relief'] = analyze_slope_relief(lakes)
+    # Step 7: H6 - Slope-Relief domains
+    step += 1
+    print_step_header(step, total_steps, "H6: Slope-Relief Domains")
+    with timed_step(timer, "H6: Slope-relief analysis"):
+        results['H6_slope_relief'] = analyze_slope_relief(lakes)
 
-    # Relief × Elevation 2D analysis
-    print("\n[INFO] Running relief × elevation analysis...")
-    results['relief_elevation'] = analyze_relief_elevation(lakes)
+    # Step 8: Relief × Elevation 2D analysis
+    step += 1
+    print_step_header(step, total_steps, "Relief x Elevation 2D Analysis")
+    with timed_step(timer, "Relief-elevation analysis"):
+        results['relief_elevation'] = analyze_relief_elevation(lakes)
 
-    # Power law sensitivity analysis
-    results['powerlaw_sensitivity'] = analyze_powerlaw_sensitivity(lakes)
+    # Step 9: Power law sensitivity analysis
+    step += 1
+    print_step_header(step, total_steps, "Power Law Sensitivity Analysis")
+    with timed_step(timer, "Power law sensitivity"):
+        results['powerlaw_sensitivity'] = analyze_powerlaw_sensitivity(lakes)
 
-    # Domain classification
-    results['domains'] = analyze_domains(lakes)
+    # Step 10: x_min sensitivity by elevation (if enabled)
+    if include_xmin_by_elevation:
+        step += 1
+        print_step_header(step, total_steps, "x_min Sensitivity by Elevation")
+        with timed_step(timer, "x_min by elevation analysis"):
+            results['xmin_by_elevation'] = analyze_xmin_by_elevation(lakes)
 
-    # Create geographic density map
-    print("\n[INFO] Creating geographic density map...")
-    try:
-        fig, ax = plot_geographic_density_map(
-            lakes,
-            save_path=f"{OUTPUT_DIR}/geographic_density_map.png"
-        )
-        if fig:
-            plt.close(fig)
-            print("  Geographic density map saved!")
-    except Exception as e:
-        print(f"  Warning: Could not create geographic map: {e}")
+    # Step 11: Domain classification
+    step += 1
+    print_step_header(step, total_steps, "Domain Classification")
+    with timed_step(timer, "Domain classification"):
+        results['domains'] = analyze_domains(lakes)
 
-    # Create 3-panel summary figure
-    print("\n[INFO] Creating 3-panel summary figure...")
-    if results.get('H1_elevation'):
+    # Step 12: Generate additional figures
+    step += 1
+    print_step_header(step, total_steps, "Generating Summary Figures")
+    with timed_step(timer, "Summary figures"):
+        # Geographic density map
+        print("  Creating geographic density map...")
         try:
-            fig, axes = plot_three_panel_summary(
+            fig, ax = plot_geographic_density_map(
                 lakes,
+                save_path=f"{OUTPUT_DIR}/geographic_density_map.png"
+            )
+            if fig:
+                plt.close(fig)
+                print("    Geographic density map saved!")
+        except Exception as e:
+            print(f"    Warning: Could not create geographic map: {e}")
+
+        # 3-panel summary figure
+        print("  Creating 3-panel summary figure...")
+        if results.get('H1_elevation'):
+            try:
+                fig, axes = plot_three_panel_summary(
+                    lakes,
+                    results['H1_elevation']['density'],
+                    results['H1_elevation']['landscape_area'],
+                    save_path=f"{OUTPUT_DIR}/three_panel_summary.png"
+                )
+                plt.close(fig)
+                print("    3-panel summary saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create 3-panel summary: {e}")
+
+        # Original summary figure
+        print("  Creating overall summary figure...")
+        if results.get('H1_elevation') and results.get('H2_slope'):
+            fig = create_summary_figure(
                 results['H1_elevation']['density'],
-                results['H1_elevation']['landscape_area'],
-                save_path=f"{OUTPUT_DIR}/three_panel_summary.png"
+                results['H2_slope']['density'] if results.get('H2_slope') else None,
+                results['H3_relief']['density'] if results.get('H3_relief') else None,
+                save_path=f"{OUTPUT_DIR}/summary_figure.png"
             )
             plt.close(fig)
-            print("  3-panel summary saved!")
-        except Exception as e:
-            print(f"  Warning: Could not create 3-panel summary: {e}")
+            print("    Summary figure saved!")
 
-    # Create original summary figure
-    print("\n[INFO] Creating summary figure...")
-    if results.get('H1_elevation') and results.get('H2_slope'):
-        fig = create_summary_figure(
-            results['H1_elevation']['density'],
-            results['H2_slope']['density'] if results.get('H2_slope') else None,
-            results['H3_relief']['density'] if results.get('H3_relief') else None,
-            save_path=f"{OUTPUT_DIR}/summary_figure.png"
-        )
-        plt.close(fig)
-        print("  Summary figure saved!")
-
+    # Final output
     print("\n" + "=" * 70)
     print("ANALYSIS COMPLETE")
     print(f"Results saved to: {OUTPUT_DIR}")
+    print(f"Finished at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
+    # Print runtime summary
+    timing_results = timer.summary()
+    results['timing'] = timing_results
+
     return results
+
+
+# ============================================================================
+# X_MIN SENSITIVITY BY ELEVATION ANALYSIS
+# ============================================================================
+
+def analyze_xmin_by_elevation(lakes, save_figures=True):
+    """
+    Run comprehensive x_min sensitivity analysis by elevation band.
+
+    This analysis addresses key questions:
+    1. Does optimal x_min differ by elevation?
+    2. How sensitive is alpha to x_min choice in each band?
+    3. Are alpha differences robust or threshold-dependent?
+
+    Parameters
+    ----------
+    lakes : DataFrame
+    save_figures : bool
+
+    Returns
+    -------
+    dict
+        Comprehensive results including:
+        - by_elevation: per-band sensitivity results
+        - method_comparison: comparison of optimal vs fixed x_min
+        - robustness: assessment of alpha stability
+        - summary_table: formatted summary
+    """
+    print("\n" + "=" * 60)
+    print("X_MIN SENSITIVITY ANALYSIS BY ELEVATION")
+    print("=" * 60)
+
+    try:
+        area_col = COLS['area']
+        elev_col = COLS['elevation']
+
+        # Define elevation bands (500m intervals)
+        elevation_bands = [(0, 500), (500, 1000), (1000, 1500),
+                          (1500, 2000), (2000, 2500), (2500, 3000)]
+
+        # Define x_min candidates (logarithmically spaced)
+        xmin_candidates = np.logspace(np.log10(0.01), np.log10(5.0), 30)
+
+        # Fixed x_min values for comparison
+        fixed_xmin_values = [0.024, 0.1, 0.46, 1.0]
+
+        print("\n[STEP 1/5] Running sensitivity analysis for each elevation band...")
+        print(f"  Elevation bands: {len(elevation_bands)}")
+        print(f"  x_min candidates: {len(xmin_candidates)}")
+
+        # Run the comprehensive analysis
+        xmin_results = xmin_sensitivity_by_elevation(
+            lakes,
+            elevation_bands=elevation_bands,
+            xmin_candidates=xmin_candidates,
+            elev_col=elev_col,
+            area_col=area_col,
+            ks_tolerance=0.01,
+            fixed_xmin_values=fixed_xmin_values,
+            show_progress=True
+        )
+
+        print("\n[STEP 2/5] Comparing x_min methods...")
+        method_comparison = compare_xmin_methods(xmin_results)
+        xmin_results['method_comparison'] = method_comparison
+
+        print("\n[STEP 3/5] Testing alpha robustness...")
+        robustness = test_alpha_robustness(xmin_results)
+        xmin_results['robustness'] = robustness
+
+        print("\n[STEP 4/5] Generating summary table...")
+        summary_table = generate_xmin_summary_table(xmin_results)
+        xmin_results['summary_table'] = summary_table
+
+        # Print summary
+        if summary_table is not None and not summary_table.empty:
+            print("\n  x_min Sensitivity Summary:")
+            print(summary_table.to_string(index=False))
+
+        # Save tabular results
+        ensure_output_dir()
+        if summary_table is not None:
+            summary_table.to_csv(f"{OUTPUT_DIR}/xmin_by_elevation_summary.csv", index=False)
+            print(f"\n  Summary saved to: {OUTPUT_DIR}/xmin_by_elevation_summary.csv")
+
+        # Generate visualizations
+        if save_figures:
+            print("\n[STEP 5/5] Generating visualizations...")
+
+            # Multi-panel KS curves
+            try:
+                fig, axes = plot_xmin_sensitivity_by_elevation(
+                    xmin_results,
+                    save_path=f"{OUTPUT_DIR}/xmin_sensitivity_by_elevation.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    x_min sensitivity by elevation saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create sensitivity panels: {e}")
+
+            # KS curves overlay
+            try:
+                fig, ax = plot_ks_curves_overlay(
+                    xmin_results,
+                    save_path=f"{OUTPUT_DIR}/ks_curves_overlay.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    KS curves overlay saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create KS overlay: {e}")
+
+            # Optimal x_min vs elevation
+            try:
+                fig, axes = plot_optimal_xmin_vs_elevation(
+                    xmin_results,
+                    save_path=f"{OUTPUT_DIR}/optimal_xmin_vs_elevation.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Optimal x_min vs elevation saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create optimal xmin plot: {e}")
+
+            # Alpha stability
+            try:
+                fig, ax = plot_alpha_stability_by_elevation(
+                    xmin_results,
+                    save_path=f"{OUTPUT_DIR}/alpha_stability_by_elevation.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Alpha stability plot saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create stability plot: {e}")
+
+            # Comprehensive summary
+            try:
+                fig, axes = plot_xmin_elevation_summary(
+                    xmin_results,
+                    save_path=f"{OUTPUT_DIR}/xmin_elevation_summary.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Comprehensive summary figure saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create summary figure: {e}")
+
+        print("\n[SUCCESS] x_min sensitivity by elevation analysis complete!")
+
+        return xmin_results
+
+    except Exception as e:
+        print(f"\n[ERROR] x_min sensitivity analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 # ============================================================================
@@ -1231,7 +1639,9 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    >>> quick_data_check()
 
 2. Load lake data:
-   >>> lakes = load_data(source='gdb')  # or 'parquet'
+   >>> lakes = load_data()           # Default: CONUS-only (recommended)
+   >>> lakes = load_data('gdb')      # Full geodatabase
+   >>> lakes = load_data('parquet')  # Full parquet file
 
 3. Run individual analyses:
    >>> results = analyze_elevation(lakes)
@@ -1240,26 +1650,39 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    >>> results = analyze_powerlaw(lakes)    # Enhanced with multiple plots
    >>> results = analyze_2d_domains(lakes)  # With marginal PDFs
 
-4. NEW analyses:
-   >>> results = analyze_slope_relief(lakes)        # Slope × relief heatmap
+4. Advanced analyses:
+   >>> results = analyze_slope_relief(lakes)         # Slope x relief heatmap
    >>> results = analyze_powerlaw_sensitivity(lakes) # x_min sensitivity
+   >>> results = analyze_xmin_by_elevation(lakes)    # NEW: x_min by elevation
 
-5. Run full pipeline:
+5. Run full pipeline (with progress tracking):
    >>> all_results = run_full_analysis()
+
+   Options:
+   >>> run_full_analysis(data_source='conus')              # Default
+   >>> run_full_analysis(include_xmin_by_elevation=False)  # Skip detailed x_min
 
 6. Classify domains:
    >>> lakes_classified = analyze_domains(lakes)
 
 Key Outputs:
-- α-Elevation phase diagram (compares to percolation theory τ=2.05)
+- Runtime summary with step-by-step timing
+- alpha-Elevation phase diagram (compares to percolation theory tau=2.05)
 - Slope-Relief heatmap with "sweet spot" identification
-- x_min sensitivity analysis (how threshold affects α)
+- x_min sensitivity analysis (how threshold affects alpha)
+- x_min sensitivity BY ELEVATION (does optimal x_min vary?)
 - Comparison to Cael & Seekell (2016) global result
 
+Runtime Tracking:
+- Progress bars show step completion
+- Step headers show overall progress
+- Final summary shows per-step timing and total runtime
+
 Tips:
-- MIN_LAKE_AREA = 0.024 km² (NHD consistent threshold)
+- MIN_LAKE_AREA = 0.024 km^2 (NHD consistent threshold)
 - Update paths in config.py before running
 - Results are saved to OUTPUT_DIR specified in config.py
+- Use 'conus' data source for fastest loading
 """)
 
 
@@ -1273,19 +1696,29 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Lake Distribution Analysis')
     parser.add_argument('--check', action='store_true',
                        help='Check data availability only')
-    parser.add_argument('--source', choices=['gdb', 'parquet'], default='gdb',
-                       help='Data source (default: gdb)')
-    parser.add_argument('--hypothesis', type=int, choices=[1, 2, 3, 4, 5],
+    parser.add_argument('--source', choices=['conus', 'gdb', 'parquet'], default='conus',
+                       help='Data source (default: conus)')
+    parser.add_argument('--hypothesis', type=int, choices=[1, 2, 3, 4, 5, 6],
                        help='Run specific hypothesis test only')
     parser.add_argument('--full', action='store_true',
                        help='Run full analysis pipeline')
+    parser.add_argument('--no-xmin-elevation', action='store_true',
+                       help='Skip x_min by elevation analysis in full pipeline')
+    parser.add_argument('--xmin-elevation', action='store_true',
+                       help='Run only x_min by elevation analysis')
 
     args = parser.parse_args()
 
     if args.check:
         quick_data_check()
     elif args.full:
-        run_full_analysis(data_source=args.source)
+        run_full_analysis(
+            data_source=args.source,
+            include_xmin_by_elevation=not args.no_xmin_elevation
+        )
+    elif args.xmin_elevation:
+        lakes = load_data(source=args.source)
+        analyze_xmin_by_elevation(lakes)
     elif args.hypothesis:
         lakes = load_data(source=args.source)
         if args.hypothesis == 1:
@@ -1298,5 +1731,7 @@ if __name__ == "__main__":
             analyze_2d_domains(lakes)
         elif args.hypothesis == 5:
             analyze_powerlaw(lakes)
+        elif args.hypothesis == 6:
+            analyze_slope_relief(lakes)
     else:
         quick_start()
