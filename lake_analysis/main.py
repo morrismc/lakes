@@ -250,7 +250,7 @@ try:
         # x_min sensitivity by elevation visualizations
         plot_xmin_sensitivity_by_elevation, plot_ks_curves_overlay,
         plot_optimal_xmin_vs_elevation, plot_alpha_stability_by_elevation,
-        plot_xmin_elevation_summary
+        plot_xmin_elevation_summary, plot_alpha_vs_xmin_by_elevation
     )
     from .powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
@@ -294,7 +294,7 @@ except ImportError:
         # x_min sensitivity by elevation visualizations
         plot_xmin_sensitivity_by_elevation, plot_ks_curves_overlay,
         plot_optimal_xmin_vs_elevation, plot_alpha_stability_by_elevation,
-        plot_xmin_elevation_summary
+        plot_xmin_elevation_summary, plot_alpha_vs_xmin_by_elevation
     )
     from powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
@@ -1545,6 +1545,18 @@ def analyze_xmin_by_elevation(lakes, save_figures=True):
                     print("    Comprehensive summary figure saved!")
             except Exception as e:
                 print(f"    Warning: Could not create summary figure: {e}")
+
+            # Alpha vs x_min by elevation (multi-panel alpha sensitivity)
+            try:
+                fig, axes = plot_alpha_vs_xmin_by_elevation(
+                    xmin_results,
+                    save_path=f"{OUTPUT_DIR}/alpha_vs_xmin_by_elevation.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Alpha vs x_min by elevation saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create alpha sensitivity plot: {e}")
 
         print("\n[SUCCESS] x_min sensitivity by elevation analysis complete!")
 

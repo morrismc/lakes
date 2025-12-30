@@ -1166,7 +1166,7 @@ def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
     This is a key visualization showing:
     - Central heatmap: 2D normalized lake density
     - Top margin: 1D density vs var2 (integrated over var1)
-    - Right margin: 1D density vs var1 (integrated over var2)
+    - Left margin: 1D density vs var1 (integrated over var2)
 
     Parameters
     ----------
@@ -1183,18 +1183,18 @@ def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
     """
     setup_plot_style()
 
-    # Create figure with gridspec for layout - add padding to prevent overlap
+    # Create figure with gridspec for layout
+    # Layout: [left marginal | main | colorbar] x [top marginal | main]
     fig = plt.figure(figsize=figsize)
-    # Adjusted ratios with proper spacing to prevent axis label overlap
-    gs = fig.add_gridspec(3, 3, width_ratios=[0.2, 1, 0.06], height_ratios=[0.25, 1, 0.06],
-                          hspace=0.08, wspace=0.08)
+    gs = fig.add_gridspec(2, 3, width_ratios=[0.25, 1, 0.06], height_ratios=[0.2, 1],
+                          hspace=0.08, wspace=0.12)
 
     # Main heatmap
     ax_main = fig.add_subplot(gs[1, 1])
 
-    # Marginal axes - NOT shared to allow proper spacing
+    # Marginal axes
     ax_top = fig.add_subplot(gs[0, 1])
-    ax_right = fig.add_subplot(gs[1, 0])
+    ax_left = fig.add_subplot(gs[1, 0])
     ax_cbar = fig.add_subplot(gs[1, 2])
 
     # Pivot data for heatmap
@@ -1231,8 +1231,9 @@ def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
     marginal_top = result_df.groupby(var2_mid).agg({
         'n_lakes': 'sum',
         'area_km2': 'sum'
-    }).reset_index()
+    }).reset_index().sort_values(var2_mid)
     marginal_top['density'] = (marginal_top['n_lakes'] / marginal_top['area_km2']) * 1000
+    marginal_top['density'] = marginal_top['density'].fillna(0)
 
     # Apply smoothing for cleaner marginal PDFs
     try:
@@ -1247,10 +1248,8 @@ def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
                 '-', color='steelblue', linewidth=2)
     ax_top.set_ylabel('Density\n(lakes/1000 km²)', fontsize=9)
     ax_top.tick_params(labelbottom=False)
-    # Set proper x limits to match main plot
     ax_top.set_xlim(extent[0], extent[1])
     ax_top.set_ylim(bottom=0)
-    # Remove spines for cleaner look
     ax_top.spines['top'].set_visible(False)
     ax_top.spines['right'].set_visible(False)
 
@@ -1260,33 +1259,33 @@ def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
     plot_title = title if title else f'Lake Density in {clean_var1} × {clean_var2} Space'
     ax_top.set_title(plot_title, fontsize=14, fontweight='bold', pad=10)
 
-    # Right marginal: density vs var1 (sum over var2)
-    marginal_right = result_df.groupby(var1_mid).agg({
+    # Left marginal: density vs var1 (sum over var2)
+    marginal_left = result_df.groupby(var1_mid).agg({
         'n_lakes': 'sum',
         'area_km2': 'sum'
-    }).reset_index()
-    marginal_right['density'] = (marginal_right['n_lakes'] / marginal_right['area_km2']) * 1000
+    }).reset_index().sort_values(var1_mid)
+    marginal_left['density'] = (marginal_left['n_lakes'] / marginal_left['area_km2']) * 1000
+    marginal_left['density'] = marginal_left['density'].fillna(0)
 
     # Apply smoothing
     try:
         from scipy.ndimage import gaussian_filter1d
-        density_smoothed_r = gaussian_filter1d(marginal_right['density'].values, sigma=1.5)
+        density_smoothed_left = gaussian_filter1d(marginal_left['density'].values, sigma=1.5)
     except ImportError:
-        density_smoothed_r = marginal_right['density'].values
+        density_smoothed_left = marginal_left['density'].values
 
-    ax_right.fill_betweenx(marginal_right[var1_mid], density_smoothed_r,
-                           alpha=0.4, color='darkred')
-    ax_right.plot(density_smoothed_r, marginal_right[var1_mid],
-                  '-', color='darkred', linewidth=2)
-    ax_right.set_xlabel('Density\n(lakes/1000 km²)', fontsize=9)
-    ax_right.tick_params(labelleft=False)
-    ax_right.invert_xaxis()  # So it reads left-to-right from the heatmap
-    # Set proper y limits to match main plot
-    ax_right.set_ylim(extent[2], extent[3])
-    ax_right.set_xlim(left=0)
-    # Remove spines for cleaner look
-    ax_right.spines['top'].set_visible(False)
-    ax_right.spines['left'].set_visible(False)
+    # Plot left marginal - density on x-axis (inverted), var1 on y-axis
+    ax_left.fill_betweenx(marginal_left[var1_mid], density_smoothed_left,
+                          alpha=0.4, color='darkred')
+    ax_left.plot(density_smoothed_left, marginal_left[var1_mid],
+                 '-', color='darkred', linewidth=2)
+    ax_left.set_xlabel('Density\n(lakes/1000 km²)', fontsize=9)
+    ax_left.tick_params(labelleft=False)
+    ax_left.invert_xaxis()  # Density increases to the left
+    ax_left.set_ylim(extent[2], extent[3])
+    ax_left.set_xlim(left=0)
+    ax_left.spines['top'].set_visible(False)
+    ax_left.spines['right'].set_visible(False)
 
     # Labels - clean up variable names
     var1_label = f'{clean_var1} ({var1_units})' if var1_units else clean_var1
@@ -1294,13 +1293,11 @@ def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
     ax_main.set_xlabel(var2_label, fontsize=12)
     ax_main.set_ylabel(var1_label, fontsize=12)
 
-    plt.tight_layout()
-
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Figure saved to: {save_path}")
 
-    return fig, (ax_main, ax_top, ax_right)
+    return fig, (ax_main, ax_top, ax_left)
 
 
 def plot_2d_contour_with_domains(result_df, var1_name, var2_name,
@@ -1798,15 +1795,15 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
 
     Returns
     -------
-    fig, (ax_main, ax_top, ax_right)
+    fig, (ax_main, ax_top, ax_left)
     """
     setup_plot_style()
 
     # Create figure with gridspec for marginals
+    # Increased left margin width ratio for more space and better label visibility
     fig = plt.figure(figsize=figsize)
-    # Layout: [left margin | main | colorbar] x [top margin | main | bottom]
-    gs = fig.add_gridspec(2, 3, width_ratios=[0.15, 1, 0.05], height_ratios=[0.2, 1],
-                          hspace=0.05, wspace=0.05)
+    gs = fig.add_gridspec(2, 3, width_ratios=[0.25, 1, 0.05], height_ratios=[0.2, 1],
+                          hspace=0.08, wspace=0.12)
 
     ax_main = fig.add_subplot(gs[1, 1])
     ax_top = fig.add_subplot(gs[0, 1])
@@ -1913,6 +1910,7 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
     except ImportError:
         density_smooth_left = marginal_left['density'].values
 
+    # Plot relief marginal - density on x-axis (inverted), relief on y-axis
     ax_left.fill_betweenx(marginal_left[relief_mid], density_smooth_left,
                           alpha=0.4, color='darkred')
     ax_left.plot(density_smooth_left, marginal_left[relief_mid],
@@ -1950,7 +1948,7 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Figure saved to: {save_path}")
 
-    return fig, (ax_main, ax_top, ax_right)
+    return fig, (ax_main, ax_top, ax_left)
 
 
 # ============================================================================
@@ -2356,14 +2354,15 @@ def plot_powerlaw_gof_summary(gof_results, figsize=(12, 8), save_path=None):
 
 def plot_three_panel_summary(lake_df, elev_density, landscape_area,
                               area_col=None, elev_col=None,
-                              figsize=(16, 5), save_path=None):
+                              figsize=(8, 14), save_path=None):
     """
     Create 3-panel summary figure showing:
     A) Lake count by elevation (distribution on landscape)
     B) Hypsometry of the lower 48 (landscape/terrain area by elevation)
     C) Normalized lake density by elevation
 
-    All panels share the same x-axis (Elevation) for easy comparison.
+    All panels are arranged vertically and share the same y-axis (Elevation)
+    for easy comparison.
 
     Parameters
     ----------
@@ -2389,19 +2388,19 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     if elev_col is None:
         elev_col = COLS['elevation']
 
-    # Create figure with shared x-axis
-    fig, axes = plt.subplots(1, 3, figsize=figsize, sharex=True)
+    # Create figure with shared y-axis (elevation) - vertical layout
+    fig, axes = plt.subplots(3, 1, figsize=figsize, sharey=True)
 
-    # Calculate midpoints and common x-axis limits
+    # Calculate midpoints and common y-axis limits
     midpoints = (elev_density['bin_lower'] + elev_density['bin_upper']) / 2
-    bar_width = (elev_density['bin_upper'] - elev_density['bin_lower']).iloc[0] * 0.8
-    x_min, x_max = elev_density['bin_lower'].min(), elev_density['bin_upper'].max()
+    bar_height = (elev_density['bin_upper'] - elev_density['bin_lower']).iloc[0] * 0.8
+    y_min, y_max = elev_density['bin_lower'].min(), elev_density['bin_upper'].max()
 
     # Panel A: Lake count by elevation
     ax1 = axes[0]
-    ax1.bar(midpoints, elev_density['n_lakes'],
-            width=bar_width, alpha=0.7, color='steelblue', edgecolor='darkblue', linewidth=0.5)
-    ax1.set_ylabel('Number of Lakes', fontsize=12)
+    ax1.barh(midpoints, elev_density['n_lakes'],
+             height=bar_height, alpha=0.7, color='steelblue', edgecolor='darkblue', linewidth=0.5)
+    ax1.set_xlabel('Number of Lakes', fontsize=12)
     ax1.set_title('A) Lake Distribution', fontsize=14, fontweight='bold')
 
     # Add total count annotation
@@ -2419,9 +2418,9 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     else:
         hyps_area = np.ones(len(midpoints))  # Fallback
 
-    ax2.bar(midpoints, hyps_area, width=bar_width, alpha=0.7, color='sienna',
-            edgecolor='saddlebrown', linewidth=0.5)
-    ax2.set_ylabel('Landscape Area (×10³ km²)', fontsize=12)
+    ax2.barh(midpoints, hyps_area, height=bar_height, alpha=0.7, color='sienna',
+             edgecolor='saddlebrown', linewidth=0.5)
+    ax2.set_xlabel('Landscape Area (×10³ km²)', fontsize=12)
     ax2.set_title('B) Hypsometry (Lower 48)', fontsize=14, fontweight='bold')
 
     # Add total area annotation
@@ -2432,9 +2431,9 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
 
     # Panel C: Normalized lake density
     ax3 = axes[2]
-    ax3.bar(midpoints, elev_density['normalized_density'], width=bar_width,
-            alpha=0.7, color='darkred', edgecolor='maroon', linewidth=0.5)
-    ax3.set_ylabel('Lakes per 1,000 km²', fontsize=12)
+    ax3.barh(midpoints, elev_density['normalized_density'], height=bar_height,
+             alpha=0.7, color='darkred', edgecolor='maroon', linewidth=0.5)
+    ax3.set_xlabel('Lakes per 1,000 km²', fontsize=12)
     ax3.set_title('C) Normalized Lake Density', fontsize=14, fontweight='bold')
 
     # Find and annotate peaks
@@ -2442,12 +2441,12 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     if len(peaks) > 0:
         for peak_idx in peaks[:2]:  # Top 2 peaks
             if peak_idx < len(midpoints):
-                peak_x = midpoints.iloc[peak_idx]
-                peak_y = elev_density['normalized_density'].iloc[peak_idx]
-                ax3.annotate(f'{peak_y:.1f}',
+                peak_y = midpoints.iloc[peak_idx]
+                peak_x = elev_density['normalized_density'].iloc[peak_idx]
+                ax3.annotate(f'{peak_x:.1f}',
                             xy=(peak_x, peak_y),
-                            xytext=(0, 8), textcoords='offset points',
-                            ha='center', fontsize=9, fontweight='bold',
+                            xytext=(8, 0), textcoords='offset points',
+                            ha='left', fontsize=9, fontweight='bold',
                             color='darkred')
 
     # Add explanation
@@ -2455,17 +2454,17 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
                 ha='right', va='top', fontsize=11, fontweight='bold',
                 bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9, edgecolor='orange'))
 
-    # Set common x-axis label and limits
+    # Set common y-axis label and limits
     for ax in axes:
-        ax.set_xlim(x_min, x_max)
-        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(y_min, y_max)
+        ax.grid(True, alpha=0.3, axis='x')
 
-    # Only bottom axis needs elevation label
-    axes[1].set_xlabel('Elevation (m)', fontsize=12)
+    # Add y-axis label to middle panel
+    axes[1].set_ylabel('Elevation (m)', fontsize=12)
 
     # Add main title
-    fig.suptitle('Lake Density Normalization: Correcting for Landscape Availability',
-                 fontsize=16, fontweight='bold', y=1.02)
+    fig.suptitle('Lake Density Normalization:\nCorrecting for Landscape Availability',
+                 fontsize=16, fontweight='bold', y=0.98)
 
     plt.tight_layout()
 
@@ -2881,6 +2880,127 @@ def plot_alpha_stability_by_elevation(xmin_results, figsize=(14, 8), save_path=N
     return fig, ax
 
 
+def plot_alpha_vs_xmin_by_elevation(xmin_results, figsize=(16, 12), save_path=None):
+    """
+    Multi-panel visualization of alpha sensitivity to x_min by elevation band.
+
+    Creates a grid of panels, one per elevation band, showing:
+    - Alpha vs x_min curve with confidence intervals
+    - Reference lines for percolation theory and Cael & Seekell
+    - Optimal x_min marked
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation() containing:
+        - 'by_elevation': dict of DataFrames per elevation band
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+
+    by_elevation = xmin_results.get('by_elevation', {})
+    n_bands = len(by_elevation)
+
+    if n_bands == 0:
+        print("Warning: No elevation band results to plot")
+        return None, None
+
+    # Determine grid layout
+    n_cols = min(3, n_bands)
+    n_rows = int(np.ceil(n_bands / n_cols))
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_bands == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = axes.reshape(1, -1)
+
+    # Color palette
+    cmap = plt.cm.viridis
+    colors = [cmap(i / max(1, n_bands - 1)) for i in range(n_bands)]
+
+    for idx, (band_name, band_data) in enumerate(by_elevation.items()):
+        row, col = divmod(idx, n_cols)
+        ax = axes[row, col]
+
+        if 'sensitivity' not in band_data or band_data['sensitivity'] is None:
+            ax.text(0.5, 0.5, f'{band_name}\nNo data', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            ax.set_frame_on(False)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            continue
+
+        sens = band_data['sensitivity']
+        xmins = sens['xmin'].values
+        alphas = sens['alpha'].values
+
+        # Plot alpha vs x_min curve
+        ax.plot(xmins, alphas, 'o-', linewidth=2, markersize=4,
+                color=colors[idx], label='α vs x_min')
+
+        # Add confidence interval if available
+        if 'alpha_se' in sens.columns:
+            se = sens['alpha_se'].values
+            valid_se = np.isfinite(se) & np.isfinite(alphas)
+            if valid_se.any():
+                ax.fill_between(xmins[valid_se],
+                               (alphas - 1.96*se)[valid_se],
+                               (alphas + 1.96*se)[valid_se],
+                               alpha=0.2, color=colors[idx])
+
+        # Mark optimal x_min
+        optimal = band_data.get('optimal', {})
+        if optimal and 'xmin' in optimal:
+            opt_xmin = optimal['xmin']
+            opt_alpha = optimal.get('alpha', np.nan)
+            ax.scatter([opt_xmin], [opt_alpha], s=150, c='red', marker='*', zorder=10,
+                      label=f'Optimal: α={opt_alpha:.2f}')
+
+        # Reference lines
+        ax.axhline(2.14, color='red', linestyle='--', linewidth=1.5, alpha=0.7,
+                  label='Cael & Seekell (2.14)')
+        ax.axhline(2.05, color='orange', linestyle=':', linewidth=1.5, alpha=0.7,
+                  label='Percolation (2.05)')
+        ax.axvline(0.46, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+        # Labels and formatting
+        ax.set_xlabel('x_min (km²)', fontsize=10)
+        ax.set_ylabel('α', fontsize=10)
+        ax.set_title(f'{band_name}', fontsize=12, fontweight='bold')
+        ax.set_xscale('log')
+        ax.grid(True, alpha=0.3)
+
+        # Add sample size annotation
+        n_total = band_data.get('n_total', 0)
+        ax.annotate(f'n={n_total:,}',
+                   xy=(0.02, 0.02), xycoords='axes fraction',
+                   ha='left', va='bottom', fontsize=8,
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        if idx == 0:
+            ax.legend(loc='upper right', fontsize=7)
+
+    # Hide unused axes
+    for idx in range(n_bands, n_rows * n_cols):
+        row, col = divmod(idx, n_cols)
+        axes[row, col].set_visible(False)
+
+    fig.suptitle('α Sensitivity to x_min by Elevation Band', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
 def plot_xmin_elevation_summary(xmin_results, figsize=(16, 12), save_path=None):
     """
     Comprehensive summary figure for x_min sensitivity by elevation analysis.
@@ -3092,9 +3212,10 @@ if __name__ == "__main__":
     print("  - plot_slope_relief_heatmap()")
     print("  - plot_xmin_sensitivity()")
     print("  - plot_significance_tests()")
-    print("  # NEW x_min by elevation visualizations:")
+    print("  # x_min by elevation visualizations:")
     print("  - plot_xmin_sensitivity_by_elevation()")
     print("  - plot_ks_curves_overlay()")
     print("  - plot_optimal_xmin_vs_elevation()")
     print("  - plot_alpha_stability_by_elevation()")
     print("  - plot_xmin_elevation_summary()")
+    print("  - plot_alpha_vs_xmin_by_elevation()  # NEW: alpha sensitivity")
