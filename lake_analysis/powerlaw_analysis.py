@@ -1400,6 +1400,618 @@ def generate_xmin_summary_table(xmin_results, include_fixed=True):
     return pd.DataFrame(rows)
 
 
+# ============================================================================
+# HYPOTHESIS TESTS FOR X_MIN SENSITIVITY BY ELEVATION
+# ============================================================================
+
+def test_xmin_variation_by_elevation(xmin_results):
+    """
+    Hypothesis Test 1: Does optimal x_min vary by elevation band?
+
+    Tests whether glacially-scoured terrain (high elevation) has a systematically
+    different transition scale than floodplain environments (low elevation).
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+
+    Returns
+    -------
+    dict
+        Test results including:
+        - xmin_by_band: optimal x_min for each band
+        - xmin_range: (min, max) across all bands
+        - xmin_cv: coefficient of variation
+        - significant_variation: bool, True if CV > 0.3
+        - elevation_correlation: correlation between elevation and x_min
+        - interpretation: text describing findings
+    """
+    xmin_values = []
+    elev_mids = []
+    bands = []
+
+    for band_key, results in xmin_results.items():
+        if results['status'] != 'success':
+            continue
+        if pd.notna(results['optimal_xmin']):
+            xmin_values.append(results['optimal_xmin'])
+            elev_mids.append(results['elev_mid'])
+            bands.append(band_key)
+
+    if len(xmin_values) < 2:
+        return {
+            'xmin_by_band': {},
+            'xmin_range': (np.nan, np.nan),
+            'xmin_cv': np.nan,
+            'significant_variation': False,
+            'elevation_correlation': np.nan,
+            'p_value': np.nan,
+            'interpretation': 'Insufficient data for comparison',
+        }
+
+    xmin_arr = np.array(xmin_values)
+    elev_arr = np.array(elev_mids)
+
+    # Compute variation metrics
+    xmin_mean = np.mean(xmin_arr)
+    xmin_std = np.std(xmin_arr)
+    xmin_cv = xmin_std / xmin_mean if xmin_mean > 0 else np.nan
+
+    # Correlation with elevation
+    if len(xmin_arr) >= 3:
+        corr, p_value = stats.spearmanr(elev_arr, xmin_arr)
+    else:
+        corr, p_value = np.nan, np.nan
+
+    # Build band-level results
+    xmin_by_band = {band: xmin for band, xmin in zip(bands, xmin_values)}
+
+    # Interpretation
+    if xmin_cv > 0.5:
+        variation_level = "high"
+    elif xmin_cv > 0.3:
+        variation_level = "moderate"
+    else:
+        variation_level = "low"
+
+    interpretation_parts = [f"Coefficient of variation in x_min is {variation_level} ({xmin_cv:.2f})"]
+
+    if pd.notna(corr):
+        if p_value < 0.05:
+            if corr > 0:
+                interpretation_parts.append(
+                    f"x_min increases significantly with elevation (ρ={corr:.2f}, p={p_value:.3f})")
+            else:
+                interpretation_parts.append(
+                    f"x_min decreases significantly with elevation (ρ={corr:.2f}, p={p_value:.3f})")
+        else:
+            interpretation_parts.append(
+                f"No significant correlation with elevation (ρ={corr:.2f}, p={p_value:.3f})")
+
+    return {
+        'xmin_by_band': xmin_by_band,
+        'xmin_range': (np.min(xmin_arr), np.max(xmin_arr)),
+        'xmin_mean': xmin_mean,
+        'xmin_std': xmin_std,
+        'xmin_cv': xmin_cv,
+        'significant_variation': xmin_cv > 0.3,
+        'elevation_correlation': corr,
+        'p_value': p_value,
+        'interpretation': '; '.join(interpretation_parts),
+    }
+
+
+def analyze_ks_behavior(xmin_results):
+    """
+    Hypothesis Test 2: How does KS statistic behave in each band?
+
+    A flat KS curve suggests the power law fit is robust across x_min choices.
+    A sharply defined minimum suggests a clear physical threshold.
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+
+    Returns
+    -------
+    dict
+        For each band:
+        - ks_curve_shape: 'flat', 'moderate', or 'sharp'
+        - ks_min: minimum KS value
+        - ks_range_at_threshold: range of KS values within 50% of optimal x_min
+        - flatness_score: lower = flatter curve (more robust)
+    """
+    band_results = {}
+
+    for band_key, results in xmin_results.items():
+        if results['status'] != 'success':
+            band_results[band_key] = {
+                'ks_curve_shape': 'unknown',
+                'ks_min': np.nan,
+                'flatness_score': np.nan,
+                'interpretation': 'Insufficient data',
+            }
+            continue
+
+        full_results = results['full_results']
+        if len(full_results) == 0:
+            continue
+
+        # Get KS values
+        ks_values = full_results['ks_statistic'].dropna()
+        xmin_values = full_results.loc[ks_values.index, 'xmin']
+
+        if len(ks_values) < 3:
+            band_results[band_key] = {
+                'ks_curve_shape': 'unknown',
+                'ks_min': np.nan,
+                'flatness_score': np.nan,
+                'interpretation': 'Insufficient x_min points',
+            }
+            continue
+
+        ks_min = ks_values.min()
+        ks_max = ks_values.max()
+        ks_range = ks_max - ks_min
+
+        # Compute flatness: std(KS) / mean(KS) in acceptable range
+        optimal_xmin = results['optimal_xmin']
+        near_optimal_mask = (xmin_values >= optimal_xmin * 0.5) & (xmin_values <= optimal_xmin * 2.0)
+        ks_near_optimal = ks_values[near_optimal_mask]
+
+        if len(ks_near_optimal) > 0:
+            flatness_score = ks_near_optimal.std() / ks_near_optimal.mean() if ks_near_optimal.mean() > 0 else np.nan
+        else:
+            flatness_score = np.nan
+
+        # Classify shape
+        if pd.notna(flatness_score):
+            if flatness_score < 0.1:
+                shape = 'flat'
+                interpretation = 'KS curve is flat - power law fit is robust across x_min choices'
+            elif flatness_score < 0.25:
+                shape = 'moderate'
+                interpretation = 'KS curve shows moderate variation - power law fit is reasonably stable'
+            else:
+                shape = 'sharp'
+                interpretation = 'KS curve has a sharp minimum - suggests a clear physical threshold'
+        else:
+            shape = 'unknown'
+            interpretation = 'Could not determine KS curve shape'
+
+        band_results[band_key] = {
+            'ks_curve_shape': shape,
+            'ks_min': ks_min,
+            'ks_max': ks_max,
+            'ks_range': ks_range,
+            'flatness_score': flatness_score,
+            'n_points_analyzed': len(ks_near_optimal),
+            'interpretation': interpretation,
+        }
+
+    return band_results
+
+
+def analyze_alpha_trajectory(xmin_results, high_xmin_threshold=2.0):
+    """
+    Hypothesis Test 3: What's the α trajectory as x_min increases in each band?
+
+    If all bands converge toward similar α at high x_min, elevation differences
+    might be driven by what's happening near the threshold. If they remain
+    separated, the signal is more robust.
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    high_xmin_threshold : float
+        x_min value considered "high" for convergence analysis
+
+    Returns
+    -------
+    dict
+        - alpha_at_low_xmin: alpha values at x_min near 0.1 km²
+        - alpha_at_high_xmin: alpha values at x_min near threshold
+        - convergence_metric: spread at high x_min vs low x_min
+        - converges: bool, True if bands converge at high x_min
+        - interpretation: text describing pattern
+    """
+    alpha_low = {}
+    alpha_high = {}
+    alpha_optimal = {}
+
+    for band_key, results in xmin_results.items():
+        if results['status'] != 'success':
+            continue
+
+        full_results = results['full_results']
+        if len(full_results) == 0:
+            continue
+
+        alpha_optimal[band_key] = results['optimal_alpha']
+
+        # Get alpha at low x_min (near 0.1)
+        low_xmin_mask = full_results['xmin'] <= 0.2
+        if low_xmin_mask.any():
+            low_alphas = full_results.loc[low_xmin_mask, 'alpha'].dropna()
+            if len(low_alphas) > 0:
+                alpha_low[band_key] = low_alphas.iloc[0]
+
+        # Get alpha at high x_min
+        high_xmin_mask = full_results['xmin'] >= high_xmin_threshold
+        if high_xmin_mask.any():
+            high_alphas = full_results.loc[high_xmin_mask, 'alpha'].dropna()
+            if len(high_alphas) > 0:
+                alpha_high[band_key] = high_alphas.iloc[-1]
+
+    if len(alpha_low) < 2 or len(alpha_high) < 2:
+        return {
+            'alpha_at_low_xmin': alpha_low,
+            'alpha_at_high_xmin': alpha_high,
+            'alpha_at_optimal': alpha_optimal,
+            'spread_at_low': np.nan,
+            'spread_at_high': np.nan,
+            'convergence_ratio': np.nan,
+            'converges': None,
+            'interpretation': 'Insufficient data for convergence analysis',
+        }
+
+    # Compute spread (range) at low and high x_min
+    low_values = np.array(list(alpha_low.values()))
+    high_values = np.array(list(alpha_high.values()))
+
+    spread_low = np.max(low_values) - np.min(low_values)
+    spread_high = np.max(high_values) - np.min(high_values)
+
+    # Convergence ratio: if < 1, bands converge at high x_min
+    convergence_ratio = spread_high / spread_low if spread_low > 0 else np.nan
+
+    # Determine if convergence occurs
+    if pd.notna(convergence_ratio):
+        if convergence_ratio < 0.5:
+            converges = True
+            interpretation = (f"Elevation bands CONVERGE at high x_min (spread reduces from "
+                            f"{spread_low:.3f} to {spread_high:.3f}). Alpha differences may be "
+                            "threshold-dependent rather than reflecting true elevation effects.")
+        elif convergence_ratio > 1.5:
+            converges = False
+            interpretation = (f"Elevation bands DIVERGE at high x_min (spread increases from "
+                            f"{spread_low:.3f} to {spread_high:.3f}). Alpha differences are "
+                            "robust and amplify with stricter thresholds.")
+        else:
+            converges = None
+            interpretation = (f"Elevation bands maintain similar spread across x_min values "
+                            f"(low: {spread_low:.3f}, high: {spread_high:.3f}). Alpha differences "
+                            "are stable but not strongly convergent or divergent.")
+    else:
+        converges = None
+        interpretation = "Could not determine convergence pattern"
+
+    return {
+        'alpha_at_low_xmin': alpha_low,
+        'alpha_at_high_xmin': alpha_high,
+        'alpha_at_optimal': alpha_optimal,
+        'spread_at_low': spread_low,
+        'spread_at_high': spread_high,
+        'convergence_ratio': convergence_ratio,
+        'converges': converges,
+        'interpretation': interpretation,
+    }
+
+
+def test_ntail_stability(xmin_results, min_ntail_fraction=0.05):
+    """
+    Hypothesis Test 4: Sample size stability in tail by band.
+
+    Verifies that n_tail doesn't collapse as x_min shifts, which would
+    undermine the statistical reliability of alpha estimates.
+
+    For the 1000-1500m band with n=535 in tail and α ≈ 1.73,
+    standard error is (0.73)/√535 ≈ 0.032.
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    min_ntail_fraction : float
+        Minimum acceptable fraction of n_total in tail
+
+    Returns
+    -------
+    dict
+        For each band:
+        - n_tail_at_optimal: sample size at optimal x_min
+        - n_tail_range: (min, max) across acceptable x_min range
+        - se_at_optimal: standard error at optimal x_min
+        - se_range: (min, max) SE across acceptable x_min range
+        - stable: bool, True if n_tail stays above threshold
+        - interpretation: text describing stability
+    """
+    band_results = {}
+
+    for band_key, results in xmin_results.items():
+        if results['status'] != 'success':
+            band_results[band_key] = {
+                'n_tail_at_optimal': 0,
+                'stable': False,
+                'interpretation': 'Insufficient data',
+            }
+            continue
+
+        n_total = results['n_total']
+        full_results = results['full_results']
+
+        if len(full_results) == 0:
+            continue
+
+        # Get n_tail at optimal x_min
+        optimal_xmin = results['optimal_xmin']
+        optimal_alpha = results['optimal_alpha']
+        optimal_idx = (full_results['xmin'] - optimal_xmin).abs().idxmin()
+        n_tail_optimal = full_results.loc[optimal_idx, 'n_tail']
+
+        # Standard error at optimal
+        if pd.notna(optimal_alpha) and n_tail_optimal > 0:
+            se_optimal = (optimal_alpha - 1) / np.sqrt(n_tail_optimal)
+        else:
+            se_optimal = np.nan
+
+        # Get n_tail range within acceptable x_min range
+        acc_low, acc_high = results['acceptable_range']
+        if pd.notna(acc_low) and pd.notna(acc_high):
+            acc_mask = (full_results['xmin'] >= acc_low) & (full_results['xmin'] <= acc_high)
+            acc_data = full_results[acc_mask]
+
+            if len(acc_data) > 0:
+                n_tail_range = (acc_data['n_tail'].min(), acc_data['n_tail'].max())
+
+                # Compute SE range
+                valid_alpha = acc_data['alpha'].dropna()
+                valid_ntail = acc_data.loc[valid_alpha.index, 'n_tail']
+                if len(valid_alpha) > 0 and (valid_ntail > 0).all():
+                    se_values = (valid_alpha - 1) / np.sqrt(valid_ntail)
+                    se_range = (se_values.min(), se_values.max())
+                else:
+                    se_range = (np.nan, np.nan)
+            else:
+                n_tail_range = (np.nan, np.nan)
+                se_range = (np.nan, np.nan)
+        else:
+            n_tail_range = (np.nan, np.nan)
+            se_range = (np.nan, np.nan)
+
+        # Check stability: n_tail should not fall below threshold fraction
+        min_acceptable = int(n_total * min_ntail_fraction)
+        if pd.notna(n_tail_range[0]):
+            stable = n_tail_range[0] >= min_acceptable
+        else:
+            stable = n_tail_optimal >= min_acceptable
+
+        # Interpretation
+        if stable:
+            if pd.notna(se_optimal):
+                interpretation = (f"Sample size stable (n_tail={n_tail_optimal:,} at optimal x_min). "
+                                f"SE = {se_optimal:.4f}, providing reliable alpha estimates.")
+            else:
+                interpretation = f"Sample size stable (n_tail={n_tail_optimal:,} at optimal x_min)."
+        else:
+            interpretation = (f"WARNING: Sample size may be unstable. n_tail={n_tail_optimal:,} "
+                            f"at optimal x_min, but drops to {n_tail_range[0]:,} at upper x_min range. "
+                            "Consider using a lower x_min for more reliable estimates.")
+
+        band_results[band_key] = {
+            'n_total': n_total,
+            'n_tail_at_optimal': n_tail_optimal,
+            'n_tail_range': n_tail_range,
+            'pct_tail_at_optimal': n_tail_optimal / n_total * 100 if n_total > 0 else 0,
+            'se_at_optimal': se_optimal,
+            'se_range': se_range,
+            'min_acceptable_ntail': min_acceptable,
+            'stable': stable,
+            'interpretation': interpretation,
+        }
+
+    return band_results
+
+
+def run_all_hypothesis_tests(xmin_results, verbose=True):
+    """
+    Run all four hypothesis tests on x_min sensitivity results.
+
+    Tests performed:
+    1. Does optimal x_min vary by elevation band?
+    2. How does KS statistic behave in each band?
+    3. What's the α trajectory as x_min increases?
+    4. Sample size stability in tail by band
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    verbose : bool
+        If True, print detailed results
+
+    Returns
+    -------
+    dict
+        Comprehensive hypothesis test results
+    """
+    if verbose:
+        print("\n" + "=" * 70)
+        print("HYPOTHESIS TESTS FOR X_MIN SENSITIVITY BY ELEVATION")
+        print("=" * 70)
+
+    # Test 1: x_min variation
+    if verbose:
+        print("\n" + "-" * 70)
+        print("TEST 1: Does optimal x_min vary by elevation band?")
+        print("-" * 70)
+
+    test1 = test_xmin_variation_by_elevation(xmin_results)
+
+    if verbose:
+        print(f"  x_min range: [{test1['xmin_range'][0]:.3f}, {test1['xmin_range'][1]:.3f}] km²")
+        print(f"  x_min mean: {test1['xmin_mean']:.3f} km² (std: {test1['xmin_std']:.3f})")
+        print(f"  Coefficient of variation: {test1['xmin_cv']:.3f}")
+        print(f"  Elevation correlation: ρ = {test1['elevation_correlation']:.3f} (p = {test1['p_value']:.4f})")
+        print(f"\n  → {test1['interpretation']}")
+
+    # Test 2: KS behavior
+    if verbose:
+        print("\n" + "-" * 70)
+        print("TEST 2: How does KS statistic behave in each band?")
+        print("-" * 70)
+
+    test2 = analyze_ks_behavior(xmin_results)
+
+    if verbose:
+        for band_key, band_result in test2.items():
+            if band_result['ks_curve_shape'] != 'unknown':
+                print(f"  {band_key}: {band_result['ks_curve_shape']} "
+                      f"(flatness={band_result['flatness_score']:.3f}, "
+                      f"KS_min={band_result['ks_min']:.4f})")
+
+    # Test 3: Alpha trajectory
+    if verbose:
+        print("\n" + "-" * 70)
+        print("TEST 3: What's the α trajectory as x_min increases?")
+        print("-" * 70)
+
+    test3 = analyze_alpha_trajectory(xmin_results)
+
+    if verbose:
+        print(f"  Spread at low x_min: {test3['spread_at_low']:.3f}")
+        print(f"  Spread at high x_min: {test3['spread_at_high']:.3f}")
+        print(f"  Convergence ratio: {test3['convergence_ratio']:.3f}")
+        print(f"\n  → {test3['interpretation']}")
+
+    # Test 4: n_tail stability
+    if verbose:
+        print("\n" + "-" * 70)
+        print("TEST 4: Sample size stability in tail by band")
+        print("-" * 70)
+
+    test4 = test_ntail_stability(xmin_results)
+
+    if verbose:
+        for band_key, band_result in test4.items():
+            if 'n_tail_at_optimal' in band_result and band_result['n_tail_at_optimal'] > 0:
+                status = "✓ STABLE" if band_result['stable'] else "⚠ UNSTABLE"
+                print(f"  {band_key}: n_tail={band_result['n_tail_at_optimal']:,}, "
+                      f"SE={band_result['se_at_optimal']:.4f} {status}")
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("HYPOTHESIS TESTS COMPLETE")
+        print("=" * 70)
+
+    return {
+        'xmin_variation': test1,
+        'ks_behavior': test2,
+        'alpha_trajectory': test3,
+        'ntail_stability': test4,
+    }
+
+
+def generate_hypothesis_test_report(hypothesis_results, output_path=None):
+    """
+    Generate a formatted text report of hypothesis test results.
+
+    Parameters
+    ----------
+    hypothesis_results : dict
+        Output from run_all_hypothesis_tests()
+    output_path : str, optional
+        If provided, save report to file
+
+    Returns
+    -------
+    str
+        Formatted report text
+    """
+    lines = [
+        "=" * 70,
+        "HYPOTHESIS TEST REPORT: X_MIN SENSITIVITY BY ELEVATION",
+        "=" * 70,
+        "",
+        "SUMMARY",
+        "-" * 70,
+        "",
+    ]
+
+    # Test 1 summary
+    test1 = hypothesis_results['xmin_variation']
+    lines.extend([
+        "1. OPTIMAL X_MIN VARIATION BY ELEVATION",
+        f"   Range: [{test1['xmin_range'][0]:.3f}, {test1['xmin_range'][1]:.3f}] km²",
+        f"   CV: {test1['xmin_cv']:.3f} ({'significant' if test1['significant_variation'] else 'not significant'})",
+        f"   Correlation with elevation: ρ = {test1['elevation_correlation']:.3f}",
+        f"   Interpretation: {test1['interpretation']}",
+        "",
+    ])
+
+    # Test 2 summary
+    test2 = hypothesis_results['ks_behavior']
+    shape_counts = {'flat': 0, 'moderate': 0, 'sharp': 0}
+    for band_result in test2.values():
+        shape = band_result.get('ks_curve_shape', 'unknown')
+        if shape in shape_counts:
+            shape_counts[shape] += 1
+
+    lines.extend([
+        "2. KS STATISTIC BEHAVIOR",
+        f"   Flat curves: {shape_counts['flat']} bands (robust fit)",
+        f"   Moderate curves: {shape_counts['moderate']} bands",
+        f"   Sharp curves: {shape_counts['sharp']} bands (clear threshold)",
+        "",
+    ])
+
+    # Test 3 summary
+    test3 = hypothesis_results['alpha_trajectory']
+    lines.extend([
+        "3. ALPHA TRAJECTORY WITH INCREASING X_MIN",
+        f"   Spread at low x_min: {test3['spread_at_low']:.3f}",
+        f"   Spread at high x_min: {test3['spread_at_high']:.3f}",
+        f"   Convergence ratio: {test3['convergence_ratio']:.3f}",
+        f"   Interpretation: {test3['interpretation']}",
+        "",
+    ])
+
+    # Test 4 summary
+    test4 = hypothesis_results['ntail_stability']
+    n_stable = sum(1 for r in test4.values() if r.get('stable', False))
+    n_total = sum(1 for r in test4.values() if 'stable' in r)
+    lines.extend([
+        "4. SAMPLE SIZE STABILITY",
+        f"   Stable bands: {n_stable}/{n_total}",
+        "",
+        "   Per-band details:",
+    ])
+
+    for band_key, band_result in test4.items():
+        if 'n_tail_at_optimal' in band_result and band_result['n_tail_at_optimal'] > 0:
+            lines.append(f"     {band_key}: n={band_result['n_tail_at_optimal']:,}, "
+                        f"SE={band_result['se_at_optimal']:.4f}")
+
+    lines.extend([
+        "",
+        "=" * 70,
+        "END OF REPORT",
+        "=" * 70,
+    ])
+
+    report = "\n".join(lines)
+
+    if output_path:
+        with open(output_path, 'w') as f:
+            f.write(report)
+        print(f"Report saved to: {output_path}")
+
+    return report
+
+
 if __name__ == "__main__":
     print("Power Law Analysis module loaded.")
     print("\nKey functions:")
@@ -1412,3 +2024,9 @@ if __name__ == "__main__":
     print("  - compare_xmin_methods(results)")
     print("  - test_alpha_robustness(results)")
     print("  - generate_xmin_summary_table(results)")
+    print("\n  Hypothesis Tests:")
+    print("  - test_xmin_variation_by_elevation(results)")
+    print("  - analyze_ks_behavior(results)")
+    print("  - analyze_alpha_trajectory(results)")
+    print("  - test_ntail_stability(results)")
+    print("  - run_all_hypothesis_tests(results)    # Run all 4 tests")

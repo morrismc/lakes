@@ -250,7 +250,7 @@ try:
         # x_min sensitivity by elevation visualizations
         plot_xmin_sensitivity_by_elevation, plot_ks_curves_overlay,
         plot_optimal_xmin_vs_elevation, plot_alpha_stability_by_elevation,
-        plot_xmin_elevation_summary
+        plot_xmin_elevation_summary, plot_alpha_vs_xmin_by_elevation
     )
     from .powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
@@ -258,7 +258,9 @@ try:
         xmin_sensitivity_analysis, compare_to_cael_seekell,
         # x_min sensitivity by elevation analysis
         xmin_sensitivity_by_elevation, compare_xmin_methods,
-        test_alpha_robustness, generate_xmin_summary_table
+        test_alpha_robustness, generate_xmin_summary_table,
+        # Hypothesis tests for x_min sensitivity
+        run_all_hypothesis_tests, generate_hypothesis_test_report
     )
 except ImportError:
     from config import (
@@ -294,7 +296,7 @@ except ImportError:
         # x_min sensitivity by elevation visualizations
         plot_xmin_sensitivity_by_elevation, plot_ks_curves_overlay,
         plot_optimal_xmin_vs_elevation, plot_alpha_stability_by_elevation,
-        plot_xmin_elevation_summary
+        plot_xmin_elevation_summary, plot_alpha_vs_xmin_by_elevation
     )
     from powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
@@ -302,7 +304,9 @@ except ImportError:
         xmin_sensitivity_analysis, compare_to_cael_seekell,
         # x_min sensitivity by elevation analysis
         xmin_sensitivity_by_elevation, compare_xmin_methods,
-        test_alpha_robustness, generate_xmin_summary_table
+        test_alpha_robustness, generate_xmin_summary_table,
+        # Hypothesis tests for x_min sensitivity
+        run_all_hypothesis_tests, generate_hypothesis_test_report
     )
 
 
@@ -1443,7 +1447,7 @@ def analyze_xmin_by_elevation(lakes, save_figures=True):
         # Fixed x_min values for comparison
         fixed_xmin_values = [0.024, 0.1, 0.46, 1.0]
 
-        print("\n[STEP 1/5] Running sensitivity analysis for each elevation band...")
+        print("\n[STEP 1/7] Running sensitivity analysis for each elevation band...")
         print(f"  Elevation bands: {len(elevation_bands)}")
         print(f"  x_min candidates: {len(xmin_candidates)}")
 
@@ -1459,15 +1463,15 @@ def analyze_xmin_by_elevation(lakes, save_figures=True):
             show_progress=True
         )
 
-        print("\n[STEP 2/5] Comparing x_min methods...")
+        print("\n[STEP 2/7] Comparing x_min methods...")
         method_comparison = compare_xmin_methods(xmin_results)
         xmin_results['method_comparison'] = method_comparison
 
-        print("\n[STEP 3/5] Testing alpha robustness...")
+        print("\n[STEP 3/7] Testing alpha robustness...")
         robustness = test_alpha_robustness(xmin_results)
         xmin_results['robustness'] = robustness
 
-        print("\n[STEP 4/5] Generating summary table...")
+        print("\n[STEP 4/7] Generating summary table...")
         summary_table = generate_xmin_summary_table(xmin_results)
         xmin_results['summary_table'] = summary_table
 
@@ -1482,9 +1486,22 @@ def analyze_xmin_by_elevation(lakes, save_figures=True):
             summary_table.to_csv(f"{OUTPUT_DIR}/xmin_by_elevation_summary.csv", index=False)
             print(f"\n  Summary saved to: {OUTPUT_DIR}/xmin_by_elevation_summary.csv")
 
+        # Run hypothesis tests
+        print("\n[STEP 5/7] Running hypothesis tests...")
+        hypothesis_results = run_all_hypothesis_tests(xmin_results, verbose=True)
+        xmin_results['hypothesis_tests'] = hypothesis_results
+
+        # Generate hypothesis test report
+        print("\n[STEP 6/7] Generating hypothesis test report...")
+        report = generate_hypothesis_test_report(
+            hypothesis_results,
+            output_path=f"{OUTPUT_DIR}/xmin_hypothesis_test_report.txt"
+        )
+        xmin_results['hypothesis_report'] = report
+
         # Generate visualizations
         if save_figures:
-            print("\n[STEP 5/5] Generating visualizations...")
+            print("\n[STEP 7/7] Generating visualizations...")
 
             # Multi-panel KS curves
             try:
@@ -1545,6 +1562,18 @@ def analyze_xmin_by_elevation(lakes, save_figures=True):
                     print("    Comprehensive summary figure saved!")
             except Exception as e:
                 print(f"    Warning: Could not create summary figure: {e}")
+
+            # Alpha vs x_min by elevation (multi-panel alpha sensitivity)
+            try:
+                fig, axes = plot_alpha_vs_xmin_by_elevation(
+                    xmin_results,
+                    save_path=f"{OUTPUT_DIR}/alpha_vs_xmin_by_elevation.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Alpha vs x_min by elevation saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create alpha sensitivity plot: {e}")
 
         print("\n[SUCCESS] x_min sensitivity by elevation analysis complete!")
 
