@@ -316,6 +316,7 @@ def bootstrap_pvalue(data, xmin, alpha, n_simulations=500, verbose=True):
     return {
         'p_value': p_value,
         'observed_ks': observed_ks,
+        'synthetic_ks_values': synthetic_ks_values,  # Full array for visualization
         'synthetic_ks_mean': np.mean(synthetic_ks_values),
         'n_simulations': len(synthetic_ks_values),
     }
@@ -612,6 +613,7 @@ def full_powerlaw_analysis(lake_areas, xmin_threshold=POWERLAW_XMIN_THRESHOLD,
         else:
             print("    → Power law may not be appropriate (p < 0.1)")
         result['p_value'] = gof['p_value']
+        result['gof_results'] = gof  # Store full GOF results for visualization
 
     # Step 4: Compare to alternatives
     if compare_alternatives:

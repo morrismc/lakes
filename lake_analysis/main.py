@@ -824,6 +824,18 @@ def analyze_powerlaw(lakes, by_elevation=True, save_figures=True):
             plt.close(fig)
             print("  Cumulative area distribution saved!")
 
+            # Goodness-of-fit summary (if bootstrap was run)
+            if 'gof_results' in overall_results:
+                try:
+                    fig, axes = plot_powerlaw_gof_summary(
+                        overall_results['gof_results'],
+                        save_path=f"{OUTPUT_DIR}/H5_powerlaw_gof_summary.png"
+                    )
+                    plt.close(fig)
+                    print("  Goodness-of-fit summary saved!")
+                except Exception as e:
+                    print(f"  Warning: Could not create GOF summary plot: {e}")
+
         # By elevation bands
         domain_results = None
         if by_elevation:
