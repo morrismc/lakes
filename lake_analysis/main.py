@@ -250,7 +250,10 @@ try:
         # x_min sensitivity by elevation visualizations
         plot_xmin_sensitivity_by_elevation, plot_ks_curves_overlay,
         plot_optimal_xmin_vs_elevation, plot_alpha_stability_by_elevation,
-        plot_xmin_elevation_summary, plot_alpha_vs_xmin_by_elevation
+        plot_xmin_elevation_summary, plot_alpha_vs_xmin_by_elevation,
+        # Hypothesis test visualizations
+        plot_hypothesis_test_summary, plot_hypothesis_test_results,
+        plot_colored_summary_table
     )
     from .powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
@@ -296,7 +299,10 @@ except ImportError:
         # x_min sensitivity by elevation visualizations
         plot_xmin_sensitivity_by_elevation, plot_ks_curves_overlay,
         plot_optimal_xmin_vs_elevation, plot_alpha_stability_by_elevation,
-        plot_xmin_elevation_summary, plot_alpha_vs_xmin_by_elevation
+        plot_xmin_elevation_summary, plot_alpha_vs_xmin_by_elevation,
+        # Hypothesis test visualizations
+        plot_hypothesis_test_summary, plot_hypothesis_test_results,
+        plot_colored_summary_table
     )
     from powerlaw_analysis import (
         full_powerlaw_analysis, fit_powerlaw_by_elevation_bands,
@@ -1574,6 +1580,44 @@ def analyze_xmin_by_elevation(lakes, save_figures=True):
                     print("    Alpha vs x_min by elevation saved!")
             except Exception as e:
                 print(f"    Warning: Could not create alpha sensitivity plot: {e}")
+
+            # Hypothesis test summary (4-panel like x_min sensitivity figure)
+            try:
+                fig, axes = plot_hypothesis_test_summary(
+                    xmin_results,
+                    hypothesis_results,
+                    save_path=f"{OUTPUT_DIR}/hypothesis_test_summary.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Hypothesis test summary (4-panel) saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create hypothesis test summary: {e}")
+
+            # Visual hypothesis test results
+            try:
+                fig, axes = plot_hypothesis_test_results(
+                    hypothesis_results,
+                    save_path=f"{OUTPUT_DIR}/hypothesis_test_results.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Hypothesis test results visualization saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create hypothesis test results: {e}")
+
+            # Colored summary table
+            try:
+                fig, ax = plot_colored_summary_table(
+                    xmin_results,
+                    hypothesis_results,
+                    save_path=f"{OUTPUT_DIR}/xmin_colored_summary_table.png"
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Colored summary table saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create colored summary table: {e}")
 
         print("\n[SUCCESS] x_min sensitivity by elevation analysis complete!")
 

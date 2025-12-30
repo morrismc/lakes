@@ -2354,14 +2354,14 @@ def plot_powerlaw_gof_summary(gof_results, figsize=(12, 8), save_path=None):
 
 def plot_three_panel_summary(lake_df, elev_density, landscape_area,
                               area_col=None, elev_col=None,
-                              figsize=(8, 14), save_path=None):
+                              figsize=(14, 12), save_path=None):
     """
     Create 3-panel summary figure showing:
     A) Lake count by elevation (distribution on landscape)
     B) Hypsometry of the lower 48 (landscape/terrain area by elevation)
     C) Normalized lake density by elevation
 
-    All panels are arranged vertically and share the same y-axis (Elevation)
+    All panels are arranged vertically and share the same x-axis (Elevation)
     for easy comparison.
 
     Parameters
@@ -2388,19 +2388,19 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     if elev_col is None:
         elev_col = COLS['elevation']
 
-    # Create figure with shared y-axis (elevation) - vertical layout
-    fig, axes = plt.subplots(3, 1, figsize=figsize, sharey=True)
+    # Create figure with shared x-axis (elevation) - vertical layout
+    fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True)
 
-    # Calculate midpoints and common y-axis limits
+    # Calculate midpoints and common x-axis limits
     midpoints = (elev_density['bin_lower'] + elev_density['bin_upper']) / 2
-    bar_height = (elev_density['bin_upper'] - elev_density['bin_lower']).iloc[0] * 0.8
-    y_min, y_max = elev_density['bin_lower'].min(), elev_density['bin_upper'].max()
+    bar_width = (elev_density['bin_upper'] - elev_density['bin_lower']).iloc[0] * 0.8
+    x_min, x_max = elev_density['bin_lower'].min(), elev_density['bin_upper'].max()
 
     # Panel A: Lake count by elevation
     ax1 = axes[0]
-    ax1.barh(midpoints, elev_density['n_lakes'],
-             height=bar_height, alpha=0.7, color='steelblue', edgecolor='darkblue', linewidth=0.5)
-    ax1.set_xlabel('Number of Lakes', fontsize=12)
+    ax1.bar(midpoints, elev_density['n_lakes'],
+            width=bar_width, alpha=0.7, color='steelblue', edgecolor='darkblue', linewidth=0.5)
+    ax1.set_ylabel('Number of Lakes', fontsize=12)
     ax1.set_title('A) Lake Distribution', fontsize=14, fontweight='bold')
 
     # Add total count annotation
@@ -2418,9 +2418,9 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     else:
         hyps_area = np.ones(len(midpoints))  # Fallback
 
-    ax2.barh(midpoints, hyps_area, height=bar_height, alpha=0.7, color='sienna',
-             edgecolor='saddlebrown', linewidth=0.5)
-    ax2.set_xlabel('Landscape Area (×10³ km²)', fontsize=12)
+    ax2.bar(midpoints, hyps_area, width=bar_width, alpha=0.7, color='sienna',
+            edgecolor='saddlebrown', linewidth=0.5)
+    ax2.set_ylabel('Landscape Area\n(×10³ km²)', fontsize=12)
     ax2.set_title('B) Hypsometry (Lower 48)', fontsize=14, fontweight='bold')
 
     # Add total area annotation
@@ -2431,9 +2431,10 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
 
     # Panel C: Normalized lake density
     ax3 = axes[2]
-    ax3.barh(midpoints, elev_density['normalized_density'], height=bar_height,
-             alpha=0.7, color='darkred', edgecolor='maroon', linewidth=0.5)
-    ax3.set_xlabel('Lakes per 1,000 km²', fontsize=12)
+    ax3.bar(midpoints, elev_density['normalized_density'], width=bar_width,
+            alpha=0.7, color='darkred', edgecolor='maroon', linewidth=0.5)
+    ax3.set_ylabel('Lakes per 1,000 km²', fontsize=12)
+    ax3.set_xlabel('Elevation (m)', fontsize=12)
     ax3.set_title('C) Normalized Lake Density', fontsize=14, fontweight='bold')
 
     # Find and annotate peaks
@@ -2441,12 +2442,12 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
     if len(peaks) > 0:
         for peak_idx in peaks[:2]:  # Top 2 peaks
             if peak_idx < len(midpoints):
-                peak_y = midpoints.iloc[peak_idx]
-                peak_x = elev_density['normalized_density'].iloc[peak_idx]
-                ax3.annotate(f'{peak_x:.1f}',
+                peak_x = midpoints.iloc[peak_idx]
+                peak_y = elev_density['normalized_density'].iloc[peak_idx]
+                ax3.annotate(f'{peak_y:.1f}',
                             xy=(peak_x, peak_y),
-                            xytext=(8, 0), textcoords='offset points',
-                            ha='left', fontsize=9, fontweight='bold',
+                            xytext=(0, 8), textcoords='offset points',
+                            ha='center', fontsize=9, fontweight='bold',
                             color='darkred')
 
     # Add explanation
@@ -2454,13 +2455,10 @@ def plot_three_panel_summary(lake_df, elev_density, landscape_area,
                 ha='right', va='top', fontsize=11, fontweight='bold',
                 bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9, edgecolor='orange'))
 
-    # Set common y-axis label and limits
+    # Set common x-axis label and limits
     for ax in axes:
-        ax.set_ylim(y_min, y_max)
-        ax.grid(True, alpha=0.3, axis='x')
-
-    # Add y-axis label to middle panel
-    axes[1].set_ylabel('Elevation (m)', fontsize=12)
+        ax.set_xlim(x_min, x_max)
+        ax.grid(True, alpha=0.3, axis='y')
 
     # Add main title
     fig.suptitle('Lake Density Normalization:\nCorrecting for Landscape Availability',
@@ -3194,6 +3192,573 @@ def plot_xmin_elevation_summary(xmin_results, figsize=(16, 12), save_path=None):
     return fig, (ax1, ax2, ax3, ax4, ax5, ax6)
 
 
+# ============================================================================
+# HYPOTHESIS TEST VISUALIZATIONS
+# ============================================================================
+
+def plot_hypothesis_test_summary(xmin_results, hypothesis_results, figsize=(16, 14), save_path=None):
+    """
+    Create 4-panel visualization of hypothesis test results, similar to
+    x_min sensitivity figures.
+
+    Panels:
+    A) α sensitivity to x_min by elevation (with 95% CI, reference lines)
+    B) Sample size vs x_min by elevation (log scale)
+    C) KS statistic vs x_min (goodness of fit)
+    D) Key threshold comparison table (colored)
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    hypothesis_results : dict
+        Output from run_all_hypothesis_tests()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
+
+    # Get elevation colors
+    elevation_bands = [k for k in xmin_results.keys() if 'method_comparison' not in k
+                       and 'robustness' not in k and 'summary' not in k
+                       and 'hypothesis' not in k]
+    n_bands = len(elevation_bands)
+    cmap = plt.cm.viridis
+    colors = {band: cmap(i / max(1, n_bands - 1)) for i, band in enumerate(elevation_bands)}
+
+    # Panel A: α sensitivity to x_min
+    ax1 = fig.add_subplot(gs[0, 0])
+    for band_name in elevation_bands:
+        band_data = xmin_results.get(band_name, {})
+        if band_data.get('status') != 'success':
+            continue
+        full_results = band_data.get('full_results')
+        if full_results is None or len(full_results) == 0:
+            continue
+
+        xmin_vals = full_results['xmin'].values
+        alpha_vals = full_results['alpha'].values
+
+        # Plot with confidence interval
+        ax1.plot(xmin_vals, alpha_vals, '-o', linewidth=2, markersize=4,
+                color=colors[band_name], label=band_name, alpha=0.8)
+
+        # Add CI if available
+        if 'alpha_se' in full_results.columns:
+            se = full_results['alpha_se'].values
+            valid = ~np.isnan(alpha_vals) & ~np.isnan(se)
+            ax1.fill_between(xmin_vals[valid],
+                           alpha_vals[valid] - 1.96*se[valid],
+                           alpha_vals[valid] + 1.96*se[valid],
+                           alpha=0.15, color=colors[band_name])
+
+    # Reference lines
+    ax1.axhline(2.14, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Cael & Seekell (τ=2.14)')
+    ax1.axhline(2.05, color='green', linestyle=':', linewidth=2, alpha=0.8, label='Percolation (τ=2.05)')
+    ax1.axvline(0.46, color='orange', linestyle='--', linewidth=1.5, alpha=0.7, label='C&S threshold (0.46 km²)')
+
+    ax1.set_xlabel('x_min (km²)', fontsize=12)
+    ax1.set_ylabel('Power Law Exponent (α)', fontsize=12)
+    ax1.set_title('A) α Sensitivity to Minimum Area', fontsize=14, fontweight='bold')
+    ax1.set_xscale('log')
+    ax1.legend(loc='lower right', fontsize=8, ncol=2)
+    ax1.grid(True, alpha=0.3)
+
+    # Panel B: Sample size vs x_min
+    ax2 = fig.add_subplot(gs[0, 1])
+    for band_name in elevation_bands:
+        band_data = xmin_results.get(band_name, {})
+        if band_data.get('status') != 'success':
+            continue
+        full_results = band_data.get('full_results')
+        if full_results is None or len(full_results) == 0:
+            continue
+
+        xmin_vals = full_results['xmin'].values
+        n_tail = full_results['n_tail'].values
+
+        ax2.plot(xmin_vals, n_tail, '-s', linewidth=2, markersize=4,
+                color=colors[band_name], label=band_name, alpha=0.8)
+
+    ax2.axvline(0.46, color='orange', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax2.set_xlabel('x_min (km²)', fontsize=12)
+    ax2.set_ylabel('Number of Lakes in Tail', fontsize=12)
+    ax2.set_title('B) Sample Size vs Minimum Area', fontsize=14, fontweight='bold')
+    ax2.set_xscale('log')
+    ax2.set_yscale('log')
+    ax2.grid(True, alpha=0.3)
+
+    # Panel C: KS statistic vs x_min
+    ax3 = fig.add_subplot(gs[1, 0])
+    for band_name in elevation_bands:
+        band_data = xmin_results.get(band_name, {})
+        if band_data.get('status') != 'success':
+            continue
+        full_results = band_data.get('full_results')
+        if full_results is None or len(full_results) == 0:
+            continue
+
+        xmin_vals = full_results['xmin'].values
+        ks_vals = full_results['ks_statistic'].values
+
+        ax3.plot(xmin_vals, ks_vals, '-d', linewidth=2, markersize=4,
+                color=colors[band_name], label=band_name, alpha=0.8)
+
+        # Mark optimal x_min
+        optimal_xmin = band_data.get('optimal_xmin')
+        optimal_ks = band_data.get('optimal_ks')
+        if optimal_xmin is not None and optimal_ks is not None:
+            ax3.scatter([optimal_xmin], [optimal_ks], marker='*', s=150,
+                       color=colors[band_name], edgecolors='black', zorder=5)
+
+    ax3.axvline(0.46, color='orange', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax3.set_xlabel('x_min (km²)', fontsize=12)
+    ax3.set_ylabel('KS Statistic', fontsize=12)
+    ax3.set_title('C) Goodness of Fit vs Minimum Area', fontsize=14, fontweight='bold')
+    ax3.set_xscale('log')
+    ax3.grid(True, alpha=0.3)
+    ax3.annotate('★ = optimal x_min', xy=(0.02, 0.95), xycoords='axes fraction',
+                fontsize=9, ha='left', va='top')
+
+    # Panel D: Colored table
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.axis('off')
+
+    # Build table data
+    table_data = []
+    cell_colors = []
+    headers = ['Elevation\nBand', 'x_min\n(km²)', 'α', 'n (tail)', 'KS\nstat', 'SE']
+
+    for band_name in elevation_bands:
+        band_data = xmin_results.get(band_name, {})
+        if band_data.get('status') != 'success':
+            continue
+
+        opt_xmin = band_data.get('optimal_xmin', np.nan)
+        opt_alpha = band_data.get('optimal_alpha', np.nan)
+        opt_ks = band_data.get('optimal_ks', np.nan)
+
+        # Get n_tail from full_results at optimal x_min
+        full_results = band_data.get('full_results')
+        if full_results is not None and len(full_results) > 0:
+            opt_idx = (full_results['xmin'] - opt_xmin).abs().idxmin() if pd.notna(opt_xmin) else 0
+            n_tail = full_results.loc[opt_idx, 'n_tail'] if opt_idx in full_results.index else 0
+        else:
+            n_tail = 0
+
+        # Compute SE
+        se = (opt_alpha - 1) / np.sqrt(n_tail) if n_tail > 0 and pd.notna(opt_alpha) else np.nan
+
+        row = [
+            band_name,
+            f'{opt_xmin:.3f}' if pd.notna(opt_xmin) else 'N/A',
+            f'{opt_alpha:.3f}' if pd.notna(opt_alpha) else 'N/A',
+            f'{n_tail:,}' if n_tail > 0 else 'N/A',
+            f'{opt_ks:.4f}' if pd.notna(opt_ks) else 'N/A',
+            f'{se:.4f}' if pd.notna(se) else 'N/A',
+        ]
+        table_data.append(row)
+
+        # Color based on alpha value
+        if pd.notna(opt_alpha):
+            if opt_alpha < 1.9:
+                alpha_color = '#FFB3B3'  # Light red - below percolation
+            elif opt_alpha < 2.05:
+                alpha_color = '#FFFFB3'  # Light yellow - near percolation
+            elif opt_alpha < 2.14:
+                alpha_color = '#B3FFB3'  # Light green - near C&S
+            else:
+                alpha_color = '#B3D9FF'  # Light blue - above C&S
+        else:
+            alpha_color = '#FFFFFF'
+
+        row_colors = ['#FFFFFF', '#FFFFFF', alpha_color, '#FFFFFF', '#FFFFFF', '#FFFFFF']
+        cell_colors.append(row_colors)
+
+    if table_data:
+        table = ax4.table(cellText=table_data,
+                         colLabels=headers,
+                         cellColours=cell_colors,
+                         loc='center',
+                         cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1.2, 1.8)
+
+        # Style header
+        for i in range(len(headers)):
+            table[(0, i)].set_facecolor('#4472C4')
+            table[(0, i)].set_text_props(color='white', fontweight='bold')
+
+    ax4.set_title('D) Key Threshold Comparison', fontsize=14, fontweight='bold', pad=20)
+
+    # Add legend for colors
+    legend_text = ('α colors: Red < 1.9 | Yellow 1.9-2.05 | '
+                   'Green 2.05-2.14 | Blue > 2.14')
+    ax4.text(0.5, -0.05, legend_text, transform=ax4.transAxes,
+            fontsize=9, ha='center', va='top', style='italic')
+
+    fig.suptitle('x_min Sensitivity Analysis by Elevation Band', fontsize=16, fontweight='bold')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, (ax1, ax2, ax3, ax4)
+
+
+def plot_hypothesis_test_results(hypothesis_results, figsize=(14, 10), save_path=None):
+    """
+    Create visual summary of all four hypothesis tests with colored indicators.
+
+    Parameters
+    ----------
+    hypothesis_results : dict
+        Output from run_all_hypothesis_tests()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, axes
+    """
+    setup_plot_style()
+
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.3)
+
+    # Test 1: x_min variation by elevation
+    ax1 = fig.add_subplot(gs[0, 0])
+    test1 = hypothesis_results.get('xmin_variation', {})
+
+    xmin_by_band = test1.get('xmin_by_band', {})
+    if xmin_by_band:
+        bands = list(xmin_by_band.keys())
+        xmins = list(xmin_by_band.values())
+
+        # Create bar plot
+        y_pos = np.arange(len(bands))
+        bars = ax1.barh(y_pos, xmins, alpha=0.7, color='steelblue', edgecolor='darkblue')
+        ax1.set_yticks(y_pos)
+        ax1.set_yticklabels(bands, fontsize=9)
+        ax1.set_xlabel('Optimal x_min (km²)', fontsize=11)
+
+        # Add mean line
+        mean_xmin = test1.get('xmin_mean', np.nan)
+        if pd.notna(mean_xmin):
+            ax1.axvline(mean_xmin, color='red', linestyle='--', linewidth=2,
+                       label=f'Mean: {mean_xmin:.3f}')
+
+        # Add CV annotation
+        cv = test1.get('xmin_cv', np.nan)
+        if pd.notna(cv):
+            color = 'green' if cv < 0.3 else ('orange' if cv < 0.5 else 'red')
+            ax1.annotate(f'CV = {cv:.2f}', xy=(0.95, 0.95), xycoords='axes fraction',
+                        ha='right', va='top', fontsize=11, fontweight='bold',
+                        color=color,
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        ax1.legend(loc='lower right', fontsize=9)
+        ax1.grid(True, alpha=0.3, axis='x')
+
+    ax1.set_title('Test 1: Does x_min Vary by Elevation?', fontsize=12, fontweight='bold')
+
+    # Test 2: KS curve behavior
+    ax2 = fig.add_subplot(gs[0, 1])
+    test2 = hypothesis_results.get('ks_behavior', {})
+
+    if test2:
+        bands = []
+        flatness_scores = []
+        shapes = []
+        shape_colors = {'flat': 'green', 'moderate': 'orange', 'sharp': 'red', 'unknown': 'gray'}
+
+        for band_name, band_data in test2.items():
+            if band_data.get('ks_curve_shape') != 'unknown':
+                bands.append(band_name)
+                flatness_scores.append(band_data.get('flatness_score', np.nan))
+                shapes.append(band_data.get('ks_curve_shape', 'unknown'))
+
+        if bands:
+            y_pos = np.arange(len(bands))
+            bar_colors = [shape_colors.get(s, 'gray') for s in shapes]
+            bars = ax2.barh(y_pos, flatness_scores, alpha=0.7, color=bar_colors, edgecolor='black')
+            ax2.set_yticks(y_pos)
+            ax2.set_yticklabels(bands, fontsize=9)
+            ax2.set_xlabel('Flatness Score (lower = more robust)', fontsize=11)
+
+            # Add thresholds
+            ax2.axvline(0.1, color='green', linestyle='--', linewidth=1.5, alpha=0.7, label='Flat')
+            ax2.axvline(0.25, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label='Sharp')
+
+            ax2.legend(loc='lower right', fontsize=9)
+            ax2.grid(True, alpha=0.3, axis='x')
+
+    ax2.set_title('Test 2: KS Curve Shape by Band', fontsize=12, fontweight='bold')
+
+    # Test 3: Alpha trajectory/convergence
+    ax3 = fig.add_subplot(gs[1, 0])
+    test3 = hypothesis_results.get('alpha_trajectory', {})
+
+    alpha_low = test3.get('alpha_at_low_xmin', {})
+    alpha_high = test3.get('alpha_at_high_xmin', {})
+
+    if alpha_low and alpha_high:
+        common_bands = [b for b in alpha_low if b in alpha_high]
+        if common_bands:
+            x = np.arange(len(common_bands))
+            width = 0.35
+
+            low_vals = [alpha_low[b] for b in common_bands]
+            high_vals = [alpha_high[b] for b in common_bands]
+
+            bars1 = ax3.bar(x - width/2, low_vals, width, label='Low x_min (≤0.2)', alpha=0.7, color='steelblue')
+            bars2 = ax3.bar(x + width/2, high_vals, width, label='High x_min (≥2.0)', alpha=0.7, color='coral')
+
+            ax3.set_xticks(x)
+            ax3.set_xticklabels(common_bands, fontsize=9, rotation=45, ha='right')
+            ax3.set_ylabel('α', fontsize=11)
+            ax3.legend(loc='upper right', fontsize=9)
+            ax3.grid(True, alpha=0.3, axis='y')
+
+            # Add reference lines
+            ax3.axhline(2.14, color='red', linestyle='--', linewidth=1.5, alpha=0.5)
+            ax3.axhline(2.05, color='green', linestyle=':', linewidth=1.5, alpha=0.5)
+
+            # Add convergence annotation
+            conv_ratio = test3.get('convergence_ratio', np.nan)
+            if pd.notna(conv_ratio):
+                if conv_ratio < 0.5:
+                    verdict = 'CONVERGE'
+                    color = 'orange'
+                elif conv_ratio > 1.5:
+                    verdict = 'DIVERGE'
+                    color = 'green'
+                else:
+                    verdict = 'STABLE'
+                    color = 'blue'
+                ax3.annotate(f'Bands {verdict}\n(ratio={conv_ratio:.2f})',
+                            xy=(0.95, 0.05), xycoords='axes fraction',
+                            ha='right', va='bottom', fontsize=10, fontweight='bold',
+                            color=color,
+                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    ax3.set_title('Test 3: α Trajectory (Low vs High x_min)', fontsize=12, fontweight='bold')
+
+    # Test 4: n_tail stability
+    ax4 = fig.add_subplot(gs[1, 1])
+    test4 = hypothesis_results.get('ntail_stability', {})
+
+    if test4:
+        bands = []
+        n_tails = []
+        ses = []
+        stable_flags = []
+
+        for band_name, band_data in test4.items():
+            n_tail = band_data.get('n_tail_at_optimal', 0)
+            if n_tail > 0:
+                bands.append(band_name)
+                n_tails.append(n_tail)
+                ses.append(band_data.get('se_at_optimal', np.nan))
+                stable_flags.append(band_data.get('stable', False))
+
+        if bands:
+            y_pos = np.arange(len(bands))
+            bar_colors = ['green' if s else 'red' for s in stable_flags]
+            bars = ax4.barh(y_pos, n_tails, alpha=0.7, color=bar_colors, edgecolor='black')
+            ax4.set_yticks(y_pos)
+            ax4.set_yticklabels(bands, fontsize=9)
+            ax4.set_xlabel('n (tail) at optimal x_min', fontsize=11)
+
+            # Add SE annotations
+            for i, (n, se) in enumerate(zip(n_tails, ses)):
+                if pd.notna(se):
+                    ax4.annotate(f'SE={se:.3f}', xy=(n, i), xytext=(5, 0),
+                                textcoords='offset points', fontsize=8, va='center')
+
+            ax4.grid(True, alpha=0.3, axis='x')
+
+            # Legend
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor='green', alpha=0.7, label='Stable'),
+                              Patch(facecolor='red', alpha=0.7, label='Unstable')]
+            ax4.legend(handles=legend_elements, loc='lower right', fontsize=9)
+
+    ax4.set_title('Test 4: Sample Size Stability', fontsize=12, fontweight='bold')
+
+    fig.suptitle('Hypothesis Test Results Summary', fontsize=16, fontweight='bold')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, (ax1, ax2, ax3, ax4)
+
+
+def plot_colored_summary_table(xmin_results, hypothesis_results=None,
+                                figsize=(12, 8), save_path=None):
+    """
+    Create a publication-ready colored table visualization of x_min results.
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_elevation()
+    hypothesis_results : dict, optional
+        Output from run_all_hypothesis_tests() for additional annotations
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    fig, ax
+    """
+    setup_plot_style()
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis('off')
+
+    # Build table data
+    elevation_bands = [k for k in xmin_results.keys() if 'method_comparison' not in k
+                       and 'robustness' not in k and 'summary' not in k
+                       and 'hypothesis' not in k]
+
+    headers = ['Elevation\nBand', 'n\n(total)', 'Optimal\nx_min', 'α\n(optimal)',
+               'KS\nstat', 'SE', 'x_min\nRange', 'α\nStability']
+
+    table_data = []
+    cell_colors = []
+
+    for band_name in elevation_bands:
+        band_data = xmin_results.get(band_name, {})
+        if band_data.get('status') != 'success':
+            row = [band_name, '-', '-', '-', '-', '-', '-', '-']
+            table_data.append(row)
+            cell_colors.append(['#E0E0E0'] * 8)
+            continue
+
+        n_total = band_data.get('n_total', 0)
+        opt_xmin = band_data.get('optimal_xmin', np.nan)
+        opt_alpha = band_data.get('optimal_alpha', np.nan)
+        opt_ks = band_data.get('optimal_ks', np.nan)
+        acc_range = band_data.get('acceptable_range', (np.nan, np.nan))
+        alpha_stability = band_data.get('alpha_stability', np.nan)
+
+        # Get n_tail for SE calculation
+        full_results = band_data.get('full_results')
+        if full_results is not None and len(full_results) > 0 and pd.notna(opt_xmin):
+            opt_idx = (full_results['xmin'] - opt_xmin).abs().idxmin()
+            n_tail = full_results.loc[opt_idx, 'n_tail'] if opt_idx in full_results.index else 0
+        else:
+            n_tail = 0
+
+        se = (opt_alpha - 1) / np.sqrt(n_tail) if n_tail > 0 and pd.notna(opt_alpha) else np.nan
+
+        row = [
+            band_name,
+            f'{n_total:,}',
+            f'{opt_xmin:.3f}' if pd.notna(opt_xmin) else '-',
+            f'{opt_alpha:.3f}' if pd.notna(opt_alpha) else '-',
+            f'{opt_ks:.4f}' if pd.notna(opt_ks) else '-',
+            f'{se:.4f}' if pd.notna(se) else '-',
+            f'[{acc_range[0]:.2f}, {acc_range[1]:.2f}]' if pd.notna(acc_range[0]) else '-',
+            f'±{alpha_stability/2:.3f}' if pd.notna(alpha_stability) else '-',
+        ]
+        table_data.append(row)
+
+        # Color coding
+        row_colors = ['#FFFFFF'] * 8
+
+        # Color α based on value
+        if pd.notna(opt_alpha):
+            if opt_alpha < 1.9:
+                row_colors[3] = '#FFB3B3'  # Light red
+            elif opt_alpha < 2.05:
+                row_colors[3] = '#FFFFB3'  # Light yellow
+            elif opt_alpha < 2.14:
+                row_colors[3] = '#B3FFB3'  # Light green
+            else:
+                row_colors[3] = '#B3D9FF'  # Light blue
+
+        # Color KS based on quality
+        if pd.notna(opt_ks):
+            if opt_ks < 0.05:
+                row_colors[4] = '#B3FFB3'  # Good fit
+            elif opt_ks < 0.1:
+                row_colors[4] = '#FFFFB3'  # OK fit
+            else:
+                row_colors[4] = '#FFB3B3'  # Poor fit
+
+        # Color SE based on precision
+        if pd.notna(se):
+            if se < 0.03:
+                row_colors[5] = '#B3FFB3'  # Very precise
+            elif se < 0.05:
+                row_colors[5] = '#FFFFB3'  # Adequate
+            else:
+                row_colors[5] = '#FFB3B3'  # Imprecise
+
+        # Color stability
+        if pd.notna(alpha_stability):
+            if alpha_stability < 0.05:
+                row_colors[7] = '#B3FFB3'  # Very stable
+            elif alpha_stability < 0.1:
+                row_colors[7] = '#FFFFB3'  # Moderately stable
+            else:
+                row_colors[7] = '#FFB3B3'  # Unstable
+
+        cell_colors.append(row_colors)
+
+    if table_data:
+        table = ax.table(cellText=table_data,
+                        colLabels=headers,
+                        cellColours=cell_colors,
+                        loc='center',
+                        cellLoc='center')
+
+        table.auto_set_font_size(False)
+        table.set_fontsize(11)
+        table.scale(1.3, 2.0)
+
+        # Style header row
+        for i in range(len(headers)):
+            table[(0, i)].set_facecolor('#4472C4')
+            table[(0, i)].set_text_props(color='white', fontweight='bold', fontsize=10)
+
+    ax.set_title('x_min Sensitivity Analysis Summary by Elevation\n',
+                fontsize=16, fontweight='bold', pad=20)
+
+    # Add color legend
+    legend_text = ('Color coding:\n'
+                   'α: Red (<1.9) | Yellow (1.9-2.05) | Green (2.05-2.14) | Blue (>2.14)\n'
+                   'KS: Green (<0.05) | Yellow (0.05-0.1) | Red (>0.1)\n'
+                   'SE: Green (<0.03) | Yellow (0.03-0.05) | Red (>0.05)\n'
+                   'Stability: Green (<0.05) | Yellow (0.05-0.1) | Red (>0.1)')
+    ax.text(0.5, -0.02, legend_text, transform=ax.transAxes,
+           fontsize=9, ha='center', va='top',
+           bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9, edgecolor='gray'))
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
@@ -3218,4 +3783,8 @@ if __name__ == "__main__":
     print("  - plot_optimal_xmin_vs_elevation()")
     print("  - plot_alpha_stability_by_elevation()")
     print("  - plot_xmin_elevation_summary()")
-    print("  - plot_alpha_vs_xmin_by_elevation()  # NEW: alpha sensitivity")
+    print("  - plot_alpha_vs_xmin_by_elevation()")
+    print("  # Hypothesis test visualizations:")
+    print("  - plot_hypothesis_test_summary()")
+    print("  - plot_hypothesis_test_results()")
+    print("  - plot_colored_summary_table()")
