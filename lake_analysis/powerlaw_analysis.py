@@ -1270,7 +1270,17 @@ def compare_xmin_methods(xmin_results):
     """
     comparison = []
 
+    # Skip non-elevation-band keys
+    skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                 'hypothesis_tests', 'hypothesis_report'}
+
     for band_key, results in xmin_results.items():
+        # Skip metadata keys
+        if band_key in skip_keys:
+            continue
+        # Skip if not a dict or doesn't have expected structure
+        if not isinstance(results, dict) or 'status' not in results:
+            continue
         if results['status'] != 'success':
             continue
 
@@ -1320,7 +1330,17 @@ def test_alpha_robustness(xmin_results):
     """
     robustness = []
 
+    # Skip non-elevation-band keys
+    skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                 'hypothesis_tests', 'hypothesis_report'}
+
     for band_key, results in xmin_results.items():
+        # Skip metadata keys
+        if band_key in skip_keys:
+            continue
+        # Skip if not a dict or doesn't have expected structure
+        if not isinstance(results, dict) or 'status' not in results:
+            continue
         if results['status'] != 'success':
             continue
 
@@ -1370,7 +1390,17 @@ def generate_xmin_summary_table(xmin_results, include_fixed=True):
     """
     rows = []
 
+    # Skip non-elevation-band keys
+    skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                 'hypothesis_tests', 'hypothesis_report'}
+
     for band_key, results in xmin_results.items():
+        # Skip metadata keys
+        if band_key in skip_keys:
+            continue
+        # Skip if not a dict or doesn't have expected structure
+        if not isinstance(results, dict) or 'status' not in results:
+            continue
         if results['status'] != 'success':
             row = {
                 'Elevation Band': band_key,
@@ -1433,7 +1463,17 @@ def test_xmin_variation_by_elevation(xmin_results):
     elev_mids = []
     bands = []
 
+    # Skip non-elevation-band keys
+    skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                 'hypothesis_tests', 'hypothesis_report'}
+
     for band_key, results in xmin_results.items():
+        # Skip metadata keys
+        if band_key in skip_keys:
+            continue
+        # Skip if not a dict or doesn't have expected structure
+        if not isinstance(results, dict) or 'status' not in results:
+            continue
         if results['status'] != 'success':
             continue
         if pd.notna(results['optimal_xmin']):
@@ -1527,7 +1567,17 @@ def analyze_ks_behavior(xmin_results):
     """
     band_results = {}
 
+    # Skip non-elevation-band keys
+    skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                 'hypothesis_tests', 'hypothesis_report'}
+
     for band_key, results in xmin_results.items():
+        # Skip metadata keys
+        if band_key in skip_keys:
+            continue
+        # Skip if not a dict or doesn't have expected structure
+        if not isinstance(results, dict) or 'status' not in results:
+            continue
         if results['status'] != 'success':
             band_results[band_key] = {
                 'ks_curve_shape': 'unknown',
@@ -1624,7 +1674,17 @@ def analyze_alpha_trajectory(xmin_results, high_xmin_threshold=2.0):
     alpha_high = {}
     alpha_optimal = {}
 
+    # Skip non-elevation-band keys
+    skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                 'hypothesis_tests', 'hypothesis_report'}
+
     for band_key, results in xmin_results.items():
+        # Skip metadata keys
+        if band_key in skip_keys:
+            continue
+        # Skip if not a dict or doesn't have expected structure
+        if not isinstance(results, dict) or 'status' not in results:
+            continue
         if results['status'] != 'success':
             continue
 
@@ -1733,7 +1793,17 @@ def test_ntail_stability(xmin_results, min_ntail_fraction=0.05):
     """
     band_results = {}
 
+    # Skip non-elevation-band keys
+    skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                 'hypothesis_tests', 'hypothesis_report'}
+
     for band_key, results in xmin_results.items():
+        # Skip metadata keys
+        if band_key in skip_keys:
+            continue
+        # Skip if not a dict or doesn't have expected structure
+        if not isinstance(results, dict) or 'status' not in results:
+            continue
         if results['status'] != 'success':
             band_results[band_key] = {
                 'n_tail_at_optimal': 0,
