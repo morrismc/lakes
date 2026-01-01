@@ -119,6 +119,278 @@ def estimate_alpha_uncertainty(data, xmin, alpha, n_bootstrap=1000):
 
 
 # ============================================================================
+# BAYESIAN POWER LAW ESTIMATION (for small samples)
+# ============================================================================
+
+def bayesian_powerlaw_estimate(data, xmin, prior_mean=2.1, prior_sd=0.3,
+                                n_samples=5000, verbose=False):
+    """
+    Bayesian estimation of power law exponent using conjugate prior.
+
+    For small samples (n < 100), MLE estimates can be unreliable. This
+    function uses a weakly informative prior based on theoretical expectations
+    (percolation theory τ ≈ 2.05, global estimate τ ≈ 2.14) to provide
+    more stable estimates with proper uncertainty quantification.
+
+    The likelihood for power law data is:
+        L(α | x) ∝ ∏ (α-1) * xmin^(α-1) * x_i^(-α)
+
+    With a Normal prior on α:
+        π(α) ~ N(prior_mean, prior_sd²)
+
+    Parameters
+    ----------
+    data : array-like
+        Observed lake areas
+    xmin : float
+        Lower cutoff for power law
+    prior_mean : float
+        Prior mean for α (default 2.1 based on theory)
+    prior_sd : float
+        Prior standard deviation (default 0.3 for weak informativeness)
+    n_samples : int
+        Number of MCMC samples (uses simple Metropolis-Hastings)
+    verbose : bool
+        Print sampling progress
+
+    Returns
+    -------
+    dict
+        Contains:
+        - alpha_posterior_mean : Posterior mean of α
+        - alpha_posterior_median : Posterior median of α
+        - alpha_credible_interval : 95% credible interval (tuple)
+        - alpha_samples : Posterior samples
+        - effective_sample_size : Approximate ESS
+        - prior_influence : Ratio of prior to likelihood influence
+        - method : 'bayesian'
+        - n_tail : Number of observations used
+        - warning : Any warnings about sample size
+    """
+    data = np.asarray(data)
+    tail = data[data >= xmin]
+    n = len(tail)
+
+    result = {
+        'method': 'bayesian',
+        'n_tail': n,
+        'xmin': xmin,
+        'prior_mean': prior_mean,
+        'prior_sd': prior_sd,
+        'warning': None
+    }
+
+    if n < 5:
+        result['warning'] = f"Very small sample (n={n}). Results dominated by prior."
+        result['alpha_posterior_mean'] = prior_mean
+        result['alpha_posterior_median'] = prior_mean
+        result['alpha_credible_interval'] = (prior_mean - 2*prior_sd, prior_mean + 2*prior_sd)
+        result['alpha_samples'] = np.array([prior_mean])
+        result['effective_sample_size'] = 0
+        result['prior_influence'] = 1.0
+        return result
+
+    # Log-likelihood function for power law
+    log_data_sum = np.sum(np.log(tail / xmin))
+
+    def log_likelihood(alpha):
+        if alpha <= 1:
+            return -np.inf
+        return n * np.log(alpha - 1) - alpha * log_data_sum
+
+    def log_prior(alpha):
+        return -0.5 * ((alpha - prior_mean) / prior_sd) ** 2
+
+    def log_posterior(alpha):
+        return log_likelihood(alpha) + log_prior(alpha)
+
+    # MLE as starting point
+    alpha_mle = 1 + n / log_data_sum if log_data_sum > 0 else prior_mean
+
+    # Simple Metropolis-Hastings sampling
+    np.random.seed(RANDOM_SEED)
+    samples = []
+    current_alpha = max(alpha_mle, 1.1)  # Ensure valid starting point
+    proposal_sd = 0.1  # Proposal standard deviation
+
+    n_accept = 0
+    for i in range(n_samples + 1000):  # Include burn-in
+        # Propose new alpha
+        proposed_alpha = current_alpha + np.random.normal(0, proposal_sd)
+
+        if proposed_alpha > 1:  # Valid alpha must be > 1
+            # Accept/reject
+            log_ratio = log_posterior(proposed_alpha) - log_posterior(current_alpha)
+            if np.log(np.random.random()) < log_ratio:
+                current_alpha = proposed_alpha
+                if i >= 1000:  # After burn-in
+                    n_accept += 1
+
+        if i >= 1000:  # After burn-in
+            samples.append(current_alpha)
+
+    samples = np.array(samples)
+
+    # Compute posterior statistics
+    result['alpha_posterior_mean'] = np.mean(samples)
+    result['alpha_posterior_median'] = np.median(samples)
+    result['alpha_credible_interval'] = (np.percentile(samples, 2.5),
+                                          np.percentile(samples, 97.5))
+    result['alpha_samples'] = samples
+    result['acceptance_rate'] = n_accept / n_samples
+
+    # Estimate effective sample size (simple approximation)
+    # Using lag-1 autocorrelation
+    if len(samples) > 10:
+        lag1_corr = np.corrcoef(samples[:-1], samples[1:])[0, 1]
+        if np.isfinite(lag1_corr) and lag1_corr < 1:
+            result['effective_sample_size'] = int(len(samples) * (1 - lag1_corr) / (1 + lag1_corr))
+        else:
+            result['effective_sample_size'] = len(samples)
+    else:
+        result['effective_sample_size'] = len(samples)
+
+    # Estimate prior influence (shrinkage toward prior)
+    if alpha_mle > 1:
+        posterior_mean = result['alpha_posterior_mean']
+        # How much did the posterior move from MLE toward prior?
+        shrinkage = abs(posterior_mean - alpha_mle) / abs(prior_mean - alpha_mle) if prior_mean != alpha_mle else 0
+        result['prior_influence'] = min(shrinkage, 1.0)
+    else:
+        result['prior_influence'] = 1.0
+
+    # Add warning for small samples
+    if n < 30:
+        result['warning'] = f"Small sample (n={n}). Posterior influenced by prior (shrinkage={result['prior_influence']:.1%})."
+    elif n < 100:
+        result['warning'] = f"Moderate sample (n={n}). Some prior influence ({result['prior_influence']:.1%} shrinkage)."
+
+    if verbose:
+        print(f"  Bayesian power law: α = {result['alpha_posterior_mean']:.3f} "
+              f"[{result['alpha_credible_interval'][0]:.3f}, {result['alpha_credible_interval'][1]:.3f}]")
+        print(f"  n = {n}, acceptance rate = {result['acceptance_rate']:.1%}")
+        if result['warning']:
+            print(f"  Warning: {result['warning']}")
+
+    return result
+
+
+def adaptive_powerlaw_estimate(data, xmin, min_n_for_mle=100, verbose=False):
+    """
+    Adaptively choose between MLE and Bayesian estimation based on sample size.
+
+    For large samples (n >= min_n_for_mle): Use standard MLE with bootstrap CI
+    For small samples (n < min_n_for_mle): Use Bayesian with informative prior
+
+    Parameters
+    ----------
+    data : array-like
+        Observed lake areas
+    xmin : float
+        Lower cutoff for power law
+    min_n_for_mle : int
+        Minimum sample size for reliable MLE (default 100)
+    verbose : bool
+        Print method selection and results
+
+    Returns
+    -------
+    dict
+        Results with 'method' key indicating which approach was used
+    """
+    data = np.asarray(data)
+    tail = data[data >= xmin]
+    n = len(tail)
+
+    if verbose:
+        print(f"  Sample size: n = {n} (x_min = {xmin:.4f})")
+
+    if n >= min_n_for_mle:
+        # Use MLE for large samples
+        if verbose:
+            print(f"  Using MLE (n >= {min_n_for_mle})")
+
+        alpha = estimate_alpha_mle(data, xmin)
+        uncertainty = estimate_alpha_uncertainty(data, xmin, alpha, n_bootstrap=1000)
+
+        return {
+            'method': 'MLE',
+            'alpha': alpha,
+            'alpha_se': uncertainty['se'],
+            'alpha_ci': (uncertainty['ci_lower'], uncertainty['ci_upper']),
+            'n_tail': n,
+            'xmin': xmin,
+            'warning': None
+        }
+    else:
+        # Use Bayesian for small samples
+        if verbose:
+            print(f"  Using Bayesian estimation (n < {min_n_for_mle})")
+
+        bayes_result = bayesian_powerlaw_estimate(data, xmin, verbose=verbose)
+
+        return {
+            'method': 'Bayesian',
+            'alpha': bayes_result['alpha_posterior_mean'],
+            'alpha_median': bayes_result['alpha_posterior_median'],
+            'alpha_se': np.std(bayes_result['alpha_samples']),
+            'alpha_ci': bayes_result['alpha_credible_interval'],
+            'n_tail': n,
+            'xmin': xmin,
+            'prior_influence': bayes_result['prior_influence'],
+            'warning': bayes_result['warning']
+        }
+
+
+def compute_sample_size_power(n, alpha_true=2.1, alpha_diff=0.1, xmin=0.1):
+    """
+    Estimate statistical power to detect departure from theoretical alpha.
+
+    Useful for understanding whether small samples can meaningfully test
+    hypotheses about power law exponents.
+
+    Parameters
+    ----------
+    n : int
+        Sample size in power law tail
+    alpha_true : float
+        True alpha value
+    alpha_diff : float
+        Minimum detectable difference
+    xmin : float
+        Lower cutoff
+
+    Returns
+    -------
+    dict
+        Power analysis results
+    """
+    # MLE standard error approximation: SE(α) ≈ (α-1) / √n
+    se_alpha = (alpha_true - 1) / np.sqrt(n)
+
+    # Power to detect alpha_diff at α = 0.05
+    z_crit = 1.96
+    z_power = (alpha_diff / se_alpha) - z_crit
+
+    # Convert to power (probability)
+    from scipy.stats import norm
+    power = norm.cdf(z_power)
+
+    # Minimum detectable effect at 80% power
+    mde_80 = (z_crit + 0.84) * se_alpha
+
+    return {
+        'n': n,
+        'se_alpha': se_alpha,
+        'power_to_detect': power,
+        'target_difference': alpha_diff,
+        'mde_80_power': mde_80,
+        'ci_width_95': 2 * z_crit * se_alpha,
+        'recommendation': 'adequate' if power >= 0.8 else 'underpowered' if power >= 0.5 else 'severely_underpowered'
+    }
+
+
+# ============================================================================
 # X_MIN SELECTION
 # ============================================================================
 

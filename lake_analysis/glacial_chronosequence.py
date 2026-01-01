@@ -1371,12 +1371,17 @@ def create_mutually_exclusive_zones(boundaries, verbose=True):
 # POWER LAW ANALYSIS BY GLACIAL ZONE
 # ============================================================================
 
-def power_law_by_glacial_zone(lake_gdf, xmin_threshold=0.024, verbose=True):
+def power_law_by_glacial_zone(lake_gdf, xmin_threshold=0.024, use_bayesian=True,
+                               min_n_for_mle=100, verbose=True):
     """
     Fit power law to lake size distribution within each glacial zone.
 
     Tests whether the power law exponent (alpha) differs by glacial stage,
     which would indicate different lake-forming/draining processes.
+
+    For smaller glacial zones (Illinoian, Driftless), this function uses
+    Bayesian estimation with an informative prior to provide stable estimates
+    with proper uncertainty quantification.
 
     Parameters
     ----------
@@ -1384,62 +1389,103 @@ def power_law_by_glacial_zone(lake_gdf, xmin_threshold=0.024, verbose=True):
         Lakes with glacial_stage column
     xmin_threshold : float
         Minimum lake area for power law fitting (default 0.024 km²)
+    use_bayesian : bool
+        If True, use Bayesian estimation for small samples (n < min_n_for_mle)
+    min_n_for_mle : int
+        Minimum sample size for reliable MLE (default 100)
     verbose : bool
         Print results
 
     Returns
     -------
     DataFrame
-        Power law parameters by glacial zone
+        Power law parameters by glacial zone including:
+        - estimation_method: 'MLE' or 'Bayesian'
+        - prior_influence: For Bayesian, how much the prior affected the result
+        - sample_size_warning: Recommendation about sample adequacy
     """
     from scipy import stats
+
+    # Import adaptive estimation from powerlaw_analysis
+    try:
+        from .powerlaw_analysis import (
+            adaptive_powerlaw_estimate, bayesian_powerlaw_estimate,
+            compute_sample_size_power
+        )
+    except ImportError:
+        from powerlaw_analysis import (
+            adaptive_powerlaw_estimate, bayesian_powerlaw_estimate,
+            compute_sample_size_power
+        )
 
     if verbose:
         print("\n" + "=" * 60)
         print("POWER LAW ANALYSIS BY GLACIAL ZONE")
+        print("(Adaptive: Bayesian for small samples, MLE for large)")
         print("=" * 60)
 
     area_col = COLS.get('area', 'AREASQKM')
     results = []
 
     stages = lake_gdf['glacial_stage'].unique()
+    n_stages = len(stages)
 
-    for stage in stages:
+    for i, stage in enumerate(stages):
+        if verbose:
+            print(f"\n[{i+1}/{n_stages}] Processing {stage}...")
+
         stage_lakes = lake_gdf[lake_gdf['glacial_stage'] == stage]
         areas = stage_lakes[area_col].dropna().values
 
         # Filter to lakes above threshold
         areas_above = areas[areas >= xmin_threshold]
+        n = len(areas_above)
 
-        if len(areas_above) < 30:
+        if n < 10:
             if verbose:
-                print(f"\n{stage}: Insufficient data (n={len(areas_above)})")
+                print(f"  ⚠ Insufficient data (n={n})")
             results.append({
                 'glacial_stage': stage,
                 'n_total': len(areas),
-                'n_above_xmin': len(areas_above),
+                'n_above_xmin': n,
                 'alpha': np.nan,
                 'alpha_se': np.nan,
+                'alpha_ci_lower': np.nan,
+                'alpha_ci_upper': np.nan,
                 'xmin': xmin_threshold,
-                'warning': 'Insufficient data'
+                'estimation_method': 'None',
+                'prior_influence': np.nan,
+                'sample_size_warning': 'Insufficient data (n < 10)',
+                'power_analysis': 'N/A'
             })
             continue
 
-        # MLE estimate of alpha for power law: P(x) ~ x^(-alpha)
-        # For continuous power law above xmin:
-        # alpha_mle = 1 + n / sum(log(x/xmin))
-        log_ratios = np.log(areas_above / xmin_threshold)
-        n = len(areas_above)
-        alpha_mle = 1 + n / np.sum(log_ratios)
-
-        # Standard error: SE = (alpha - 1) / sqrt(n)
-        alpha_se = (alpha_mle - 1) / np.sqrt(n)
+        # Use adaptive estimation (Bayesian for small n, MLE for large n)
+        if use_bayesian:
+            fit_result = adaptive_powerlaw_estimate(
+                areas, xmin_threshold,
+                min_n_for_mle=min_n_for_mle,
+                verbose=False
+            )
+        else:
+            # Force MLE even for small samples
+            log_ratios = np.log(areas_above / xmin_threshold)
+            alpha_mle = 1 + n / np.sum(log_ratios)
+            alpha_se = (alpha_mle - 1) / np.sqrt(n)
+            fit_result = {
+                'method': 'MLE',
+                'alpha': alpha_mle,
+                'alpha_se': alpha_se,
+                'alpha_ci': (alpha_mle - 1.96*alpha_se, alpha_mle + 1.96*alpha_se),
+                'n_tail': n,
+                'warning': None
+            }
 
         # KS statistic for goodness of fit
-        # Compare empirical CDF to theoretical power law
+        alpha = fit_result['alpha']
         sorted_areas = np.sort(areas_above)
         empirical_cdf = np.arange(1, n + 1) / n
-        theoretical_cdf = 1 - (xmin_threshold / sorted_areas) ** (alpha_mle - 1)
+        theoretical_cdf = 1 - (xmin_threshold / sorted_areas) ** (alpha - 1)
         ks_stat = np.max(np.abs(empirical_cdf - theoretical_cdf))
 
         # Get age for this stage
@@ -1448,27 +1494,51 @@ def power_law_by_glacial_zone(lake_gdf, xmin_threshold=0.024, verbose=True):
         if isinstance(age_ka, tuple):
             age_ka = (age_ka[0] + age_ka[1]) / 2
 
-        results.append({
+        # Power analysis: can we detect meaningful differences?
+        power_result = compute_sample_size_power(n, alpha_true=2.1, alpha_diff=0.1)
+
+        result_row = {
             'glacial_stage': stage,
             'n_total': len(areas),
             'n_above_xmin': n,
-            'alpha': alpha_mle,
-            'alpha_se': alpha_se,
+            'alpha': fit_result['alpha'],
+            'alpha_se': fit_result.get('alpha_se', np.nan),
+            'alpha_ci_lower': fit_result['alpha_ci'][0] if fit_result.get('alpha_ci') else np.nan,
+            'alpha_ci_upper': fit_result['alpha_ci'][1] if fit_result.get('alpha_ci') else np.nan,
             'xmin': xmin_threshold,
             'ks_statistic': ks_stat,
             'age_ka': age_ka,
             'mean_area_km2': np.mean(areas_above),
             'median_area_km2': np.median(areas_above),
-        })
+            'estimation_method': fit_result['method'],
+            'prior_influence': fit_result.get('prior_influence', 0.0),
+            'sample_size_warning': fit_result.get('warning', 'None'),
+            'power_analysis': power_result['recommendation'],
+            'mde_80_power': power_result['mde_80_power'],
+        }
+        results.append(result_row)
 
         if verbose:
-            print(f"\n{stage}:")
+            method_str = fit_result['method']
+            if method_str == 'Bayesian':
+                method_str += f" (prior influence: {fit_result.get('prior_influence', 0):.1%})"
+
             print(f"  n = {n:,} lakes above x_min = {xmin_threshold} km²")
-            print(f"  α = {alpha_mle:.3f} ± {alpha_se:.3f}")
+            print(f"  Method: {method_str}")
+            print(f"  α = {fit_result['alpha']:.3f} [{fit_result['alpha_ci'][0]:.3f}, {fit_result['alpha_ci'][1]:.3f}]")
             print(f"  KS statistic = {ks_stat:.4f}")
+
             # Compare to percolation theory prediction
-            diff = alpha_mle - 2.05
+            diff = fit_result['alpha'] - 2.05
             print(f"  Deviation from τ=2.05: {diff:+.3f}")
+
+            # Sample size adequacy
+            if power_result['recommendation'] == 'adequate':
+                print(f"  ✓ Sample adequate to detect Δα = 0.1")
+            elif power_result['recommendation'] == 'underpowered':
+                print(f"  ⚠ Underpowered: can only detect Δα ≥ {power_result['mde_80_power']:.2f}")
+            else:
+                print(f"  ⚠ Severely underpowered: MDE = {power_result['mde_80_power']:.2f}")
 
     result_df = pd.DataFrame(results)
 
@@ -1476,10 +1546,16 @@ def power_law_by_glacial_zone(lake_gdf, xmin_threshold=0.024, verbose=True):
     if verbose and len(result_df.dropna(subset=['alpha', 'age_ka'])) >= 3:
         valid = result_df.dropna(subset=['alpha', 'age_ka'])
         corr, p_val = stats.pearsonr(valid['age_ka'], valid['alpha'])
-        print(f"\nTrend: α vs age")
+        print(f"\n" + "=" * 60)
+        print("TREND ANALYSIS: α vs Landscape Age")
+        print("=" * 60)
         print(f"  Pearson r = {corr:.3f}, p = {p_val:.4f}")
         if corr > 0 and p_val < 0.1:
-            print(f"  → α increases with age (large lakes removed over time)")
+            print(f"  → α increases with age (large lakes preferentially drained)")
+        elif corr < 0 and p_val < 0.1:
+            print(f"  → α decreases with age (small lakes preferentially drained)")
+        else:
+            print(f"  → No significant trend detected")
 
     return result_df
 

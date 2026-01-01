@@ -278,7 +278,14 @@ try:
         plot_elevation_histogram_by_glacial_stage,
         plot_davis_hypothesis_test,
         plot_glacial_extent_map,
-        plot_glacial_chronosequence_summary
+        plot_glacial_chronosequence_summary,
+        # Enhanced glacial visualizations
+        plot_normalized_density_with_glacial_overlay,
+        plot_glacial_powerlaw_comparison,
+        plot_glacial_lake_size_histograms,
+        plot_glacial_xmin_sensitivity,
+        plot_glacial_geographic_lakes,
+        plot_glacial_comprehensive_summary
     )
 except ImportError:
     from config import (
@@ -342,7 +349,14 @@ except ImportError:
         plot_elevation_histogram_by_glacial_stage,
         plot_davis_hypothesis_test,
         plot_glacial_extent_map,
-        plot_glacial_chronosequence_summary
+        plot_glacial_chronosequence_summary,
+        # Enhanced glacial visualizations
+        plot_normalized_density_with_glacial_overlay,
+        plot_glacial_powerlaw_comparison,
+        plot_glacial_lake_size_histograms,
+        plot_glacial_xmin_sensitivity,
+        plot_glacial_geographic_lakes,
+        plot_glacial_comprehensive_summary
     )
 
 
@@ -1404,6 +1418,91 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                 except Exception as e:
                     print(f"    Warning: Could not create geographic map: {e}")
 
+            # === ENHANCED GLACIAL VISUALIZATIONS ===
+            print("\n  Generating enhanced glacial visualizations...")
+
+            # Power law comparison across glacial stages
+            if results.get('lake_gdf') is not None:
+                try:
+                    # Use lower threshold (0.01 km²) for more data
+                    fig, axes = plot_glacial_powerlaw_comparison(
+                        results['lake_gdf'],
+                        min_area=0.01,
+                        save_path=str(glacial_output / 'glacial_powerlaw_comparison.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Power law comparison saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create power law comparison: {e}")
+
+                # Lake size distributions by glacial stage
+                try:
+                    fig, axes = plot_glacial_lake_size_histograms(
+                        results['lake_gdf'],
+                        min_area=0.001,  # Lower threshold for comprehensive view
+                        save_path=str(glacial_output / 'glacial_size_distributions.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Size distributions saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create size distributions: {e}")
+
+                # x_min sensitivity by glacial zone
+                try:
+                    fig, axes = plot_glacial_xmin_sensitivity(
+                        results['lake_gdf'],
+                        save_path=str(glacial_output / 'glacial_xmin_sensitivity.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    x_min sensitivity saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create x_min sensitivity: {e}")
+
+                # Geographic distribution of lakes by glacial stage
+                try:
+                    fig, ax = plot_glacial_geographic_lakes(
+                        results['lake_gdf'],
+                        boundaries=results.get('boundaries'),
+                        save_path=str(glacial_output / 'glacial_lake_geography.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Geographic distribution saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create geographic distribution: {e}")
+
+                # Comprehensive 6-panel summary
+                try:
+                    fig, axes = plot_glacial_comprehensive_summary(
+                        results,
+                        lake_gdf=results['lake_gdf'],
+                        save_path=str(glacial_output / 'glacial_comprehensive_summary.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Comprehensive summary saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create comprehensive summary: {e}")
+
+            # Normalized density with glacial overlay
+            # (requires elevation analysis results - check if available)
+            elev_results = results.get('elevation_by_stage')
+            if elev_results is not None and results.get('lake_gdf') is not None:
+                try:
+                    fig, axes = plot_normalized_density_with_glacial_overlay(
+                        elev_results,
+                        results['lake_gdf'],
+                        save_path=str(glacial_output / 'normalized_density_glacial_overlay.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Normalized density with glacial overlay saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create glacial overlay plot: {e}")
+
         # Print summary
         print("\n[SUCCESS] Glacial chronosequence analysis complete!")
         davis_results = results.get('davis_test', {})
@@ -1427,7 +1526,7 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
 # FULL ANALYSIS PIPELINE
 # ============================================================================
 
-def run_full_analysis(data_source='conus', include_xmin_by_elevation=True, include_glacial_analysis=False):
+def run_full_analysis(data_source='conus', include_xmin_by_elevation=True, include_glacial_analysis=True):
     """
     Run complete analysis pipeline for all hypotheses.
 
@@ -1441,8 +1540,10 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True, inclu
     include_xmin_by_elevation : bool
         If True, run the comprehensive x_min sensitivity by elevation analysis
     include_glacial_analysis : bool
-        If True, run glacial chronosequence analysis (Davis's hypothesis).
+        If True (default), run glacial chronosequence analysis (Davis's hypothesis).
         Requires glacial boundary shapefiles configured in config.py.
+        Generates comprehensive visualizations including power law comparisons,
+        size distributions, and x_min sensitivity analyses by glacial stage.
 
     Returns
     -------

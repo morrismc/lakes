@@ -4570,6 +4570,905 @@ def plot_power_law_by_glacial_zone(power_law_results, figsize=(14, 10), save_pat
     return fig, axes
 
 
+def plot_normalized_density_with_glacial_overlay(density_df, lake_gdf, elev_col='Elevation',
+                                                   area_col='AreaSqKm', elev_bins=None,
+                                                   figsize=(14, 8), save_path=None):
+    """
+    Create bar chart of normalized lake density with glacial lake fraction overlay.
+
+    Shows lake density by elevation with a line overlay indicating what fraction
+    of lakes in each bin are within glaciated terrain.
+
+    Parameters
+    ----------
+    density_df : DataFrame
+        Normalized density results with columns: elev_bin_mid, normalized_density
+    lake_gdf : GeoDataFrame
+        Lake data with glacial_stage classification
+    elev_col : str
+        Elevation column name
+    area_col : str
+        Lake area column name
+    elev_bins : array-like, optional
+        Elevation bin edges
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, (ax1, ax2))
+    """
+    setup_plot_style()
+    fig, ax1 = plt.subplots(figsize=figsize)
+
+    if elev_bins is None:
+        elev_bins = np.arange(0, 4500, 250)
+
+    # Get elevation midpoints and densities
+    if density_df is not None and len(density_df) > 0:
+        if 'elev_bin_mid' in density_df.columns:
+            x_vals = density_df['elev_bin_mid'].values
+        else:
+            x_vals = density_df.index.values
+
+        if 'normalized_density' in density_df.columns:
+            densities = density_df['normalized_density'].values
+        elif 'density' in density_df.columns:
+            densities = density_df['density'].values
+        else:
+            densities = density_df.iloc[:, 0].values
+
+        # Bar chart of normalized density
+        bars = ax1.bar(x_vals, densities, width=200, color='steelblue',
+                      alpha=0.7, edgecolor='navy', linewidth=1,
+                      label='Normalized Lake Density')
+
+        ax1.set_xlabel('Elevation (m)', fontsize=14)
+        ax1.set_ylabel('Normalized Lake Density', fontsize=14, color='steelblue')
+        ax1.tick_params(axis='y', labelcolor='steelblue')
+
+    # Create second y-axis for glacial fraction
+    ax2 = ax1.twinx()
+
+    if lake_gdf is not None and 'glacial_stage' in lake_gdf.columns:
+        # Compute glacial fraction by elevation bin
+        glacial_fractions = []
+        glacial_counts = []
+        total_counts = []
+        bin_mids = []
+
+        for i in range(len(elev_bins) - 1):
+            low, high = elev_bins[i], elev_bins[i+1]
+            mid = (low + high) / 2
+            bin_mids.append(mid)
+
+            # Count lakes in this bin
+            if elev_col in lake_gdf.columns:
+                mask = (lake_gdf[elev_col] >= low) & (lake_gdf[elev_col] < high)
+                bin_lakes = lake_gdf[mask]
+                total = len(bin_lakes)
+                total_counts.append(total)
+
+                if total > 0:
+                    # Count glaciated lakes (not Driftless/never glaciated)
+                    glaciated_mask = ~bin_lakes['glacial_stage'].str.lower().str.contains(
+                        'driftless|never|unglaciated', na=False)
+                    n_glaciated = glaciated_mask.sum()
+                    glacial_counts.append(n_glaciated)
+                    glacial_fractions.append(n_glaciated / total)
+                else:
+                    glacial_counts.append(0)
+                    glacial_fractions.append(np.nan)
+            else:
+                glacial_fractions.append(np.nan)
+                glacial_counts.append(0)
+                total_counts.append(0)
+
+        # Plot glacial fraction line
+        valid_mask = ~np.isnan(glacial_fractions)
+        if np.any(valid_mask):
+            ax2.plot(np.array(bin_mids)[valid_mask],
+                    np.array(glacial_fractions)[valid_mask] * 100,
+                    'o-', color='darkred', linewidth=2.5, markersize=8,
+                    label='% Lakes in Glaciated Terrain')
+
+            ax2.set_ylabel('% Lakes in Glaciated Terrain', fontsize=14, color='darkred')
+            ax2.tick_params(axis='y', labelcolor='darkred')
+            ax2.set_ylim(0, 105)
+
+            # Add annotation for key insight
+            max_idx = np.nanargmax(glacial_fractions)
+            ax2.annotate(f'Peak: {glacial_fractions[max_idx]*100:.1f}%\nat {bin_mids[max_idx]:.0f}m',
+                        xy=(bin_mids[max_idx], glacial_fractions[max_idx]*100),
+                        xytext=(20, 20), textcoords='offset points',
+                        fontsize=10, ha='left',
+                        arrowprops=dict(arrowstyle='->', color='darkred'),
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    ax1.set_title('Normalized Lake Density with Glacial Origin Overlay',
+                 fontsize=16, fontweight='bold')
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # Combined legend
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=10)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, (ax1, ax2)
+
+
+def plot_glacial_powerlaw_comparison(lake_gdf, area_col='AreaSqKm',
+                                      min_area=0.01, figsize=(16, 12),
+                                      save_path=None):
+    """
+    Create comprehensive power law comparison across glacial stages.
+
+    Four-panel figure showing:
+    - A) Rank-size plots (log-log) for each glacial stage
+    - B) Complementary CDF comparison
+    - C) Probability density functions
+    - D) Alpha comparison bar chart with confidence intervals
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lake data with 'glacial_stage' column
+    area_col : str
+        Lake area column
+    min_area : float
+        Minimum lake area to include (lower threshold for more data)
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    if lake_gdf is None or 'glacial_stage' not in lake_gdf.columns:
+        for ax in axes.flat:
+            ax.text(0.5, 0.5, 'No glacial classification available',
+                   ha='center', va='center', transform=ax.transAxes)
+        return fig, axes
+
+    # Get unique stages and assign colors
+    stages = lake_gdf['glacial_stage'].dropna().unique()
+    colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(stages)))
+    stage_colors = dict(zip(stages, colors))
+
+    # Filter by minimum area
+    lake_gdf = lake_gdf[lake_gdf[area_col] >= min_area].copy()
+
+    # Panel A: Rank-size plots
+    ax1 = axes[0, 0]
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_data[area_col].values
+        areas = areas[areas > 0]
+        if len(areas) > 10:
+            sorted_areas = np.sort(areas)[::-1]
+            ranks = np.arange(1, len(sorted_areas) + 1)
+            ax1.loglog(ranks, sorted_areas, '-', linewidth=2,
+                      color=stage_colors[stage], label=f'{stage} (n={len(areas):,})')
+
+    ax1.set_xlabel('Rank', fontsize=12)
+    ax1.set_ylabel('Lake Area (km²)', fontsize=12)
+    ax1.set_title('A) Rank-Size Distribution by Glacial Stage', fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=9)
+    ax1.grid(True, alpha=0.3, which='both')
+
+    # Panel B: Complementary CDF
+    ax2 = axes[0, 1]
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_data[area_col].values
+        areas = areas[areas > 0]
+        if len(areas) > 10:
+            sorted_areas = np.sort(areas)
+            ccdf = 1 - np.arange(1, len(sorted_areas) + 1) / len(sorted_areas)
+            ax2.loglog(sorted_areas, ccdf, '-', linewidth=2,
+                      color=stage_colors[stage], label=stage)
+
+    ax2.set_xlabel('Lake Area (km²)', fontsize=12)
+    ax2.set_ylabel('P(X > x)', fontsize=12)
+    ax2.set_title('B) Complementary CDF by Glacial Stage', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=9)
+    ax2.grid(True, alpha=0.3, which='both')
+
+    # Panel C: Probability density (histogram)
+    ax3 = axes[1, 0]
+    area_bins = np.logspace(np.log10(min_area), np.log10(lake_gdf[area_col].max()), 40)
+
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_data[area_col].values
+        areas = areas[areas > 0]
+        if len(areas) > 10:
+            counts, _ = np.histogram(areas, bins=area_bins)
+            bin_widths = np.diff(area_bins)
+            bin_centers = (area_bins[:-1] + area_bins[1:]) / 2
+            # Normalize to get PDF
+            pdf = counts / (len(areas) * bin_widths)
+            ax3.loglog(bin_centers, pdf, 'o-', markersize=4, linewidth=1.5,
+                      color=stage_colors[stage], label=stage)
+
+    ax3.set_xlabel('Lake Area (km²)', fontsize=12)
+    ax3.set_ylabel('Probability Density', fontsize=12)
+    ax3.set_title('C) Size Distribution (PDF) by Glacial Stage', fontsize=14, fontweight='bold')
+    ax3.legend(loc='upper right', fontsize=9)
+    ax3.grid(True, alpha=0.3, which='both')
+
+    # Panel D: Alpha comparison (simplified MLE estimate)
+    ax4 = axes[1, 1]
+    stage_names = []
+    alphas = []
+    alpha_errors = []
+
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_data[area_col].values
+        areas = areas[areas >= min_area]
+        if len(areas) > 30:
+            # Simple MLE estimate: alpha = 1 + n / sum(log(x/xmin))
+            xmin = min_area
+            log_ratios = np.log(areas / xmin)
+            n = len(areas)
+            alpha = 1 + n / np.sum(log_ratios)
+            # Standard error approximation
+            se = (alpha - 1) / np.sqrt(n)
+            stage_names.append(stage)
+            alphas.append(alpha)
+            alpha_errors.append(se * 1.96)  # 95% CI
+
+    if len(stage_names) > 0:
+        x_pos = np.arange(len(stage_names))
+        colors_bar = [stage_colors[s] for s in stage_names]
+        ax4.bar(x_pos, alphas, yerr=alpha_errors, capsize=5,
+               color=colors_bar, edgecolor='black', linewidth=1.5)
+
+        # Reference lines
+        ax4.axhline(2.05, color='red', linestyle='--', linewidth=2,
+                   label='Percolation (τ=2.05)')
+        ax4.axhline(2.14, color='green', linestyle=':', linewidth=2,
+                   label='Global (τ=2.14)')
+
+        ax4.set_xticks(x_pos)
+        ax4.set_xticklabels(stage_names, rotation=30, ha='right', fontsize=10)
+        ax4.set_ylabel('Power Law Exponent (α)', fontsize=12)
+        ax4.set_title(f'D) Power Law Exponent (x_min={min_area} km²)',
+                     fontsize=14, fontweight='bold')
+        ax4.legend(loc='best', fontsize=9)
+        ax4.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_glacial_lake_size_histograms(lake_gdf, area_col='AreaSqKm',
+                                        min_area=0.001, figsize=(16, 10),
+                                        save_path=None):
+    """
+    Create stacked histograms showing lake size distribution by glacial stage.
+
+    Shows raw counts and cumulative area contribution by size class.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lake data with 'glacial_stage' column
+    area_col : str
+        Lake area column
+    min_area : float
+        Minimum area threshold (lower = more lakes)
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    if lake_gdf is None or 'glacial_stage' not in lake_gdf.columns:
+        return fig, axes
+
+    stages = lake_gdf['glacial_stage'].dropna().unique()
+    colors = plt.cm.Set2(np.linspace(0, 1, len(stages)))
+    stage_colors = dict(zip(stages, colors))
+
+    # Filter by minimum area
+    lake_gdf = lake_gdf[lake_gdf[area_col] >= min_area].copy()
+
+    # Define size classes
+    size_classes = [
+        (0.001, 0.01, 'Tiny\n(<0.01 km²)'),
+        (0.01, 0.1, 'Small\n(0.01-0.1 km²)'),
+        (0.1, 1.0, 'Medium\n(0.1-1 km²)'),
+        (1.0, 10.0, 'Large\n(1-10 km²)'),
+        (10.0, 100.0, 'Very Large\n(10-100 km²)'),
+        (100.0, 10000.0, 'Massive\n(>100 km²)')
+    ]
+
+    # Panel A: Count by size class (stacked)
+    ax1 = axes[0, 0]
+    x_pos = np.arange(len(size_classes))
+    width = 0.8 / len(stages)
+    bottom = np.zeros(len(size_classes))
+
+    for j, stage in enumerate(stages):
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        counts = []
+        for low, high, _ in size_classes:
+            mask = (stage_data[area_col] >= low) & (stage_data[area_col] < high)
+            counts.append(mask.sum())
+        ax1.bar(x_pos + j*width, counts, width, label=stage,
+               color=stage_colors[stage], edgecolor='black', linewidth=0.5)
+
+    ax1.set_xticks(x_pos + width * (len(stages)-1) / 2)
+    ax1.set_xticklabels([s[2] for s in size_classes], fontsize=9)
+    ax1.set_ylabel('Number of Lakes', fontsize=12)
+    ax1.set_title('A) Lake Counts by Size Class', fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=9)
+    ax1.set_yscale('log')
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Panel B: Proportion by size class
+    ax2 = axes[0, 1]
+    for j, stage in enumerate(stages):
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        total = len(stage_data)
+        if total > 0:
+            proportions = []
+            for low, high, _ in size_classes:
+                mask = (stage_data[area_col] >= low) & (stage_data[area_col] < high)
+                proportions.append(mask.sum() / total * 100)
+            ax2.bar(x_pos + j*width, proportions, width, label=stage,
+                   color=stage_colors[stage], edgecolor='black', linewidth=0.5)
+
+    ax2.set_xticks(x_pos + width * (len(stages)-1) / 2)
+    ax2.set_xticklabels([s[2] for s in size_classes], fontsize=9)
+    ax2.set_ylabel('Percent of Stage (%)', fontsize=12)
+    ax2.set_title('B) Lake Size Distribution (% of each stage)', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=9)
+    ax2.grid(axis='y', alpha=0.3)
+
+    # Panel C: Cumulative area by stage
+    ax3 = axes[1, 0]
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = np.sort(stage_data[area_col].values)[::-1]
+        if len(areas) > 0:
+            cumsum = np.cumsum(areas)
+            pct_cumsum = cumsum / cumsum[-1] * 100
+            ax3.semilogx(areas, pct_cumsum, '-', linewidth=2,
+                        color=stage_colors[stage], label=stage)
+
+    ax3.set_xlabel('Lake Area (km²)', fontsize=12)
+    ax3.set_ylabel('Cumulative % of Total Area', fontsize=12)
+    ax3.set_title('C) Cumulative Area by Lake Size', fontsize=14, fontweight='bold')
+    ax3.legend(loc='lower right', fontsize=9)
+    ax3.grid(True, alpha=0.3)
+    ax3.axhline(50, color='gray', linestyle='--', alpha=0.5)
+    ax3.axhline(90, color='gray', linestyle='--', alpha=0.5)
+
+    # Panel D: Mean and median lake size
+    ax4 = axes[1, 1]
+    stage_names = []
+    means = []
+    medians = []
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        if len(stage_data) > 0:
+            stage_names.append(stage)
+            means.append(stage_data[area_col].mean())
+            medians.append(stage_data[area_col].median())
+
+    if len(stage_names) > 0:
+        x_pos = np.arange(len(stage_names))
+        width = 0.35
+        ax4.bar(x_pos - width/2, means, width, label='Mean',
+               color='steelblue', edgecolor='black')
+        ax4.bar(x_pos + width/2, medians, width, label='Median',
+               color='coral', edgecolor='black')
+        ax4.set_xticks(x_pos)
+        ax4.set_xticklabels(stage_names, rotation=30, ha='right', fontsize=10)
+        ax4.set_ylabel('Lake Area (km²)', fontsize=12)
+        ax4.set_title('D) Mean vs Median Lake Size', fontsize=14, fontweight='bold')
+        ax4.legend(loc='upper right', fontsize=10)
+        ax4.set_yscale('log')
+        ax4.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_glacial_xmin_sensitivity(lake_gdf, area_col='AreaSqKm',
+                                   xmin_range=None, figsize=(16, 10),
+                                   save_path=None):
+    """
+    Analyze x_min sensitivity for power law fits by glacial stage.
+
+    Shows how alpha and goodness-of-fit vary with x_min choice for each stage.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lake data with 'glacial_stage' column
+    area_col : str
+        Lake area column
+    xmin_range : array-like, optional
+        Range of x_min values to test
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    if lake_gdf is None or 'glacial_stage' not in lake_gdf.columns:
+        return fig, axes
+
+    if xmin_range is None:
+        xmin_range = np.logspace(-3, 1, 20)  # 0.001 to 10 km²
+
+    stages = lake_gdf['glacial_stage'].dropna().unique()
+    colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(stages)))
+    stage_colors = dict(zip(stages, colors))
+
+    # Panel A: Alpha vs x_min
+    ax1 = axes[0, 0]
+    optimal_xmins = {}
+
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_data[area_col].values
+        areas = areas[areas > 0]
+
+        alphas = []
+        valid_xmins = []
+        n_tails = []
+
+        for xmin in xmin_range:
+            tail_data = areas[areas >= xmin]
+            if len(tail_data) > 30:
+                log_ratios = np.log(tail_data / xmin)
+                n = len(tail_data)
+                alpha = 1 + n / np.sum(log_ratios)
+                alphas.append(alpha)
+                valid_xmins.append(xmin)
+                n_tails.append(n)
+
+        if len(valid_xmins) > 3:
+            ax1.semilogx(valid_xmins, alphas, 'o-', linewidth=2, markersize=4,
+                        color=stage_colors[stage], label=stage)
+
+    ax1.axhline(2.05, color='red', linestyle='--', linewidth=2, label='τ=2.05')
+    ax1.axhline(2.14, color='green', linestyle=':', linewidth=2, label='τ=2.14')
+    ax1.set_xlabel('x_min (km²)', fontsize=12)
+    ax1.set_ylabel('Power Law Exponent (α)', fontsize=12)
+    ax1.set_title('A) α Sensitivity to x_min', fontsize=14, fontweight='bold')
+    ax1.legend(loc='best', fontsize=9)
+    ax1.grid(True, alpha=0.3)
+
+    # Panel B: Sample size vs x_min
+    ax2 = axes[0, 1]
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_data[area_col].values
+        areas = areas[areas > 0]
+
+        n_above = [np.sum(areas >= xmin) for xmin in xmin_range]
+        ax2.loglog(xmin_range, n_above, 'o-', linewidth=2, markersize=4,
+                  color=stage_colors[stage], label=stage)
+
+    ax2.axhline(100, color='gray', linestyle='--', alpha=0.5, label='n=100')
+    ax2.axhline(30, color='gray', linestyle=':', alpha=0.5, label='n=30')
+    ax2.set_xlabel('x_min (km²)', fontsize=12)
+    ax2.set_ylabel('Sample Size (n ≥ x_min)', fontsize=12)
+    ax2.set_title('B) Sample Size vs x_min', fontsize=14, fontweight='bold')
+    ax2.legend(loc='best', fontsize=9)
+    ax2.grid(True, alpha=0.3, which='both')
+
+    # Panel C: Alpha stability (standard deviation in sliding window)
+    ax3 = axes[1, 0]
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_data[area_col].values
+        areas = areas[areas > 0]
+
+        alphas = []
+        valid_xmins = []
+
+        for xmin in xmin_range:
+            tail_data = areas[areas >= xmin]
+            if len(tail_data) > 30:
+                log_ratios = np.log(tail_data / xmin)
+                n = len(tail_data)
+                alpha = 1 + n / np.sum(log_ratios)
+                alphas.append(alpha)
+                valid_xmins.append(xmin)
+
+        if len(alphas) > 5:
+            # Rolling standard deviation
+            window = 3
+            rolling_std = []
+            for i in range(len(alphas) - window + 1):
+                rolling_std.append(np.std(alphas[i:i+window]))
+            ax3.semilogx(valid_xmins[window-1:], rolling_std, 'o-',
+                        linewidth=2, markersize=4,
+                        color=stage_colors[stage], label=stage)
+
+    ax3.set_xlabel('x_min (km²)', fontsize=12)
+    ax3.set_ylabel('α Variability (rolling σ)', fontsize=12)
+    ax3.set_title('C) α Stability (lower = more stable)', fontsize=14, fontweight='bold')
+    ax3.legend(loc='best', fontsize=9)
+    ax3.grid(True, alpha=0.3)
+
+    # Panel D: Recommended x_min summary
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+
+    # Calculate recommended x_min for each stage (where alpha stabilizes)
+    summary_text = "Recommended x_min by Stage:\n" + "=" * 30 + "\n\n"
+
+    for stage in stages:
+        stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_data[area_col].values
+        areas = areas[areas > 0]
+        n_total = len(areas)
+
+        # Find x_min where we have at least 100 samples
+        recommended = None
+        for xmin in xmin_range:
+            if np.sum(areas >= xmin) >= 100:
+                recommended = xmin
+                break
+
+        if recommended:
+            tail_n = np.sum(areas >= recommended)
+            log_ratios = np.log(areas[areas >= recommended] / recommended)
+            alpha = 1 + tail_n / np.sum(log_ratios)
+            summary_text += f"{stage}:\n"
+            summary_text += f"  x_min = {recommended:.3f} km²\n"
+            summary_text += f"  α = {alpha:.2f}, n = {tail_n:,}\n\n"
+        else:
+            summary_text += f"{stage}: Insufficient data\n\n"
+
+    ax4.text(0.1, 0.9, summary_text, transform=ax4.transAxes,
+            fontsize=11, verticalalignment='top', family='monospace',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    ax4.set_title('D) Recommended Settings', fontsize=14, fontweight='bold', y=0.98)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_glacial_geographic_lakes(lake_gdf, boundaries=None, figsize=(16, 12),
+                                   save_path=None):
+    """
+    Create geographic visualization of lakes colored by glacial stage.
+
+    Shows lake locations with different colors for each glacial stage,
+    overlaid on glacial boundary outlines.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lake data with geometry and 'glacial_stage' column
+    boundaries : dict, optional
+        Dictionary of glacial boundary GeoDataFrames
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, ax)
+    """
+    setup_plot_style()
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if lake_gdf is None or 'glacial_stage' not in lake_gdf.columns:
+        ax.text(0.5, 0.5, 'No glacial data available', ha='center', va='center',
+               transform=ax.transAxes, fontsize=14)
+        return fig, ax
+
+    stages = lake_gdf['glacial_stage'].dropna().unique()
+
+    # Define colors for stages
+    stage_color_map = {
+        'Wisconsin': '#1f77b4',
+        'Illinoian': '#ff7f0e',
+        'Pre-Illinoian': '#2ca02c',
+        'Driftless': '#d62728',
+        'Alpine (Dalton 18ka)': '#9467bd',
+        'Never Glaciated': '#8c564b',
+    }
+
+    # Plot glacial boundaries first (as outlines)
+    if boundaries:
+        boundary_colors = {
+            'wisconsin': '#1f77b4',
+            'illinoian': '#ff7f0e',
+            'driftless': '#d62728',
+            'dalton_18ka': '#9467bd',
+        }
+        for name, gdf in boundaries.items():
+            if gdf is not None and len(gdf) > 0:
+                color = boundary_colors.get(name, 'gray')
+                gdf.boundary.plot(ax=ax, color=color, linewidth=1.5,
+                                 alpha=0.7, label=f'{name} boundary')
+
+    # Plot lakes by stage
+    for stage in stages:
+        stage_lakes = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        if len(stage_lakes) > 0:
+            # Get color
+            color = stage_color_map.get(stage, 'gray')
+            for key, c in stage_color_map.items():
+                if key.lower() in stage.lower():
+                    color = c
+                    break
+
+            # Plot as points (centroid if polygon)
+            if 'geometry' in stage_lakes.columns:
+                try:
+                    centroids = stage_lakes.geometry.centroid
+                    ax.scatter(centroids.x, centroids.y, s=3, c=color,
+                              alpha=0.6, label=f'{stage} (n={len(stage_lakes):,})')
+                except:
+                    pass
+
+    ax.set_xlabel('Easting (m)', fontsize=12)
+    ax.set_ylabel('Northing (m)', fontsize=12)
+    ax.set_title('Geographic Distribution of Lakes by Glacial Stage',
+                fontsize=16, fontweight='bold')
+    ax.legend(loc='upper left', fontsize=9, markerscale=3)
+    ax.set_aspect('equal')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_glacial_comprehensive_summary(results, lake_gdf=None, figsize=(20, 16),
+                                         save_path=None):
+    """
+    Create comprehensive 6-panel summary of glacial chronosequence analysis.
+
+    Panels:
+    A) Lake density by glacial stage (bar chart)
+    B) Davis's hypothesis test (scatter + regression)
+    C) Power law comparison (rank-size)
+    D) Size distribution by stage
+    E) Elevation distribution by stage
+    F) Summary statistics table
+
+    Parameters
+    ----------
+    results : dict
+        Full glacial analysis results
+    lake_gdf : GeoDataFrame, optional
+        Classified lake data
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.25)
+
+    # Get data
+    density_df = results.get('density_by_stage')
+    davis_test = results.get('davis_test', {})
+    if lake_gdf is None:
+        lake_gdf = results.get('lake_gdf')
+
+    # Panel A: Density by stage
+    ax1 = fig.add_subplot(gs[0, 0])
+    if density_df is not None and len(density_df) > 0:
+        df = density_df.copy()
+        df['sort_age'] = df['age_ka'].fillna(999999)
+        df = df.sort_values('sort_age')
+
+        stages = df['glacial_stage'].values
+        densities = df['density_per_1000km2'].values
+        colors = df['color'].values if 'color' in df.columns else plt.cm.viridis(np.linspace(0.2, 0.8, len(df)))
+
+        bars = ax1.bar(range(len(stages)), densities, color=colors, edgecolor='black', linewidth=1.5)
+
+        for i, (bar, d) in enumerate(zip(bars, densities)):
+            if pd.notna(d):
+                ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                        f'{d:.1f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+
+        ax1.set_xticks(range(len(stages)))
+        ax1.set_xticklabels(stages, rotation=30, ha='right', fontsize=10)
+        ax1.set_ylabel('Lakes per 1,000 km²', fontsize=12)
+        ax1.set_title('A) Lake Density by Glacial Stage', fontsize=14, fontweight='bold')
+        ax1.grid(axis='y', alpha=0.3)
+
+    # Panel B: Davis hypothesis test
+    ax2 = fig.add_subplot(gs[0, 1])
+    ages = np.array(davis_test.get('ages', []))
+    densities_test = np.array(davis_test.get('densities', []))
+
+    if len(ages) > 0 and len(densities_test) > 0:
+        ax2.scatter(ages, densities_test, s=150, c='steelblue', edgecolors='black',
+                   linewidth=2, zorder=5)
+
+        # Regression line
+        slope = davis_test.get('slope')
+        intercept = davis_test.get('intercept')
+        if slope is not None and intercept is not None:
+            x_line = np.linspace(min(ages)*0.9, max(ages)*1.1, 100)
+            y_line = slope * x_line + intercept
+            ax2.plot(x_line, y_line, 'r--', linewidth=2.5)
+
+        r = davis_test.get('correlation', np.nan)
+        p = davis_test.get('p_value', np.nan)
+        ax2.text(0.95, 0.95, f'r = {r:.3f}\np = {p:.4f}',
+                transform=ax2.transAxes, fontsize=12, va='top', ha='right',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='gray'))
+
+        ax2.set_xlabel('Age (ka)', fontsize=12)
+        ax2.set_ylabel('Lake Density', fontsize=12)
+        ax2.set_title("B) Davis's Hypothesis Test", fontsize=14, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+
+    # Panel C: Power law (rank-size)
+    ax3 = fig.add_subplot(gs[1, 0])
+    if lake_gdf is not None and 'glacial_stage' in lake_gdf.columns:
+        stages = lake_gdf['glacial_stage'].dropna().unique()
+        colors = plt.cm.Set1(np.linspace(0, 1, len(stages)))
+
+        for i, stage in enumerate(stages):
+            stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+            area_col = 'AreaSqKm' if 'AreaSqKm' in lake_gdf.columns else lake_gdf.select_dtypes(include=[np.number]).columns[0]
+            areas = stage_data[area_col].values
+            areas = areas[areas > 0.01]  # Lower threshold
+            if len(areas) > 10:
+                sorted_areas = np.sort(areas)[::-1]
+                ranks = np.arange(1, len(sorted_areas) + 1)
+                ax3.loglog(ranks, sorted_areas, '-', linewidth=2,
+                          color=colors[i], label=f'{stage} (n={len(areas):,})')
+
+        ax3.set_xlabel('Rank', fontsize=12)
+        ax3.set_ylabel('Lake Area (km²)', fontsize=12)
+        ax3.set_title('C) Rank-Size Distribution', fontsize=14, fontweight='bold')
+        ax3.legend(loc='upper right', fontsize=9)
+        ax3.grid(True, alpha=0.3, which='both')
+
+    # Panel D: Size distribution (CCDF)
+    ax4 = fig.add_subplot(gs[1, 1])
+    if lake_gdf is not None and 'glacial_stage' in lake_gdf.columns:
+        for i, stage in enumerate(stages):
+            stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
+            area_col = 'AreaSqKm' if 'AreaSqKm' in lake_gdf.columns else lake_gdf.select_dtypes(include=[np.number]).columns[0]
+            areas = stage_data[area_col].values
+            areas = areas[areas > 0.001]
+            if len(areas) > 10:
+                sorted_areas = np.sort(areas)
+                ccdf = 1 - np.arange(1, len(sorted_areas) + 1) / len(sorted_areas)
+                ax4.loglog(sorted_areas, ccdf, '-', linewidth=2,
+                          color=colors[i], label=stage)
+
+        ax4.set_xlabel('Lake Area (km²)', fontsize=12)
+        ax4.set_ylabel('P(X > x)', fontsize=12)
+        ax4.set_title('D) Complementary CDF', fontsize=14, fontweight='bold')
+        ax4.legend(loc='upper right', fontsize=9)
+        ax4.grid(True, alpha=0.3, which='both')
+
+    # Panel E: Elevation distribution
+    ax5 = fig.add_subplot(gs[2, 0])
+    elevation_df = results.get('elevation_by_stage')
+    if elevation_df is not None:
+        for stage in elevation_df['glacial_stage'].unique():
+            stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+            if len(stage_data) > 0:
+                ax5.plot(stage_data['elev_bin_mid'], stage_data['pct_of_stage'],
+                        'o-', linewidth=2, markersize=4, label=stage)
+
+        ax5.set_xlabel('Elevation (m)', fontsize=12)
+        ax5.set_ylabel('Percent of Stage (%)', fontsize=12)
+        ax5.set_title('E) Elevation Distribution by Stage', fontsize=14, fontweight='bold')
+        ax5.legend(loc='upper right', fontsize=9)
+        ax5.grid(True, alpha=0.3)
+
+    # Panel F: Summary table
+    ax6 = fig.add_subplot(gs[2, 1])
+    ax6.axis('off')
+
+    if density_df is not None and len(density_df) > 0:
+        table_data = []
+        headers = ['Stage', 'n Lakes', 'Density', 'Mean (km²)', 'Median (km²)']
+
+        for _, row in density_df.iterrows():
+            # Get median if available
+            median_val = row.get('median_lake_area_km2', '-')
+            if pd.notna(median_val) and median_val != '-':
+                median_str = f"{median_val:.4f}"
+            else:
+                median_str = '-'
+
+            table_data.append([
+                row['glacial_stage'],
+                f"{row['n_lakes']:,}",
+                f"{row['density_per_1000km2']:.1f}" if pd.notna(row['density_per_1000km2']) else '-',
+                f"{row['mean_lake_area_km2']:.4f}" if pd.notna(row['mean_lake_area_km2']) else '-',
+                median_str,
+            ])
+
+        table = ax6.table(cellText=table_data, colLabels=headers,
+                         loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(11)
+        table.scale(1.2, 2.0)
+
+        for i in range(len(headers)):
+            table[(0, i)].set_facecolor('#4472C4')
+            table[(0, i)].set_text_props(color='white', fontweight='bold')
+
+    # Add conclusion
+    supports = davis_test.get('supports_hypothesis')
+    if supports:
+        conclusion = "SUPPORTS Davis's Hypothesis"
+        color = 'green'
+    elif supports is False:
+        conclusion = "Does NOT support Davis's Hypothesis"
+        color = 'red'
+    else:
+        conclusion = "Insufficient data for test"
+        color = 'gray'
+
+    ax6.set_title(f'F) Summary: {conclusion}', fontsize=14, fontweight='bold',
+                 color=color, y=0.95)
+
+    fig.suptitle('Glacial Chronosequence Analysis - Comprehensive Summary',
+                fontsize=18, fontweight='bold', y=1.01)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, [ax1, ax2, ax3, ax4, ax5, ax6]
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
@@ -4607,3 +5506,10 @@ if __name__ == "__main__":
     print("  - plot_glacial_chronosequence_summary()")
     print("  - plot_bimodal_decomposition()")
     print("  - plot_power_law_by_glacial_zone()")
+    print("  # Enhanced glacial visualizations:")
+    print("  - plot_normalized_density_with_glacial_overlay()")
+    print("  - plot_glacial_powerlaw_comparison()")
+    print("  - plot_glacial_lake_size_histograms()")
+    print("  - plot_glacial_xmin_sensitivity()")
+    print("  - plot_glacial_geographic_lakes()")
+    print("  - plot_glacial_comprehensive_summary()")

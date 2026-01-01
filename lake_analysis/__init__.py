@@ -63,7 +63,11 @@ from .visualization import (
 
 from .powerlaw_analysis import (
     full_powerlaw_analysis,
-    fit_powerlaw_by_elevation_bands
+    fit_powerlaw_by_elevation_bands,
+    # Bayesian estimation for small samples
+    bayesian_powerlaw_estimate,
+    adaptive_powerlaw_estimate,
+    compute_sample_size_power
 )
 
 from .main import (
@@ -101,5 +105,12 @@ from .visualization import (
     plot_glacial_extent_map,
     plot_glacial_chronosequence_summary,
     plot_bimodal_decomposition,
-    plot_power_law_by_glacial_zone
+    plot_power_law_by_glacial_zone,
+    # Enhanced glacial visualizations
+    plot_normalized_density_with_glacial_overlay,
+    plot_glacial_powerlaw_comparison,
+    plot_glacial_lake_size_histograms,
+    plot_glacial_xmin_sensitivity,
+    plot_glacial_geographic_lakes,
+    plot_glacial_comprehensive_summary
 )
