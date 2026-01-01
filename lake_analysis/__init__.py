@@ -63,7 +63,11 @@ from .visualization import (
 
 from .powerlaw_analysis import (
     full_powerlaw_analysis,
-    fit_powerlaw_by_elevation_bands
+    fit_powerlaw_by_elevation_bands,
+    # Bayesian estimation for small samples
+    bayesian_powerlaw_estimate,
+    adaptive_powerlaw_estimate,
+    compute_sample_size_power
 )
 
 from .main import (
