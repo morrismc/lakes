@@ -98,6 +98,7 @@ from .visualization import (
     plot_density_by_glacial_stage,
     plot_elevation_histogram_by_glacial_stage,
     plot_davis_hypothesis_test,
+    plot_glacial_extent_map,
     plot_glacial_chronosequence_summary,
     plot_bimodal_decomposition,
     plot_power_law_by_glacial_zone

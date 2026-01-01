@@ -1281,8 +1281,6 @@ def create_mutually_exclusive_zones(boundaries, verbose=True):
     GeoDataFrame
         Unified polygon layer with 'glacial_zone' column
     """
-    from shapely.ops import unary_union
-
     if verbose:
         print("\nCreating mutually exclusive glacial zones...")
 
@@ -1769,7 +1767,6 @@ def validate_glacial_boundaries(boundaries, verbose=True):
 
     # Check 3: Driftless doesn't overlap Wisconsin
     if driftless is not None and wisconsin is not None:
-        from shapely.ops import unary_union
         drift_union = unary_union(driftless.geometry)
         wisc_union = unary_union(wisconsin.geometry)
         overlap = drift_union.intersection(wisc_union)
