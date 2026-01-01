@@ -1869,11 +1869,501 @@ def validate_glacial_boundaries(boundaries, verbose=True):
     return results
 
 
+# ============================================================================
+# DALTON 18KA SPECIFIC ANALYSIS
+# ============================================================================
+
+def run_dalton_18ka_analysis(lake_df, save_results=True, verbose=True):
+    """
+    Run analysis using Dalton 18ka boundary for precise LGM snapshot.
+
+    The Dalton 2020 dataset provides a high-resolution reconstruction
+    of ice sheet extent at exactly 18 ka (Last Glacial Maximum), which
+    provides a more precise temporal constraint than the Wisconsin
+    maximum extent (~20 ka).
+
+    Parameters
+    ----------
+    lake_df : DataFrame
+        Lake data with lat/lon columns
+    save_results : bool
+        If True, save results to CSV
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    dict
+        Analysis results including:
+        - lake_gdf: Lakes with Dalton 18ka classification
+        - dalton_boundary: The 18ka ice extent GeoDataFrame
+        - density_comparison: Density inside vs outside 18ka extent
+        - power_law_results: Power law comparison
+    """
+    if verbose:
+        print("\n" + "=" * 60)
+        print("DALTON 18KA GLACIAL ANALYSIS")
+        print("Last Glacial Maximum (18 ka) Precise Reconstruction")
+        print("=" * 60)
+
+    results = {}
+    target_crs = get_target_crs()
+
+    try:
+        # Load Dalton 18ka boundary
+        dalton = load_dalton_18ka(target_crs=target_crs, clip_to_conus=True)
+        results['dalton_boundary'] = dalton
+
+        if verbose:
+            dalton_area = dalton.geometry.area.sum() / 1e6
+            print(f"\nDalton 18ka ice extent in CONUS: {dalton_area:,.0f} km²")
+
+    except Exception as e:
+        print(f"\nERROR: Could not load Dalton 18ka boundary: {e}")
+        return {'error': str(e)}
+
+    # Convert lakes to GeoDataFrame
+    if verbose:
+        print("\nConverting lakes to spatial format...")
+    lake_gdf = convert_lakes_to_gdf(lake_df, target_crs=target_crs)
+
+    if lake_gdf is None or len(lake_gdf) == 0:
+        print("ERROR: Could not create lake GeoDataFrame")
+        return {'error': 'Could not create GeoDataFrame'}
+
+    if verbose:
+        print(f"  Total lakes: {len(lake_gdf):,}")
+
+    # Classify lakes by Dalton 18ka extent
+    if verbose:
+        print("\nClassifying lakes by 18ka ice extent...")
+
+    # Dissolve Dalton boundary
+    dalton_union = unary_union(dalton.geometry)
+    dalton_single = gpd.GeoDataFrame(geometry=[dalton_union], crs=target_crs)
+
+    # Spatial join to find lakes within 18ka ice extent
+    joined = gpd.sjoin(
+        lake_gdf[['geometry']].reset_index(),
+        dalton_single,
+        how='inner',
+        predicate='within'
+    )
+
+    in_dalton_indices = joined['index'].values
+    lake_gdf['in_dalton_18ka'] = lake_gdf.index.isin(in_dalton_indices)
+    lake_gdf['dalton_classification'] = lake_gdf['in_dalton_18ka'].map({
+        True: '18ka_glaciated',
+        False: '18ka_unglaciated'
+    })
+
+    results['lake_gdf'] = lake_gdf
+
+    # Count summary
+    n_in_dalton = lake_gdf['in_dalton_18ka'].sum()
+    n_outside = len(lake_gdf) - n_in_dalton
+
+    if verbose:
+        print(f"\n  Lakes within 18ka ice extent: {n_in_dalton:,} ({100*n_in_dalton/len(lake_gdf):.1f}%)")
+        print(f"  Lakes outside 18ka ice extent: {n_outside:,} ({100*n_outside/len(lake_gdf):.1f}%)")
+
+    # Compute density comparison
+    dalton_area_km2 = dalton_union.area / 1e6
+
+    # Get CONUS area for non-glaciated calculation
+    try:
+        conus = load_conus_boundary(target_crs=target_crs)
+        conus_union = unary_union(conus.geometry)
+        conus_area = conus_union.area / 1e6
+        non_dalton_area = conus_area - dalton_area_km2
+    except:
+        non_dalton_area = 7e6  # Approximate CONUS area minus glaciated
+
+    density_in = (n_in_dalton / dalton_area_km2) * 1000 if dalton_area_km2 > 0 else 0
+    density_out = (n_outside / non_dalton_area) * 1000 if non_dalton_area > 0 else 0
+
+    results['density_comparison'] = {
+        '18ka_glaciated': {
+            'n_lakes': n_in_dalton,
+            'area_km2': dalton_area_km2,
+            'density_per_1000km2': density_in
+        },
+        '18ka_unglaciated': {
+            'n_lakes': n_outside,
+            'area_km2': non_dalton_area,
+            'density_per_1000km2': density_out
+        },
+        'density_ratio': density_in / density_out if density_out > 0 else np.nan
+    }
+
+    if verbose:
+        print(f"\n  Density within 18ka extent: {density_in:.1f} lakes/1000 km²")
+        print(f"  Density outside 18ka extent: {density_out:.1f} lakes/1000 km²")
+        print(f"  Ratio (inside/outside): {results['density_comparison']['density_ratio']:.2f}x")
+
+    # Power law analysis by Dalton 18ka classification
+    if verbose:
+        print("\n" + "-" * 40)
+        print("Power Law Analysis by 18ka Glaciation")
+        print("-" * 40)
+
+    area_col = COLS.get('area', 'AreaSqKm')
+    power_law_results = []
+
+    for classification in ['18ka_glaciated', '18ka_unglaciated']:
+        mask = lake_gdf['dalton_classification'] == classification
+        subset = lake_gdf[mask]
+
+        if len(subset) < 50:
+            if verbose:
+                print(f"  {classification}: Too few lakes ({len(subset)}) for power law")
+            continue
+
+        areas = subset[area_col].dropna().values
+        areas = areas[areas > 0]
+
+        if len(areas) < 30:
+            continue
+
+        # Fit power law with multiple xmin values
+        xmin_results = []
+        for xmin in [0.001, 0.01, 0.1, 1.0]:
+            tail = areas[areas >= xmin]
+            if len(tail) >= 20:
+                alpha = 1 + len(tail) / np.sum(np.log(tail / xmin))
+                alpha_se = (alpha - 1) / np.sqrt(len(tail))
+                xmin_results.append({
+                    'xmin': xmin,
+                    'alpha': alpha,
+                    'alpha_se': alpha_se,
+                    'n_tail': len(tail)
+                })
+
+        if len(xmin_results) > 0:
+            best = xmin_results[1] if len(xmin_results) > 1 else xmin_results[0]  # prefer xmin=0.01
+            power_law_results.append({
+                'classification': classification,
+                'n_lakes': len(areas),
+                'alpha': best['alpha'],
+                'alpha_se': best['alpha_se'],
+                'xmin': best['xmin'],
+                'n_tail': best['n_tail'],
+                'xmin_sensitivity': xmin_results
+            })
+
+            if verbose:
+                print(f"  {classification}:")
+                print(f"    n = {len(areas):,}, α = {best['alpha']:.3f} ± {best['alpha_se']:.3f}")
+                print(f"    x_min = {best['xmin']} km², n_tail = {best['n_tail']:,}")
+
+    results['power_law_results'] = power_law_results
+
+    # Save results
+    if save_results:
+        try:
+            ensure_output_dir()
+            output_dir = Path(OUTPUT_DIR) / 'dalton_18ka'
+            output_dir.mkdir(exist_ok=True)
+
+            # Save classification
+            classification_df = lake_gdf[['dalton_classification', area_col]].copy()
+            if 'Elevation' in lake_gdf.columns:
+                classification_df['Elevation'] = lake_gdf['Elevation']
+            classification_df.to_csv(output_dir / 'lake_dalton_18ka_classification.csv', index=False)
+
+            # Save density comparison
+            import json
+            with open(output_dir / 'dalton_18ka_density_comparison.json', 'w') as f:
+                json.dump(results['density_comparison'], f, indent=2)
+
+            if verbose:
+                print(f"\n  Results saved to: {output_dir}")
+
+        except Exception as e:
+            print(f"  Warning: Could not save results: {e}")
+
+    return results
+
+
+def compare_wisconsin_vs_dalton_18ka(lake_df, verbose=True):
+    """
+    Compare lake distributions using Wisconsin max extent (~20 ka) vs
+    Dalton 18ka (precise LGM snapshot).
+
+    This comparison tests whether the precise 18ka reconstruction
+    (Dalton) shows different patterns than the maximum Wisconsin extent.
+
+    Parameters
+    ----------
+    lake_df : DataFrame
+        Lake data with lat/lon columns
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    dict
+        Comparison results including:
+        - wisconsin_analysis: Results for Wisconsin extent
+        - dalton_analysis: Results for Dalton 18ka
+        - comparison: Direct comparison metrics
+    """
+    if verbose:
+        print("\n" + "=" * 60)
+        print("WISCONSIN VS DALTON 18KA COMPARISON")
+        print("Maximum extent (~20 ka) vs Precise LGM snapshot (18 ka)")
+        print("=" * 60)
+
+    results = {}
+    target_crs = get_target_crs()
+
+    # Load both boundaries
+    try:
+        wisconsin = load_wisconsin_extent(target_crs=target_crs)
+        dalton = load_dalton_18ka(target_crs=target_crs, clip_to_conus=True)
+    except Exception as e:
+        print(f"ERROR: Could not load boundaries: {e}")
+        return {'error': str(e)}
+
+    wisc_area = wisconsin.geometry.area.sum() / 1e6
+    dalton_area = dalton.geometry.area.sum() / 1e6
+
+    if verbose:
+        print(f"\n  Wisconsin max extent: {wisc_area:,.0f} km²")
+        print(f"  Dalton 18ka extent: {dalton_area:,.0f} km²")
+        print(f"  Difference: {wisc_area - dalton_area:,.0f} km²")
+
+    # Convert lakes
+    lake_gdf = convert_lakes_to_gdf(lake_df, target_crs=target_crs)
+
+    # Classify by both
+    wisc_union = unary_union(wisconsin.geometry)
+    dalton_union = unary_union(dalton.geometry)
+
+    wisc_single = gpd.GeoDataFrame(geometry=[wisc_union], crs=target_crs)
+    dalton_single = gpd.GeoDataFrame(geometry=[dalton_union], crs=target_crs)
+
+    # Wisconsin classification
+    wisc_joined = gpd.sjoin(
+        lake_gdf[['geometry']].reset_index(),
+        wisc_single, how='inner', predicate='within'
+    )
+    lake_gdf['in_wisconsin'] = lake_gdf.index.isin(wisc_joined['index'].values)
+
+    # Dalton 18ka classification
+    dalton_joined = gpd.sjoin(
+        lake_gdf[['geometry']].reset_index(),
+        dalton_single, how='inner', predicate='within'
+    )
+    lake_gdf['in_dalton_18ka'] = lake_gdf.index.isin(dalton_joined['index'].values)
+
+    # Create combined classification
+    def classify(row):
+        if row['in_dalton_18ka'] and row['in_wisconsin']:
+            return 'both'  # In both extents (core glaciated)
+        elif row['in_wisconsin'] and not row['in_dalton_18ka']:
+            return 'wisconsin_only'  # In Wisconsin but not 18ka (marginal)
+        elif row['in_dalton_18ka'] and not row['in_wisconsin']:
+            return 'dalton_only'  # Unusual - should be rare
+        else:
+            return 'neither'
+
+    lake_gdf['combined_classification'] = lake_gdf.apply(classify, axis=1)
+    results['lake_gdf'] = lake_gdf
+
+    # Summary
+    class_counts = lake_gdf['combined_classification'].value_counts()
+    if verbose:
+        print("\n  Combined classification:")
+        for cls, count in class_counts.items():
+            pct = 100 * count / len(lake_gdf)
+            print(f"    {cls}: {count:,} lakes ({pct:.1f}%)")
+
+    # Density calculations
+    area_col = COLS.get('area', 'AreaSqKm')
+
+    comparison = {
+        'wisconsin': {
+            'n_lakes': lake_gdf['in_wisconsin'].sum(),
+            'area_km2': wisc_area,
+            'density': (lake_gdf['in_wisconsin'].sum() / wisc_area) * 1000
+        },
+        'dalton_18ka': {
+            'n_lakes': lake_gdf['in_dalton_18ka'].sum(),
+            'area_km2': dalton_area,
+            'density': (lake_gdf['in_dalton_18ka'].sum() / dalton_area) * 1000
+        },
+        'wisconsin_only': {
+            'n_lakes': (class_counts.get('wisconsin_only', 0)),
+            'area_km2': wisc_area - dalton_area,
+            'density': ((class_counts.get('wisconsin_only', 0)) / (wisc_area - dalton_area)) * 1000 if wisc_area > dalton_area else 0
+        }
+    }
+
+    results['comparison'] = comparison
+
+    if verbose:
+        print("\n  Density comparison:")
+        print(f"    Wisconsin max: {comparison['wisconsin']['density']:.1f} lakes/1000 km²")
+        print(f"    Dalton 18ka: {comparison['dalton_18ka']['density']:.1f} lakes/1000 km²")
+        if comparison['wisconsin_only']['area_km2'] > 0:
+            print(f"    Wisconsin margins only: {comparison['wisconsin_only']['density']:.1f} lakes/1000 km²")
+
+    # Power law comparison
+    if verbose:
+        print("\n  Power law comparison:")
+
+    pl_results = []
+    for extent_name, extent_col in [('wisconsin', 'in_wisconsin'), ('dalton_18ka', 'in_dalton_18ka')]:
+        mask = lake_gdf[extent_col]
+        subset = lake_gdf[mask]
+
+        if len(subset) < 50:
+            continue
+
+        areas = subset[area_col].dropna().values
+        areas = areas[areas > 0]
+
+        xmin = 0.01
+        tail = areas[areas >= xmin]
+        if len(tail) >= 30:
+            alpha = 1 + len(tail) / np.sum(np.log(tail / xmin))
+            alpha_se = (alpha - 1) / np.sqrt(len(tail))
+
+            pl_results.append({
+                'extent': extent_name,
+                'alpha': alpha,
+                'alpha_se': alpha_se,
+                'n_tail': len(tail),
+                'xmin': xmin
+            })
+
+            if verbose:
+                print(f"    {extent_name}: α = {alpha:.3f} ± {alpha_se:.3f} (n={len(tail):,})")
+
+    results['power_law_comparison'] = pl_results
+
+    return results
+
+
+def xmin_sensitivity_by_glacial_zone(lake_gdf, area_col=None, verbose=True):
+    """
+    Run x_min sensitivity analysis for each glacial zone.
+
+    Similar to the elevation-band analysis but for glacial zones.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with glacial_stage classification
+    area_col : str, optional
+        Lake area column name
+    verbose : bool
+        Print progress
+
+    Returns
+    -------
+    dict
+        Sensitivity results by glacial zone
+    """
+    if area_col is None:
+        area_col = COLS.get('area', 'AreaSqKm')
+
+    if 'glacial_stage' not in lake_gdf.columns:
+        return {'error': 'glacial_stage column not found'}
+
+    if verbose:
+        print("\n" + "=" * 60)
+        print("X_MIN SENSITIVITY BY GLACIAL ZONE")
+        print("=" * 60)
+
+    # Define x_min candidates
+    xmin_candidates = np.logspace(np.log10(0.001), np.log10(10.0), 30)
+
+    # Get unique glacial stages
+    stages = lake_gdf['glacial_stage'].unique()
+    stages = [s for s in stages if pd.notna(s)]
+
+    results = {}
+
+    for i, stage in enumerate(stages):
+        if verbose:
+            print(f"\n[{i+1}/{len(stages)}] {stage}")
+
+        mask = lake_gdf['glacial_stage'] == stage
+        subset = lake_gdf[mask]
+
+        areas = subset[area_col].dropna().values
+        areas = areas[areas > 0]
+
+        if len(areas) < 30:
+            if verbose:
+                print(f"  Skipping: too few lakes ({len(areas)})")
+            continue
+
+        # Run sensitivity for each x_min
+        sensitivity = []
+        for xmin in xmin_candidates:
+            tail = areas[areas >= xmin]
+            if len(tail) < 10:
+                continue
+
+            alpha = 1 + len(tail) / np.sum(np.log(tail / xmin))
+            alpha_se = (alpha - 1) / np.sqrt(len(tail))
+
+            # Compute KS statistic
+            theoretical_cdf = 1 - (xmin / tail) ** (alpha - 1)
+            empirical_cdf = np.arange(1, len(tail) + 1) / len(tail)
+            sorted_tail = np.sort(tail)
+            theoretical_sorted = 1 - (xmin / sorted_tail) ** (alpha - 1)
+            ks_stat = np.max(np.abs(empirical_cdf - theoretical_sorted))
+
+            sensitivity.append({
+                'xmin': xmin,
+                'alpha': alpha,
+                'alpha_se': alpha_se,
+                'n_tail': len(tail),
+                'ks_stat': ks_stat
+            })
+
+        if len(sensitivity) > 0:
+            sensitivity_df = pd.DataFrame(sensitivity)
+
+            # Find optimal x_min (minimum KS)
+            optimal_idx = sensitivity_df['ks_stat'].idxmin()
+            optimal_xmin = sensitivity_df.loc[optimal_idx, 'xmin']
+            optimal_alpha = sensitivity_df.loc[optimal_idx, 'alpha']
+            optimal_ks = sensitivity_df.loc[optimal_idx, 'ks_stat']
+
+            results[stage] = {
+                'n_lakes': len(areas),
+                'sensitivity': sensitivity_df,
+                'optimal_xmin': optimal_xmin,
+                'optimal_alpha': optimal_alpha,
+                'optimal_ks': optimal_ks,
+                # Fixed x_min results
+                'fixed_xmin_results': {
+                    row['xmin']: {'alpha': row['alpha'], 'n': row['n_tail']}
+                    for _, row in sensitivity_df.iterrows()
+                    if row['xmin'] in [0.01, 0.1, 1.0]
+                }
+            }
+
+            if verbose:
+                print(f"  n = {len(areas):,}")
+                print(f"  Optimal: x_min = {optimal_xmin:.3f}, α = {optimal_alpha:.3f}, KS = {optimal_ks:.4f}")
+
+    return results
+
+
 if __name__ == "__main__":
     print("Glacial Chronosequence Analysis Module")
     print("=" * 40)
     print("\nTo run the analysis, load your lake data and call:")
     print("  from glacial_chronosequence import run_glacial_chronosequence_analysis")
     print("  results = run_glacial_chronosequence_analysis(lake_df)")
+    print("\nFor Dalton 18ka specific analysis:")
+    print("  from glacial_chronosequence import run_dalton_18ka_analysis")
+    print("  results = run_dalton_18ka_analysis(lake_df)")
     print("\nThis module tests Davis's hypothesis that lake density")
     print("decreases with time since glaciation.")

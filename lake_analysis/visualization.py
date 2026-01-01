@@ -3815,22 +3815,25 @@ def plot_density_by_glacial_stage(density_df, figsize=(12, 6), save_path=None):
     ax.set_xticks(range(len(stages)))
     ax.set_xticklabels(stages, rotation=0, ha='center', fontsize=12)
     ax.set_ylabel('Lake Density (lakes per 1,000 km²)', fontsize=14)
-    ax.set_xlabel('Glacial Stage (youngest → oldest)', fontsize=14)
     ax.set_title("Lake Density by Glacial Stage\nTesting Davis's Hypothesis", fontsize=16, fontweight='bold')
 
-    # Add age labels below stage names
+    # Add age labels below stage names (positioned higher to avoid overlap)
     for i, row in enumerate(df.itertuples()):
         if pd.notna(row.age_ka):
             age_str = f'{row.age_ka:.0f} ka' if row.age_ka < 1000 else f'{row.age_ka/1000:.0f} Ma'
         else:
             age_str = 'Never glaciated'
-        ax.text(i, -0.05, age_str, ha='center', va='top', fontsize=9,
+        ax.text(i, -0.08, age_str, ha='center', va='top', fontsize=9,
                 transform=ax.get_xaxis_transform(), style='italic', color='gray')
+
+    # Add xlabel with extra padding to avoid overlap with age labels
+    ax.set_xlabel('Glacial Stage (youngest → oldest)', fontsize=14, labelpad=25)
 
     ax.set_ylim(bottom=0)
     ax.grid(axis='y', alpha=0.3)
 
-    plt.tight_layout()
+    # Adjust subplot to leave room for age labels
+    plt.subplots_adjust(bottom=0.18)
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -4570,27 +4573,27 @@ def plot_power_law_by_glacial_zone(power_law_results, figsize=(14, 10), save_pat
     return fig, axes
 
 
-def plot_normalized_density_with_glacial_overlay(density_df, lake_gdf, elev_col='Elevation',
+def plot_normalized_density_with_glacial_overlay(lake_gdf, density_df=None, elev_col='Elevation',
                                                    area_col='AreaSqKm', elev_bins=None,
                                                    figsize=(14, 8), save_path=None):
     """
-    Create bar chart of normalized lake density with glacial lake fraction overlay.
+    Create bar chart of lake counts by elevation with glacial fraction overlay.
 
-    Shows lake density by elevation with a line overlay indicating what fraction
+    Shows lake counts by elevation bin with a line overlay indicating what fraction
     of lakes in each bin are within glaciated terrain.
 
     Parameters
     ----------
-    density_df : DataFrame
-        Normalized density results with columns: elev_bin_mid, normalized_density
     lake_gdf : GeoDataFrame
-        Lake data with glacial_stage classification
+        Lake data with glacial_stage classification and elevation column
+    density_df : DataFrame, optional
+        Optional normalized density results (not currently used, kept for compatibility)
     elev_col : str
         Elevation column name
     area_col : str
         Lake area column name
     elev_bins : array-like, optional
-        Elevation bin edges
+        Elevation bin edges (default: 0-4000m in 250m bins)
     figsize : tuple
     save_path : str, optional
 
@@ -4602,92 +4605,118 @@ def plot_normalized_density_with_glacial_overlay(density_df, lake_gdf, elev_col=
     fig, ax1 = plt.subplots(figsize=figsize)
 
     if elev_bins is None:
-        elev_bins = np.arange(0, 4500, 250)
+        elev_bins = np.arange(0, 4250, 250)
 
-    # Get elevation midpoints and densities
-    if density_df is not None and len(density_df) > 0:
-        if 'elev_bin_mid' in density_df.columns:
-            x_vals = density_df['elev_bin_mid'].values
+    # Handle case where arguments might be swapped (for backwards compatibility)
+    if hasattr(lake_gdf, 'geometry'):
+        # Correct order: lake_gdf is a GeoDataFrame
+        gdf = lake_gdf
+    elif hasattr(density_df, 'geometry') if density_df is not None else False:
+        # Arguments were swapped
+        gdf = density_df
+    else:
+        # Neither is a GeoDataFrame, try to work with lake_gdf as DataFrame
+        gdf = lake_gdf
+
+    # Check if we have the required columns
+    if elev_col not in gdf.columns:
+        # Try common alternatives
+        for alt_col in ['Elevation', 'elevation', 'ELEV', 'elev', 'Mean_Elevation']:
+            if alt_col in gdf.columns:
+                elev_col = alt_col
+                break
+
+    if 'glacial_stage' not in gdf.columns:
+        print("Warning: glacial_stage column not found in data")
+        # Create figure with just lake count by elevation
+        if elev_col in gdf.columns:
+            counts, _ = np.histogram(gdf[elev_col].dropna(), bins=elev_bins)
+            bin_mids = [(elev_bins[i] + elev_bins[i+1]) / 2 for i in range(len(elev_bins)-1)]
+            ax1.bar(bin_mids, counts, width=200, color='steelblue', alpha=0.7,
+                   edgecolor='navy', linewidth=1)
+            ax1.set_xlabel('Elevation (m)', fontsize=14)
+            ax1.set_ylabel('Lake Count', fontsize=14)
+            ax1.set_title('Lake Count by Elevation', fontsize=16, fontweight='bold')
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        return fig, (ax1, ax1)
+
+    # Calculate lake counts and glacial fractions by elevation bin
+    lake_counts = []
+    glacial_fractions = []
+    glacial_counts = []
+    bin_mids = []
+
+    for i in range(len(elev_bins) - 1):
+        low, high = elev_bins[i], elev_bins[i+1]
+        mid = (low + high) / 2
+        bin_mids.append(mid)
+
+        # Count lakes in this elevation bin
+        if elev_col in gdf.columns:
+            mask = (gdf[elev_col] >= low) & (gdf[elev_col] < high)
+            bin_lakes = gdf[mask]
+            total = len(bin_lakes)
+            lake_counts.append(total)
+
+            if total > 0:
+                # Count glaciated lakes (not Driftless/never glaciated/unclassified)
+                glaciated_mask = ~bin_lakes['glacial_stage'].str.lower().str.contains(
+                    'driftless|never|unglaciated|unclassified', na=True)
+                n_glaciated = glaciated_mask.sum()
+                glacial_counts.append(n_glaciated)
+                glacial_fractions.append(n_glaciated / total)
+            else:
+                glacial_counts.append(0)
+                glacial_fractions.append(np.nan)
         else:
-            x_vals = density_df.index.values
+            lake_counts.append(0)
+            glacial_counts.append(0)
+            glacial_fractions.append(np.nan)
 
-        if 'normalized_density' in density_df.columns:
-            densities = density_df['normalized_density'].values
-        elif 'density' in density_df.columns:
-            densities = density_df['density'].values
-        else:
-            densities = density_df.iloc[:, 0].values
+    # Bar chart of lake counts
+    bars = ax1.bar(bin_mids, lake_counts, width=200, color='steelblue',
+                  alpha=0.7, edgecolor='navy', linewidth=1,
+                  label='Total Lakes')
 
-        # Bar chart of normalized density
-        bars = ax1.bar(x_vals, densities, width=200, color='steelblue',
-                      alpha=0.7, edgecolor='navy', linewidth=1,
-                      label='Normalized Lake Density')
-
-        ax1.set_xlabel('Elevation (m)', fontsize=14)
-        ax1.set_ylabel('Normalized Lake Density', fontsize=14, color='steelblue')
-        ax1.tick_params(axis='y', labelcolor='steelblue')
+    ax1.set_xlabel('Elevation (m)', fontsize=14)
+    ax1.set_ylabel('Lake Count', fontsize=14, color='steelblue')
+    ax1.tick_params(axis='y', labelcolor='steelblue')
 
     # Create second y-axis for glacial fraction
     ax2 = ax1.twinx()
 
-    if lake_gdf is not None and 'glacial_stage' in lake_gdf.columns:
-        # Compute glacial fraction by elevation bin
-        glacial_fractions = []
-        glacial_counts = []
-        total_counts = []
-        bin_mids = []
+    # Plot glacial fraction line
+    glacial_fractions = np.array(glacial_fractions)
+    valid_mask = ~np.isnan(glacial_fractions)
+    if np.any(valid_mask):
+        ax2.plot(np.array(bin_mids)[valid_mask],
+                glacial_fractions[valid_mask] * 100,
+                'o-', color='darkred', linewidth=2.5, markersize=8,
+                label='% Glaciated Lakes')
 
-        for i in range(len(elev_bins) - 1):
-            low, high = elev_bins[i], elev_bins[i+1]
-            mid = (low + high) / 2
-            bin_mids.append(mid)
+        ax2.set_ylabel('% Lakes in Glaciated Terrain', fontsize=14, color='darkred')
+        ax2.tick_params(axis='y', labelcolor='darkred')
+        ax2.set_ylim(0, 105)
 
-            # Count lakes in this bin
-            if elev_col in lake_gdf.columns:
-                mask = (lake_gdf[elev_col] >= low) & (lake_gdf[elev_col] < high)
-                bin_lakes = lake_gdf[mask]
-                total = len(bin_lakes)
-                total_counts.append(total)
+        # Add annotation for peak glacial fraction
+        valid_fracs = glacial_fractions[valid_mask]
+        valid_mids = np.array(bin_mids)[valid_mask]
+        if len(valid_fracs) > 0:
+            max_idx = np.nanargmax(valid_fracs)
+            if not np.isnan(valid_fracs[max_idx]):
+                ax2.annotate(f'Peak: {valid_fracs[max_idx]*100:.1f}%\nat {valid_mids[max_idx]:.0f}m',
+                            xy=(valid_mids[max_idx], valid_fracs[max_idx]*100),
+                            xytext=(30, -20), textcoords='offset points',
+                            fontsize=10, ha='left',
+                            arrowprops=dict(arrowstyle='->', color='darkred'),
+                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-                if total > 0:
-                    # Count glaciated lakes (not Driftless/never glaciated)
-                    glaciated_mask = ~bin_lakes['glacial_stage'].str.lower().str.contains(
-                        'driftless|never|unglaciated', na=False)
-                    n_glaciated = glaciated_mask.sum()
-                    glacial_counts.append(n_glaciated)
-                    glacial_fractions.append(n_glaciated / total)
-                else:
-                    glacial_counts.append(0)
-                    glacial_fractions.append(np.nan)
-            else:
-                glacial_fractions.append(np.nan)
-                glacial_counts.append(0)
-                total_counts.append(0)
-
-        # Plot glacial fraction line
-        valid_mask = ~np.isnan(glacial_fractions)
-        if np.any(valid_mask):
-            ax2.plot(np.array(bin_mids)[valid_mask],
-                    np.array(glacial_fractions)[valid_mask] * 100,
-                    'o-', color='darkred', linewidth=2.5, markersize=8,
-                    label='% Lakes in Glaciated Terrain')
-
-            ax2.set_ylabel('% Lakes in Glaciated Terrain', fontsize=14, color='darkred')
-            ax2.tick_params(axis='y', labelcolor='darkred')
-            ax2.set_ylim(0, 105)
-
-            # Add annotation for key insight
-            max_idx = np.nanargmax(glacial_fractions)
-            ax2.annotate(f'Peak: {glacial_fractions[max_idx]*100:.1f}%\nat {bin_mids[max_idx]:.0f}m',
-                        xy=(bin_mids[max_idx], glacial_fractions[max_idx]*100),
-                        xytext=(20, 20), textcoords='offset points',
-                        fontsize=10, ha='left',
-                        arrowprops=dict(arrowstyle='->', color='darkred'),
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-    ax1.set_title('Normalized Lake Density with Glacial Origin Overlay',
+    ax1.set_title('Lake Distribution by Elevation with Glacial Origin Overlay',
                  fontsize=16, fontweight='bold')
     ax1.grid(True, alpha=0.3, axis='y')
+    ax1.set_xlim(elev_bins[0], elev_bins[-1])
 
     # Combined legend
     lines1, labels1 = ax1.get_legend_handles_labels()
@@ -5973,6 +6002,368 @@ def plot_spatial_scaling_summary(spatial_results, figsize=(20, 16), save_path=No
         print(f"Figure saved to: {save_path}")
 
     return fig, [ax1, ax2, ax3, ax4, ax5, ax6]
+
+
+# ============================================================================
+# DALTON 18KA VISUALIZATIONS
+# ============================================================================
+
+def plot_dalton_18ka_comparison(dalton_results, figsize=(16, 12), save_path=None):
+    """
+    Create comprehensive visualization of Dalton 18ka analysis results.
+
+    Four-panel figure showing:
+    - A) Density comparison (18ka glaciated vs unglaciated)
+    - B) Power law CCDFs for both categories
+    - C) Alpha values with confidence intervals
+    - D) x_min sensitivity comparison
+
+    Parameters
+    ----------
+    dalton_results : dict
+        Output from run_dalton_18ka_analysis()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    ax1, ax2, ax3, ax4 = axes.flatten()
+
+    colors = {'18ka_glaciated': '#1f77b4', '18ka_unglaciated': '#d62728'}
+
+    # A) Density comparison bar chart
+    density_comp = dalton_results.get('density_comparison', {})
+    if density_comp:
+        categories = ['18ka_glaciated', '18ka_unglaciated']
+        densities = [density_comp.get(cat, {}).get('density_per_1000km2', 0) for cat in categories]
+        n_lakes = [density_comp.get(cat, {}).get('n_lakes', 0) for cat in categories]
+
+        bars = ax1.bar(range(len(categories)), densities,
+                      color=[colors[c] for c in categories],
+                      edgecolor='black', linewidth=1.5)
+
+        for i, (bar, n, d) in enumerate(zip(bars, n_lakes, densities)):
+            ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                    f'{d:.1f}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+            ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height()/2,
+                    f'n={n:,}', ha='center', va='center', fontsize=10, color='white')
+
+        ax1.set_xticks(range(len(categories)))
+        ax1.set_xticklabels(['Within 18ka Ice', 'Outside 18ka Ice'], fontsize=12)
+        ax1.set_ylabel('Lake Density (per 1,000 km²)', fontsize=12)
+        ax1.set_title('A) Lake Density: 18ka Glaciated vs Unglaciated', fontsize=14, fontweight='bold')
+        ax1.grid(axis='y', alpha=0.3)
+
+    # B) Power law CCDFs
+    lake_gdf = dalton_results.get('lake_gdf')
+    if lake_gdf is not None and 'dalton_classification' in lake_gdf.columns:
+        area_col = 'AreaSqKm' if 'AreaSqKm' in lake_gdf.columns else lake_gdf.select_dtypes(include=[np.number]).columns[0]
+
+        for classification in ['18ka_glaciated', '18ka_unglaciated']:
+            mask = lake_gdf['dalton_classification'] == classification
+            areas = lake_gdf.loc[mask, area_col].dropna().values
+            areas = areas[areas > 0]
+
+            if len(areas) > 10:
+                sorted_areas = np.sort(areas)[::-1]
+                ranks = np.arange(1, len(sorted_areas) + 1)
+                ccdf = ranks / len(sorted_areas)
+
+                label = 'In 18ka ice' if classification == '18ka_glaciated' else 'Outside 18ka ice'
+                ax2.loglog(sorted_areas, ccdf, 'o-', color=colors[classification],
+                          alpha=0.7, markersize=3, label=f'{label} (n={len(areas):,})')
+
+        ax2.set_xlabel('Lake Area (km²)', fontsize=12)
+        ax2.set_ylabel('P(X > x) CCDF', fontsize=12)
+        ax2.set_title('B) Lake Size Distributions (CCDF)', fontsize=14, fontweight='bold')
+        ax2.legend(fontsize=10)
+        ax2.grid(True, alpha=0.3, which='both')
+
+    # C) Alpha comparison
+    pl_results = dalton_results.get('power_law_results', [])
+    if pl_results:
+        classifications = [r['classification'] for r in pl_results]
+        alphas = [r['alpha'] for r in pl_results]
+        alpha_ses = [r['alpha_se'] for r in pl_results]
+
+        x_pos = range(len(classifications))
+        ax3.bar(x_pos, alphas, yerr=[1.96*se for se in alpha_ses],
+               color=[colors.get(c, 'gray') for c in classifications],
+               edgecolor='black', linewidth=1.5, capsize=5)
+
+        # Add reference line for percolation theory
+        ax3.axhline(y=2.05, color='green', linestyle='--', linewidth=2,
+                   label='Percolation τ ≈ 2.05')
+
+        ax3.set_xticks(x_pos)
+        ax3.set_xticklabels(['In 18ka ice', 'Outside 18ka'], fontsize=11)
+        ax3.set_ylabel('Power Law Exponent (α)', fontsize=12)
+        ax3.set_title('C) Power Law Exponents', fontsize=14, fontweight='bold')
+        ax3.legend(fontsize=10)
+        ax3.grid(axis='y', alpha=0.3)
+
+        # Add alpha values on bars
+        for i, (a, se) in enumerate(zip(alphas, alpha_ses)):
+            ax3.text(i, a + 0.1, f'α={a:.2f}±{se:.2f}', ha='center', fontsize=10)
+
+    # D) x_min sensitivity
+    if pl_results:
+        for r in pl_results:
+            classification = r['classification']
+            xmin_sens = r.get('xmin_sensitivity', [])
+            if xmin_sens:
+                xmins = [x['xmin'] for x in xmin_sens]
+                alphas_sens = [x['alpha'] for x in xmin_sens]
+
+                label = 'In 18ka ice' if classification == '18ka_glaciated' else 'Outside 18ka'
+                ax4.semilogx(xmins, alphas_sens, 'o-', color=colors.get(classification, 'gray'),
+                           linewidth=2, markersize=6, label=label)
+
+        ax4.axhline(y=2.05, color='green', linestyle='--', linewidth=2, alpha=0.7,
+                   label='Percolation τ ≈ 2.05')
+        ax4.set_xlabel('x_min (km²)', fontsize=12)
+        ax4.set_ylabel('Power Law Exponent (α)', fontsize=12)
+        ax4.set_title('D) x_min Sensitivity', fontsize=14, fontweight='bold')
+        ax4.legend(fontsize=10)
+        ax4.grid(True, alpha=0.3)
+
+    plt.suptitle('Dalton 18ka (LGM) Glacial Analysis', fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_wisconsin_vs_dalton_comparison(comparison_results, figsize=(18, 10), save_path=None):
+    """
+    Visualize comparison between Wisconsin max extent and Dalton 18ka.
+
+    Creates a multi-panel figure showing:
+    - A) Area comparison
+    - B) Lake counts by classification
+    - C) Density comparison
+    - D) Power law comparison
+
+    Parameters
+    ----------
+    comparison_results : dict
+        Output from compare_wisconsin_vs_dalton_18ka()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    ax1, ax2, ax3, ax4 = axes.flatten()
+
+    comparison = comparison_results.get('comparison', {})
+    lake_gdf = comparison_results.get('lake_gdf')
+
+    colors = {
+        'wisconsin': '#2ca02c',
+        'dalton_18ka': '#1f77b4',
+        'wisconsin_only': '#ff7f0e',
+        'both': '#9467bd',
+        'neither': '#d62728'
+    }
+
+    # A) Area comparison
+    areas = {
+        'Wisconsin\n(~20 ka max)': comparison.get('wisconsin', {}).get('area_km2', 0),
+        'Dalton\n(18 ka precise)': comparison.get('dalton_18ka', {}).get('area_km2', 0),
+        'Wisconsin\nmargins only': comparison.get('wisconsin_only', {}).get('area_km2', 0)
+    }
+
+    ax1.bar(range(len(areas)), list(areas.values()),
+           color=['#2ca02c', '#1f77b4', '#ff7f0e'],
+           edgecolor='black', linewidth=1.5)
+
+    for i, (name, area) in enumerate(areas.items()):
+        ax1.text(i, area, f'{area/1000:.0f}k km²', ha='center', va='bottom', fontsize=11)
+
+    ax1.set_xticks(range(len(areas)))
+    ax1.set_xticklabels(list(areas.keys()), fontsize=11)
+    ax1.set_ylabel('Area (km²)', fontsize=12)
+    ax1.set_title('A) Ice Extent Areas', fontsize=14, fontweight='bold')
+    ax1.grid(axis='y', alpha=0.3)
+
+    # B) Lake counts by classification
+    if lake_gdf is not None and 'combined_classification' in lake_gdf.columns:
+        class_counts = lake_gdf['combined_classification'].value_counts()
+
+        class_labels = {
+            'both': 'Both extents\n(core glaciated)',
+            'wisconsin_only': 'Wisconsin only\n(marginal)',
+            'neither': 'Neither\n(unglaciated)',
+            'dalton_only': 'Dalton only\n(rare)'
+        }
+
+        classes = [c for c in ['both', 'wisconsin_only', 'neither', 'dalton_only'] if c in class_counts.index]
+        counts = [class_counts[c] for c in classes]
+        labels = [class_labels.get(c, c) for c in classes]
+
+        ax2.bar(range(len(classes)), counts,
+               color=[colors.get(c, 'gray') for c in classes],
+               edgecolor='black', linewidth=1.5)
+
+        for i, count in enumerate(counts):
+            pct = 100 * count / len(lake_gdf)
+            ax2.text(i, count, f'{count:,}\n({pct:.1f}%)', ha='center', va='bottom', fontsize=10)
+
+        ax2.set_xticks(range(len(classes)))
+        ax2.set_xticklabels(labels, fontsize=10)
+        ax2.set_ylabel('Number of Lakes', fontsize=12)
+        ax2.set_title('B) Lake Classification', fontsize=14, fontweight='bold')
+        ax2.grid(axis='y', alpha=0.3)
+
+    # C) Density comparison
+    densities = {
+        'Wisconsin': comparison.get('wisconsin', {}).get('density', 0),
+        'Dalton 18ka': comparison.get('dalton_18ka', {}).get('density', 0),
+        'Margins only': comparison.get('wisconsin_only', {}).get('density', 0)
+    }
+
+    ax3.bar(range(len(densities)), list(densities.values()),
+           color=['#2ca02c', '#1f77b4', '#ff7f0e'],
+           edgecolor='black', linewidth=1.5)
+
+    for i, d in enumerate(densities.values()):
+        ax3.text(i, d, f'{d:.1f}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+    ax3.set_xticks(range(len(densities)))
+    ax3.set_xticklabels(list(densities.keys()), fontsize=11)
+    ax3.set_ylabel('Lakes per 1,000 km²', fontsize=12)
+    ax3.set_title('C) Lake Density Comparison', fontsize=14, fontweight='bold')
+    ax3.grid(axis='y', alpha=0.3)
+
+    # D) Power law comparison
+    pl_results = comparison_results.get('power_law_comparison', [])
+    if pl_results:
+        extents = [r['extent'] for r in pl_results]
+        alphas = [r['alpha'] for r in pl_results]
+        alpha_ses = [r['alpha_se'] for r in pl_results]
+
+        x_labels = ['Wisconsin\n(~20 ka)' if e == 'wisconsin' else 'Dalton\n(18 ka)' for e in extents]
+        bar_colors = [colors.get(e, 'gray') for e in extents]
+
+        ax4.bar(range(len(extents)), alphas, yerr=[1.96*se for se in alpha_ses],
+               color=bar_colors, edgecolor='black', linewidth=1.5, capsize=5)
+
+        ax4.axhline(y=2.05, color='red', linestyle='--', linewidth=2,
+                   label='Percolation τ ≈ 2.05')
+
+        for i, (a, se) in enumerate(zip(alphas, alpha_ses)):
+            ax4.text(i, a + 0.1, f'α={a:.2f}', ha='center', fontsize=11, fontweight='bold')
+
+        ax4.set_xticks(range(len(extents)))
+        ax4.set_xticklabels(x_labels, fontsize=11)
+        ax4.set_ylabel('Power Law Exponent (α)', fontsize=12)
+        ax4.set_title('D) Power Law Comparison', fontsize=14, fontweight='bold')
+        ax4.legend(fontsize=10)
+        ax4.grid(axis='y', alpha=0.3)
+
+    plt.suptitle('Wisconsin Maximum vs Dalton 18ka Comparison', fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_glacial_zone_xmin_sensitivity(xmin_results, figsize=(16, 12), save_path=None):
+    """
+    Visualize x_min sensitivity analysis by glacial zone.
+
+    Creates a multi-panel figure showing:
+    - Alpha vs x_min curves for each glacial zone
+    - KS statistics by x_min
+    - Optimal x_min comparison
+
+    Parameters
+    ----------
+    xmin_results : dict
+        Output from xmin_sensitivity_by_glacial_zone()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+
+    zones = list(xmin_results.keys())
+    if not zones:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(0.5, 0.5, 'No data available', ha='center', va='center', fontsize=14)
+        return fig, [ax]
+
+    n_zones = len(zones)
+    n_cols = min(3, n_zones)
+    n_rows = (n_zones + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_zones == 1:
+        axes = np.array([axes])
+    axes = axes.flatten()
+
+    # Color map for zones
+    zone_colors = plt.cm.tab10(np.linspace(0, 1, max(10, n_zones)))
+
+    for i, (zone, data) in enumerate(xmin_results.items()):
+        ax = axes[i]
+
+        sensitivity_df = data.get('sensitivity')
+        if sensitivity_df is None or len(sensitivity_df) == 0:
+            ax.text(0.5, 0.5, f'{zone}\nNo data', ha='center', va='center')
+            continue
+
+        # Plot alpha vs x_min
+        ax.semilogx(sensitivity_df['xmin'], sensitivity_df['alpha'],
+                   'o-', color=zone_colors[i], linewidth=2, markersize=5)
+
+        # Mark optimal x_min
+        optimal_xmin = data.get('optimal_xmin')
+        optimal_alpha = data.get('optimal_alpha')
+        if optimal_xmin is not None and optimal_alpha is not None:
+            ax.axvline(x=optimal_xmin, color='red', linestyle='--', alpha=0.7)
+            ax.plot(optimal_xmin, optimal_alpha, 'r*', markersize=15,
+                   label=f'Optimal: x_min={optimal_xmin:.3f}')
+
+        # Reference line
+        ax.axhline(y=2.05, color='green', linestyle=':', alpha=0.7,
+                  label='τ ≈ 2.05')
+
+        ax.set_xlabel('x_min (km²)', fontsize=10)
+        ax.set_ylabel('α', fontsize=10)
+        ax.set_title(f'{zone}\n(n={data.get("n_lakes", 0):,})', fontsize=11, fontweight='bold')
+        ax.legend(fontsize=8, loc='best')
+        ax.grid(True, alpha=0.3)
+
+    # Hide unused subplots
+    for j in range(n_zones, len(axes)):
+        axes[j].set_visible(False)
+
+    plt.suptitle('x_min Sensitivity by Glacial Zone', fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
 
 
 if __name__ == "__main__":

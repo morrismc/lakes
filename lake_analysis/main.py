@@ -271,7 +271,11 @@ try:
         load_all_glacial_boundaries,
         classify_lakes_by_glacial_extent,
         compute_lake_density_by_glacial_stage,
-        test_davis_hypothesis
+        test_davis_hypothesis,
+        # Dalton 18ka analysis
+        run_dalton_18ka_analysis,
+        compare_wisconsin_vs_dalton_18ka,
+        xmin_sensitivity_by_glacial_zone
     )
     from .visualization import (
         plot_density_by_glacial_stage,
@@ -285,7 +289,11 @@ try:
         plot_glacial_lake_size_histograms,
         plot_glacial_xmin_sensitivity,
         plot_glacial_geographic_lakes,
-        plot_glacial_comprehensive_summary
+        plot_glacial_comprehensive_summary,
+        # Dalton 18ka visualizations
+        plot_dalton_18ka_comparison,
+        plot_wisconsin_vs_dalton_comparison,
+        plot_glacial_zone_xmin_sensitivity
     )
     # Spatial scaling analysis
     from .spatial_scaling import (
@@ -357,7 +365,11 @@ except ImportError:
         load_all_glacial_boundaries,
         classify_lakes_by_glacial_extent,
         compute_lake_density_by_glacial_stage,
-        test_davis_hypothesis
+        test_davis_hypothesis,
+        # Dalton 18ka analysis
+        run_dalton_18ka_analysis,
+        compare_wisconsin_vs_dalton_18ka,
+        xmin_sensitivity_by_glacial_zone
     )
     from visualization import (
         plot_density_by_glacial_stage,
@@ -371,7 +383,11 @@ except ImportError:
         plot_glacial_lake_size_histograms,
         plot_glacial_xmin_sensitivity,
         plot_glacial_geographic_lakes,
-        plot_glacial_comprehensive_summary
+        plot_glacial_comprehensive_summary,
+        # Dalton 18ka visualizations
+        plot_dalton_18ka_comparison,
+        plot_wisconsin_vs_dalton_comparison,
+        plot_glacial_zone_xmin_sensitivity
     )
     # Spatial scaling analysis
     from spatial_scaling import (
@@ -1518,12 +1534,10 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                     print(f"    Warning: Could not create comprehensive summary: {e}")
 
             # Normalized density with glacial overlay
-            # (requires elevation analysis results - check if available)
-            elev_results = results.get('elevation_by_stage')
-            if elev_results is not None and results.get('lake_gdf') is not None:
+            # (uses lake_gdf with glacial_stage and elevation columns)
+            if results.get('lake_gdf') is not None:
                 try:
                     fig, axes = plot_normalized_density_with_glacial_overlay(
-                        elev_results,
                         results['lake_gdf'],
                         save_path=str(glacial_output / 'normalized_density_glacial_overlay.png')
                     )
@@ -1532,6 +1546,54 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                         print("    Normalized density with glacial overlay saved!")
                 except Exception as e:
                     print(f"    Warning: Could not create glacial overlay plot: {e}")
+
+            # Dalton 18ka specific analysis
+            print("\n  Running Dalton 18ka (LGM) analysis...")
+            try:
+                dalton_results = run_dalton_18ka_analysis(lakes, save_results=True, verbose=False)
+                if dalton_results and 'error' not in dalton_results:
+                    results['dalton_18ka'] = dalton_results
+
+                    # Dalton 18ka comparison visualization
+                    fig, axes = plot_dalton_18ka_comparison(
+                        dalton_results,
+                        save_path=str(glacial_output / 'dalton_18ka_analysis.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Dalton 18ka analysis plot saved!")
+
+                    # Wisconsin vs Dalton comparison
+                    comparison = compare_wisconsin_vs_dalton_18ka(lakes, verbose=False)
+                    if comparison and 'error' not in comparison:
+                        results['wisconsin_vs_dalton'] = comparison
+
+                        fig, axes = plot_wisconsin_vs_dalton_comparison(
+                            comparison,
+                            save_path=str(glacial_output / 'wisconsin_vs_dalton_comparison.png')
+                        )
+                        if fig:
+                            plt.close(fig)
+                            print("    Wisconsin vs Dalton comparison saved!")
+
+                    # x_min sensitivity by glacial zone
+                    if results.get('lake_gdf') is not None:
+                        xmin_results = xmin_sensitivity_by_glacial_zone(
+                            results['lake_gdf'], verbose=False
+                        )
+                        if xmin_results and 'error' not in xmin_results:
+                            results['xmin_by_zone'] = xmin_results
+
+                            fig, axes = plot_glacial_zone_xmin_sensitivity(
+                                xmin_results,
+                                save_path=str(glacial_output / 'xmin_sensitivity_by_glacial_zone.png')
+                            )
+                            if fig:
+                                plt.close(fig)
+                                print("    x_min sensitivity by glacial zone saved!")
+
+            except Exception as e:
+                print(f"    Warning: Could not complete Dalton 18ka analysis: {e}")
 
         # Print summary
         print("\n[SUCCESS] Glacial chronosequence analysis complete!")

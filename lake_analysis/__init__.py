@@ -95,6 +95,10 @@ from .glacial_chronosequence import (
     decompose_bimodal_by_glacial_status,
     western_alpine_analysis,
     validate_glacial_boundaries,
+    # Dalton 18ka analysis
+    run_dalton_18ka_analysis,
+    compare_wisconsin_vs_dalton_18ka,
+    xmin_sensitivity_by_glacial_zone,
 )
 
 # Glacial visualization functions
@@ -112,7 +116,11 @@ from .visualization import (
     plot_glacial_lake_size_histograms,
     plot_glacial_xmin_sensitivity,
     plot_glacial_geographic_lakes,
-    plot_glacial_comprehensive_summary
+    plot_glacial_comprehensive_summary,
+    # Dalton 18ka visualizations
+    plot_dalton_18ka_comparison,
+    plot_wisconsin_vs_dalton_comparison,
+    plot_glacial_zone_xmin_sensitivity
 )
 
 # Spatial scaling analysis
