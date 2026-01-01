@@ -9,17 +9,23 @@ Core Innovation: Elevation-normalization of lake density to reveal
 bimodal patterns controlled by glacial and floodplain processes.
 
 Modules:
-    config           - Configuration settings and paths
-    data_loading     - Load data from geodatabase and rasters
-    normalization    - Compute normalized lake density
-    visualization    - Publication-quality plotting
-    powerlaw_analysis - Power law fitting with MLE
-    main             - Orchestration and pipeline
+    config                  - Configuration settings and paths
+    data_loading            - Load data from geodatabase and rasters
+    normalization           - Compute normalized lake density
+    visualization           - Publication-quality plotting
+    powerlaw_analysis       - Power law fitting with MLE
+    glacial_chronosequence  - Glacial chronosequence analysis (Davis's hypothesis)
+    main                    - Orchestration and pipeline
 
 Quick Start:
     >>> from lake_analysis import load_data, analyze_elevation
     >>> lakes = load_data()
     >>> results = analyze_elevation(lakes)
+
+Glacial Chronosequence Analysis:
+    >>> from lake_analysis import analyze_glacial_chronosequence
+    >>> results = analyze_glacial_chronosequence(lakes)
+    # Tests Davis's hypothesis that lake density decreases with landscape age
 
 Author: [Your Name]
 Project: Lake Scaling and Occurrence Analysis
@@ -66,6 +72,34 @@ from .main import (
     analyze_slope,
     analyze_relief,
     analyze_powerlaw,
+    analyze_glacial_chronosequence,
     run_full_analysis,
     quick_start
+)
+
+# Glacial chronosequence analysis
+from .glacial_chronosequence import (
+    run_glacial_chronosequence_analysis,
+    load_all_glacial_boundaries,
+    classify_lakes_by_glacial_extent,
+    compute_lake_density_by_glacial_stage,
+    test_davis_hypothesis,
+    # Enhanced analysis functions
+    classify_ice_types,
+    create_mutually_exclusive_zones,
+    power_law_by_glacial_zone,
+    decompose_bimodal_by_glacial_status,
+    western_alpine_analysis,
+    validate_glacial_boundaries,
+)
+
+# Glacial visualization functions
+from .visualization import (
+    plot_density_by_glacial_stage,
+    plot_elevation_histogram_by_glacial_stage,
+    plot_davis_hypothesis_test,
+    plot_glacial_extent_map,
+    plot_glacial_chronosequence_summary,
+    plot_bimodal_decomposition,
+    plot_power_law_by_glacial_zone
 )
