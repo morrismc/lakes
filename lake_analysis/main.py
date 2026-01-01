@@ -31,9 +31,11 @@ from pathlib import Path
 from contextlib import contextmanager
 from datetime import timedelta
 
-# Add module directory to path if running directly
-if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).parent))
+# Add module directory to path for direct execution or interactive import
+# This ensures modules like spatial_scaling can be found in the except ImportError block
+_module_dir = Path(__file__).parent
+if str(_module_dir) not in sys.path:
+    sys.path.insert(0, str(_module_dir))
 
 import numpy as np
 import pandas as pd
