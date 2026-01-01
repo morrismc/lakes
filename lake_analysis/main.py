@@ -265,6 +265,21 @@ try:
         # Hypothesis tests for x_min sensitivity
         run_all_hypothesis_tests, generate_hypothesis_test_report
     )
+    # Glacial chronosequence analysis
+    from .glacial_chronosequence import (
+        run_glacial_chronosequence_analysis,
+        load_all_glacial_boundaries,
+        classify_lakes_by_glacial_extent,
+        compute_lake_density_by_glacial_stage,
+        test_davis_hypothesis
+    )
+    from .visualization import (
+        plot_density_by_glacial_stage,
+        plot_elevation_histogram_by_glacial_stage,
+        plot_davis_hypothesis_test,
+        plot_glacial_extent_map,
+        plot_glacial_chronosequence_summary
+    )
 except ImportError:
     from config import (
         LAKE_GDB_PATH, LAKE_FEATURE_CLASS, RASTERS, OUTPUT_DIR,
@@ -313,6 +328,21 @@ except ImportError:
         test_alpha_robustness, generate_xmin_summary_table,
         # Hypothesis tests for x_min sensitivity
         run_all_hypothesis_tests, generate_hypothesis_test_report
+    )
+    # Glacial chronosequence analysis
+    from glacial_chronosequence import (
+        run_glacial_chronosequence_analysis,
+        load_all_glacial_boundaries,
+        classify_lakes_by_glacial_extent,
+        compute_lake_density_by_glacial_stage,
+        test_davis_hypothesis
+    )
+    from visualization import (
+        plot_density_by_glacial_stage,
+        plot_elevation_histogram_by_glacial_stage,
+        plot_davis_hypothesis_test,
+        plot_glacial_extent_map,
+        plot_glacial_chronosequence_summary
     )
 
 
@@ -1253,10 +1283,151 @@ def analyze_domains(lakes, save_figures=True):
 
 
 # ============================================================================
+# GLACIAL CHRONOSEQUENCE ANALYSIS
+# ============================================================================
+
+def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
+    """
+    Run glacial chronosequence analysis to test Davis's hypothesis.
+
+    Tests whether lake density decreases with landscape age:
+    Wisconsin (youngest) -> Illinoian -> Driftless (never glaciated)
+
+    Parameters
+    ----------
+    lakes : DataFrame
+        Lake data with lat/lon columns
+    save_figures : bool
+        If True, generate and save visualizations
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    dict
+        Analysis results including:
+        - lake_gdf: Lakes with glacial classification
+        - boundaries: Glacial boundary GeoDataFrames
+        - density_by_stage: Lake density statistics
+        - elevation_by_stage: Elevation distribution data
+        - davis_test: Hypothesis test results
+    """
+    print("\n" + "=" * 60)
+    print("GLACIAL CHRONOSEQUENCE ANALYSIS")
+    print("Testing Davis's Hypothesis: Lake density decreases with age")
+    print("=" * 60)
+
+    try:
+        # Run the full glacial chronosequence analysis
+        results = run_glacial_chronosequence_analysis(
+            lakes,
+            save_results=True,
+            verbose=verbose
+        )
+
+        if results is None or 'error' in results:
+            print(f"\n[WARNING] Glacial analysis could not be completed")
+            if results and 'error' in results:
+                print(f"  Error: {results['error']}")
+            return None
+
+        # Generate visualizations if requested
+        if save_figures and results.get('density_by_stage') is not None:
+            ensure_output_dir()
+            glacial_output = Path(OUTPUT_DIR) / 'glacial_chronosequence'
+            glacial_output.mkdir(exist_ok=True)
+
+            print("\n  Generating glacial visualizations...")
+
+            # Density by glacial stage bar chart
+            try:
+                fig, ax = plot_density_by_glacial_stage(
+                    results['density_by_stage'],
+                    save_path=str(glacial_output / 'density_by_glacial_stage.png')
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Density by stage plot saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create density plot: {e}")
+
+            # Elevation histogram by glacial stage
+            if results.get('elevation_by_stage') is not None:
+                try:
+                    fig, axes = plot_elevation_histogram_by_glacial_stage(
+                        results['elevation_by_stage'],
+                        save_path=str(glacial_output / 'elevation_by_glacial_stage.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Elevation histogram saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create elevation histogram: {e}")
+
+            # Davis hypothesis test visualization
+            if results.get('davis_test') is not None:
+                try:
+                    fig, ax = plot_davis_hypothesis_test(
+                        results['davis_test'],
+                        density_df=results.get('density_by_stage'),
+                        save_path=str(glacial_output / 'davis_hypothesis_test.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Davis hypothesis test plot saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create Davis test plot: {e}")
+
+            # Multi-panel summary
+            try:
+                fig, axes = plot_glacial_chronosequence_summary(
+                    results,
+                    save_path=str(glacial_output / 'glacial_chronosequence_summary.png')
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Summary figure saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create summary figure: {e}")
+
+            # Geographic map (if boundaries available)
+            if results.get('boundaries') and results.get('lake_gdf') is not None:
+                try:
+                    fig, ax = plot_glacial_extent_map(
+                        results['lake_gdf'],
+                        results['boundaries'],
+                        save_path=str(glacial_output / 'glacial_extent_map.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Geographic map saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create geographic map: {e}")
+
+        # Print summary
+        print("\n[SUCCESS] Glacial chronosequence analysis complete!")
+        davis_results = results.get('davis_test', {})
+        if davis_results.get('supports_hypothesis'):
+            print("  CONCLUSION: Results SUPPORT Davis's hypothesis")
+        elif davis_results.get('supports_hypothesis') is False:
+            print("  CONCLUSION: Results do NOT support Davis's hypothesis")
+        else:
+            print("  CONCLUSION: Insufficient data for hypothesis test")
+
+        return results
+
+    except Exception as e:
+        print(f"\n[ERROR] Glacial analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# ============================================================================
 # FULL ANALYSIS PIPELINE
 # ============================================================================
 
-def run_full_analysis(data_source='conus', include_xmin_by_elevation=True):
+def run_full_analysis(data_source='conus', include_xmin_by_elevation=True, include_glacial_analysis=False):
     """
     Run complete analysis pipeline for all hypotheses.
 
@@ -1269,6 +1440,9 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True):
         'conus' (recommended), 'gdb', or 'parquet'
     include_xmin_by_elevation : bool
         If True, run the comprehensive x_min sensitivity by elevation analysis
+    include_glacial_analysis : bool
+        If True, run glacial chronosequence analysis (Davis's hypothesis).
+        Requires glacial boundary shapefiles configured in config.py.
 
     Returns
     -------
@@ -1277,7 +1451,11 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True):
     """
     # Initialize timer
     timer = reset_timer()
-    total_steps = 13 if include_xmin_by_elevation else 12
+    total_steps = 12
+    if include_xmin_by_elevation:
+        total_steps += 1
+    if include_glacial_analysis:
+        total_steps += 1
 
     print("\n" + "=" * 70)
     print("LAKE DISTRIBUTION ANALYSIS - FULL PIPELINE")
@@ -1362,7 +1540,14 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True):
     with timed_step(timer, "Domain classification"):
         results['domains'] = analyze_domains(lakes)
 
-    # Step 12: Generate additional figures
+    # Step 12: Glacial chronosequence analysis (if enabled)
+    if include_glacial_analysis:
+        step += 1
+        print_step_header(step, total_steps, "Glacial Chronosequence Analysis (Davis's Hypothesis)")
+        with timed_step(timer, "Glacial chronosequence analysis"):
+            results['glacial_chronosequence'] = analyze_glacial_chronosequence(lakes)
+
+    # Step 13: Generate additional figures
     step += 1
     print_step_header(step, total_steps, "Generating Summary Figures")
     with timed_step(timer, "Summary figures"):
@@ -1738,16 +1923,21 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
 4. Advanced analyses:
    >>> results = analyze_slope_relief(lakes)         # Slope x relief heatmap
    >>> results = analyze_powerlaw_sensitivity(lakes) # x_min sensitivity
-   >>> results = analyze_xmin_by_elevation(lakes)    # NEW: x_min by elevation
+   >>> results = analyze_xmin_by_elevation(lakes)    # x_min by elevation
 
-5. Run full pipeline (with progress tracking):
+5. Glacial chronosequence analysis (Davis's hypothesis):
+   >>> results = analyze_glacial_chronosequence(lakes)
+   # Tests if lake density decreases with landscape age
+
+6. Run full pipeline (with progress tracking):
    >>> all_results = run_full_analysis()
 
    Options:
    >>> run_full_analysis(data_source='conus')              # Default
    >>> run_full_analysis(include_xmin_by_elevation=False)  # Skip detailed x_min
+   >>> run_full_analysis(include_glacial_analysis=True)    # Include Davis hypothesis
 
-6. Classify domains:
+7. Classify domains:
    >>> lakes_classified = analyze_domains(lakes)
 
 Key Outputs:
@@ -1791,15 +1981,23 @@ if __name__ == "__main__":
                        help='Skip x_min by elevation analysis in full pipeline')
     parser.add_argument('--xmin-elevation', action='store_true',
                        help='Run only x_min by elevation analysis')
+    parser.add_argument('--glacial', action='store_true',
+                       help='Run glacial chronosequence analysis (Davis hypothesis)')
+    parser.add_argument('--include-glacial', action='store_true',
+                       help='Include glacial analysis in full pipeline')
 
     args = parser.parse_args()
 
     if args.check:
         quick_data_check()
+    elif args.glacial:
+        lakes = load_data(source=args.source)
+        analyze_glacial_chronosequence(lakes)
     elif args.full:
         run_full_analysis(
             data_source=args.source,
-            include_xmin_by_elevation=not args.no_xmin_elevation
+            include_xmin_by_elevation=not args.no_xmin_elevation,
+            include_glacial_analysis=args.include_glacial
         )
     elif args.xmin_elevation:
         lakes = load_data(source=args.source)

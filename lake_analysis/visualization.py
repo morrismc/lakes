@@ -3759,6 +3759,522 @@ def plot_colored_summary_table(xmin_results, hypothesis_results=None,
     return fig, ax
 
 
+# ============================================================================
+# GLACIAL CHRONOSEQUENCE VISUALIZATIONS
+# ============================================================================
+
+def plot_density_by_glacial_stage(density_df, figsize=(12, 6), save_path=None):
+    """
+    Plot lake density by glacial stage as a bar chart.
+
+    Tests Davis's hypothesis that lake density decreases with landscape age.
+
+    Parameters
+    ----------
+    density_df : DataFrame
+        Output from compute_lake_density_by_glacial_stage()
+        Columns: glacial_stage, n_lakes, density_per_1000km2, age_ka, color
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, ax)
+    """
+    setup_plot_style()
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Sort by age (youngest first, handle None age for Driftless)
+    df = density_df.copy()
+    df['sort_age'] = df['age_ka'].fillna(999999)
+    df = df.sort_values('sort_age')
+
+    # Extract data
+    stages = df['glacial_stage'].values
+    densities = df['density_per_1000km2'].values
+    colors = df['color'].values if 'color' in df.columns else ['#1f77b4'] * len(df)
+    n_lakes = df['n_lakes'].values
+
+    # Create bar chart
+    bars = ax.bar(range(len(stages)), densities, color=colors, edgecolor='black', linewidth=1.5)
+
+    # Add value labels on bars
+    for i, (bar, n, d) in enumerate(zip(bars, n_lakes, densities)):
+        if pd.notna(d):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                    f'{d:.1f}',
+                    ha='center', va='bottom', fontsize=11, fontweight='bold')
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height()/2,
+                    f'n={n:,}',
+                    ha='center', va='center', fontsize=9, color='white')
+
+    # Labels and formatting
+    ax.set_xticks(range(len(stages)))
+    ax.set_xticklabels(stages, rotation=0, ha='center', fontsize=12)
+    ax.set_ylabel('Lake Density (lakes per 1,000 km²)', fontsize=14)
+    ax.set_xlabel('Glacial Stage (youngest → oldest)', fontsize=14)
+    ax.set_title("Lake Density by Glacial Stage\nTesting Davis's Hypothesis", fontsize=16, fontweight='bold')
+
+    # Add age labels below stage names
+    for i, row in enumerate(df.itertuples()):
+        if pd.notna(row.age_ka):
+            age_str = f'{row.age_ka:.0f} ka' if row.age_ka < 1000 else f'{row.age_ka/1000:.0f} Ma'
+        else:
+            age_str = 'Never glaciated'
+        ax.text(i, -0.05, age_str, ha='center', va='top', fontsize=9,
+                transform=ax.get_xaxis_transform(), style='italic', color='gray')
+
+    ax.set_ylim(bottom=0)
+    ax.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_elevation_histogram_by_glacial_stage(elevation_df, figsize=(14, 8), save_path=None):
+    """
+    Plot elevation histograms showing lake counts with glacial stage overlays.
+
+    Creates stacked bar chart showing how lakes at each elevation are
+    distributed across different glacial stages.
+
+    Parameters
+    ----------
+    elevation_df : DataFrame
+        Output from compute_elevation_binned_density_by_stage()
+        Columns: elev_bin_mid, glacial_stage, n_lakes, pct_of_stage
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, ax)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    # Get unique stages and their colors
+    try:
+        from .config import GLACIAL_CHRONOLOGY
+    except ImportError:
+        from config import GLACIAL_CHRONOLOGY
+
+    stages = elevation_df['glacial_stage'].unique()
+    stage_colors = {}
+    for stage in stages:
+        stage_lower = stage.lower()
+        for key, chrono in GLACIAL_CHRONOLOGY.items():
+            if key in stage_lower or chrono['name'].lower() in stage_lower:
+                stage_colors[stage] = chrono['color']
+                break
+        if stage not in stage_colors:
+            stage_colors[stage] = '#808080'
+
+    # Get elevation bins
+    elev_bins = sorted(elevation_df['elev_bin_mid'].dropna().unique())
+    bar_width = elev_bins[1] - elev_bins[0] if len(elev_bins) > 1 else 100
+
+    # Left panel: Stacked bar chart (absolute counts)
+    ax1 = axes[0]
+    bottom = np.zeros(len(elev_bins))
+
+    for stage in stages:
+        stage_data = elevation_df[elevation_df['glacial_stage'] == stage]
+        counts = []
+        for elev in elev_bins:
+            match = stage_data[stage_data['elev_bin_mid'] == elev]
+            counts.append(match['n_lakes'].values[0] if len(match) > 0 else 0)
+
+        ax1.bar(elev_bins, counts, width=bar_width*0.9, bottom=bottom,
+                label=stage, color=stage_colors[stage], edgecolor='white', linewidth=0.5)
+        bottom += np.array(counts)
+
+    ax1.set_xlabel('Elevation (m)', fontsize=14)
+    ax1.set_ylabel('Lake Count', fontsize=14)
+    ax1.set_title('A) Lake Count by Elevation\n(Stacked by Glacial Stage)', fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=10)
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Right panel: Overlaid density curves (normalized within each stage)
+    ax2 = axes[1]
+
+    for stage in stages:
+        stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+        if len(stage_data) > 0:
+            ax2.plot(stage_data['elev_bin_mid'], stage_data['pct_of_stage'],
+                     'o-', linewidth=2, markersize=4, label=stage, color=stage_colors[stage])
+
+    ax2.set_xlabel('Elevation (m)', fontsize=14)
+    ax2.set_ylabel('Percent of Stage Total (%)', fontsize=14)
+    ax2.set_title('B) Elevation Distribution Within Each Stage\n(Normalized)', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=10)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_davis_hypothesis_test(davis_results, density_df=None, figsize=(10, 8), save_path=None):
+    """
+    Visualize Davis's hypothesis test results.
+
+    Shows the relationship between glacial stage age and lake density
+    with regression line and statistical annotations.
+
+    Parameters
+    ----------
+    davis_results : dict
+        Output from test_davis_hypothesis()
+    density_df : DataFrame, optional
+        Density data for additional annotations
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, ax)
+    """
+    setup_plot_style()
+    fig, ax = plt.subplots(figsize=figsize)
+
+    ages = np.array(davis_results.get('ages', []))
+    densities = np.array(davis_results.get('densities', []))
+
+    if len(ages) == 0:
+        ax.text(0.5, 0.5, 'Insufficient data for visualization',
+                ha='center', va='center', fontsize=14, transform=ax.transAxes)
+        return fig, ax
+
+    # Plot data points
+    try:
+        from .config import GLACIAL_CHRONOLOGY
+    except ImportError:
+        from config import GLACIAL_CHRONOLOGY
+
+    if density_df is not None:
+        for _, row in density_df.iterrows():
+            if pd.notna(row['age_ka']) and pd.notna(row['density_per_1000km2']):
+                color = row.get('color', '#1f77b4')
+                ax.scatter(row['age_ka'], row['density_per_1000km2'],
+                          s=200, c=color, edgecolors='black', linewidth=2, zorder=5)
+                ax.annotate(row['glacial_stage'],
+                           (row['age_ka'], row['density_per_1000km2']),
+                           xytext=(10, 10), textcoords='offset points',
+                           fontsize=11, fontweight='bold')
+    else:
+        ax.scatter(ages, densities, s=150, c='steelblue', edgecolors='black', linewidth=2, zorder=5)
+
+    # Add regression line
+    slope = davis_results.get('slope')
+    intercept = davis_results.get('intercept')
+    if slope is not None and intercept is not None:
+        x_line = np.linspace(min(ages)*0.9, max(ages)*1.1, 100)
+        y_line = slope * x_line + intercept
+        ax.plot(x_line, y_line, 'r--', linewidth=2, label='Regression line', zorder=3)
+
+        # Add confidence band (approximate)
+        r_squared = davis_results.get('r_squared', 0)
+        if r_squared > 0:
+            residual_std = np.std(densities - (slope * ages + intercept))
+            ax.fill_between(x_line, y_line - 1.96*residual_std, y_line + 1.96*residual_std,
+                           alpha=0.2, color='red', label='95% CI')
+
+    # Add statistics annotation
+    stats_text = (
+        f"Pearson r = {davis_results.get('correlation', np.nan):.3f}\n"
+        f"p-value = {davis_results.get('p_value', np.nan):.4f}\n"
+        f"R² = {davis_results.get('r_squared', np.nan):.3f}\n"
+        f"Slope = {davis_results.get('slope', np.nan):.4f}\n"
+        f"n = {davis_results.get('n_stages', 0)} stages"
+    )
+    ax.text(0.95, 0.95, stats_text, transform=ax.transAxes,
+            fontsize=11, verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray'))
+
+    # Conclusion box
+    supports = davis_results.get('supports_hypothesis')
+    if supports:
+        conclusion = "SUPPORTS Davis's Hypothesis"
+        box_color = '#90EE90'
+    elif supports is False:
+        conclusion = "Does NOT support Davis's Hypothesis"
+        box_color = '#FFB6C1'
+    else:
+        conclusion = "Insufficient data"
+        box_color = '#FFE4B5'
+
+    ax.text(0.5, 0.02, conclusion, transform=ax.transAxes,
+            fontsize=14, fontweight='bold', verticalalignment='bottom',
+            horizontalalignment='center',
+            bbox=dict(boxstyle='round', facecolor=box_color, edgecolor='black', linewidth=2))
+
+    # Labels
+    ax.set_xlabel('Glacial Stage Age (ka = thousands of years BP)', fontsize=14)
+    ax.set_ylabel('Lake Density (lakes per 1,000 km²)', fontsize=14)
+    ax.set_title("Davis's Hypothesis Test:\nLake Density vs. Landscape Age", fontsize=16, fontweight='bold')
+    ax.legend(loc='upper left', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_glacial_extent_map(lake_gdf, boundaries, figsize=(14, 10), save_path=None):
+    """
+    Create a geographic map showing glacial extents and lake locations.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with glacial_stage column
+    boundaries : dict
+        Dictionary of glacial boundary GeoDataFrames
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, ax)
+    """
+    setup_plot_style()
+    fig, ax = plt.subplots(figsize=figsize)
+
+    try:
+        from .config import GLACIAL_CHRONOLOGY
+    except ImportError:
+        from config import GLACIAL_CHRONOLOGY
+
+    # Plot glacial boundaries in order (oldest first, so newest is on top)
+    boundary_order = ['driftless', 'illinoian', 'wisconsin', 'dalton_18ka']
+    alphas = {'driftless': 0.3, 'illinoian': 0.4, 'wisconsin': 0.5, 'dalton_18ka': 0.3}
+
+    for key in boundary_order:
+        gdf = boundaries.get(key)
+        if gdf is None:
+            continue
+
+        chrono = GLACIAL_CHRONOLOGY.get(key.replace('_18ka', '').replace('dalton', 'alpine'), {})
+        color = chrono.get('color', '#808080')
+        name = chrono.get('name', key)
+        alpha = alphas.get(key, 0.5)
+
+        gdf.plot(ax=ax, color=color, alpha=alpha, edgecolor='black',
+                linewidth=0.5, label=name)
+
+    # Plot lakes colored by glacial stage
+    if 'glacial_stage' in lake_gdf.columns:
+        for stage in lake_gdf['glacial_stage'].unique():
+            stage_lakes = lake_gdf[lake_gdf['glacial_stage'] == stage]
+            stage_lower = stage.lower()
+
+            # Find color
+            color = '#808080'
+            for key, chrono in GLACIAL_CHRONOLOGY.items():
+                if key in stage_lower or chrono['name'].lower() in stage_lower:
+                    color = chrono['color']
+                    break
+
+            stage_lakes.plot(ax=ax, color=color, markersize=1, alpha=0.5, label=f'Lakes - {stage}')
+
+    ax.set_xlabel('Easting (m)', fontsize=12)
+    ax.set_ylabel('Northing (m)', fontsize=12)
+    ax.set_title('Glacial Extents and Lake Distribution\n(USA Contiguous Albers Equal Area)', fontsize=14, fontweight='bold')
+
+    # Add legend with proper handling of many items
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys(), loc='upper right', fontsize=9)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_glacial_chronosequence_summary(results, figsize=(16, 12), save_path=None):
+    """
+    Create a multi-panel summary figure for glacial chronosequence analysis.
+
+    Parameters
+    ----------
+    results : dict
+        Output from run_glacial_chronosequence_analysis()
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes)
+    """
+    setup_plot_style()
+    fig = plt.figure(figsize=figsize)
+
+    # Create 2x2 grid of subplots
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
+
+    # Panel A: Density by glacial stage (bar chart)
+    ax1 = fig.add_subplot(gs[0, 0])
+    density_df = results.get('density_by_stage')
+    if density_df is not None:
+        df = density_df.copy()
+        df['sort_age'] = df['age_ka'].fillna(999999)
+        df = df.sort_values('sort_age')
+
+        stages = df['glacial_stage'].values
+        densities = df['density_per_1000km2'].values
+        colors = df['color'].values if 'color' in df.columns else ['#1f77b4'] * len(df)
+
+        bars = ax1.bar(range(len(stages)), densities, color=colors, edgecolor='black', linewidth=1.5)
+
+        for i, (bar, d) in enumerate(zip(bars, densities)):
+            if pd.notna(d):
+                ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                        f'{d:.1f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+
+        ax1.set_xticks(range(len(stages)))
+        ax1.set_xticklabels(stages, rotation=30, ha='right', fontsize=10)
+        ax1.set_ylabel('Lakes per 1,000 km²', fontsize=12)
+        ax1.set_title('A) Lake Density by Glacial Stage', fontsize=14, fontweight='bold')
+        ax1.grid(axis='y', alpha=0.3)
+
+    # Panel B: Davis hypothesis test
+    ax2 = fig.add_subplot(gs[0, 1])
+    davis_results = results.get('davis_test', {})
+    ages = np.array(davis_results.get('ages', []))
+    densities_test = np.array(davis_results.get('densities', []))
+
+    if len(ages) > 0:
+        ax2.scatter(ages, densities_test, s=120, c='steelblue', edgecolors='black', linewidth=2, zorder=5)
+
+        slope = davis_results.get('slope')
+        intercept = davis_results.get('intercept')
+        if slope is not None and intercept is not None:
+            x_line = np.linspace(min(ages)*0.9, max(ages)*1.1, 100)
+            y_line = slope * x_line + intercept
+            ax2.plot(x_line, y_line, 'r--', linewidth=2)
+
+        r = davis_results.get('correlation', np.nan)
+        p = davis_results.get('p_value', np.nan)
+        ax2.text(0.95, 0.95, f'r = {r:.3f}\np = {p:.4f}',
+                transform=ax2.transAxes, fontsize=11, va='top', ha='right',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='gray'))
+
+        ax2.set_xlabel('Age (ka)', fontsize=12)
+        ax2.set_ylabel('Lake Density', fontsize=12)
+        ax2.set_title("B) Davis's Hypothesis Test", fontsize=14, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+
+    # Panel C: Elevation distribution by stage
+    ax3 = fig.add_subplot(gs[1, 0])
+    elevation_df = results.get('elevation_by_stage')
+    if elevation_df is not None:
+        try:
+            from .config import GLACIAL_CHRONOLOGY
+        except ImportError:
+            from config import GLACIAL_CHRONOLOGY
+
+        for stage in elevation_df['glacial_stage'].unique():
+            stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+            if len(stage_data) > 0:
+                stage_lower = stage.lower()
+                color = '#808080'
+                for key, chrono in GLACIAL_CHRONOLOGY.items():
+                    if key in stage_lower or chrono['name'].lower() in stage_lower:
+                        color = chrono['color']
+                        break
+                ax3.plot(stage_data['elev_bin_mid'], stage_data['pct_of_stage'],
+                        'o-', linewidth=2, markersize=3, label=stage, color=color)
+
+        ax3.set_xlabel('Elevation (m)', fontsize=12)
+        ax3.set_ylabel('Percent of Stage (%)', fontsize=12)
+        ax3.set_title('C) Elevation Distribution by Stage', fontsize=14, fontweight='bold')
+        ax3.legend(loc='upper right', fontsize=9)
+        ax3.grid(True, alpha=0.3)
+
+    # Panel D: Lake count summary table
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.axis('off')
+
+    if density_df is not None:
+        table_data = []
+        headers = ['Stage', 'n Lakes', 'Density', 'Mean Area', 'Age (ka)']
+
+        for _, row in density_df.iterrows():
+            table_data.append([
+                row['glacial_stage'],
+                f"{row['n_lakes']:,}",
+                f"{row['density_per_1000km2']:.1f}" if pd.notna(row['density_per_1000km2']) else '-',
+                f"{row['mean_lake_area_km2']:.4f}" if pd.notna(row['mean_lake_area_km2']) else '-',
+                f"{row['age_ka']:.0f}" if pd.notna(row['age_ka']) else 'Never',
+            ])
+
+        table = ax4.table(cellText=table_data, colLabels=headers,
+                         loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(11)
+        table.scale(1.2, 2.0)
+
+        # Style header
+        for i in range(len(headers)):
+            table[(0, i)].set_facecolor('#4472C4')
+            table[(0, i)].set_text_props(color='white', fontweight='bold')
+
+        ax4.set_title('D) Summary Statistics', fontsize=14, fontweight='bold', pad=20)
+
+    # Overall title
+    supports = davis_results.get('supports_hypothesis')
+    if supports:
+        conclusion = "Results SUPPORT Davis's Hypothesis"
+    elif supports is False:
+        conclusion = "Results do NOT support Davis's Hypothesis"
+    else:
+        conclusion = "Insufficient data for hypothesis test"
+
+    fig.suptitle(f'Glacial Chronosequence Analysis\n{conclusion}',
+                fontsize=16, fontweight='bold', y=1.02)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, [ax1, ax2, ax3, ax4]
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
@@ -3788,3 +4304,9 @@ if __name__ == "__main__":
     print("  - plot_hypothesis_test_summary()")
     print("  - plot_hypothesis_test_results()")
     print("  - plot_colored_summary_table()")
+    print("  # Glacial chronosequence visualizations:")
+    print("  - plot_density_by_glacial_stage()")
+    print("  - plot_elevation_histogram_by_glacial_stage()")
+    print("  - plot_davis_hypothesis_test()")
+    print("  - plot_glacial_extent_map()")
+    print("  - plot_glacial_chronosequence_summary()")

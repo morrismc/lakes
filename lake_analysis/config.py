@@ -111,6 +111,109 @@ SHAPEFILES = {
     'conus_boundary': r"F:\Lakes\GIS\shapefiles\cb_2024_us_all_5m\cb_2024_us_nation_5m\cb_2024_us_nation_5m.shp",
 }
 
+# ============================================================================
+# GLACIAL CHRONOSEQUENCE DATASETS
+# ============================================================================
+# Glacial boundary datasets for testing Davis's hypothesis that lake density
+# decreases with time since glaciation (landscape "maturity")
+
+# Target CRS for all glacial spatial operations (USA Contiguous Albers Equal Area)
+# This is an equal-area projection essential for density calculations
+GLACIAL_TARGET_CRS = "ESRI:102039"  # USA Contiguous Albers Equal Area Conic
+
+# Alternative PROJ4 specification if ESRI code doesn't work
+GLACIAL_TARGET_CRS_PROJ4 = (
+    "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 "
+    "+x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs"
+)
+
+# Glacial boundary file paths
+GLACIAL_BOUNDARIES = {
+    # Dalton 2020 North American Ice Sheets at 18ka (Last Glacial Maximum)
+    # CRS: NAD 1983 Canada Atlas Lambert (EPSG:3978)
+    # NOTE: Covers all of North America - must be clipped to CONUS
+    'dalton_18ka': {
+        'path': r"F:\Lakes\GIS\shapefiles\Dalton_2020_NA_IceSheets\shapefiles\18ka_21.7cal_MOCA_15_Aug_2019.shp",
+        'crs': 'EPSG:3978',
+        'description': 'Dalton 2020 NA ice sheet extent at 18ka (LGM)',
+        'age_ka': 18,  # thousand years before present
+    },
+
+    # Wisconsin glaciation extent (most recent major glaciation)
+    # CRS: USA Contiguous Albers (WKID:102039)
+    'wisconsin': {
+        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'layer': 'Wisconsin_area',
+        'crs': 'ESRI:102039',
+        'description': 'Wisconsin glaciation maximum extent',
+        'age_ka': (15, 25),  # ~15,000-25,000 years BP
+    },
+
+    # Illinoian glaciation extent (older glaciation)
+    # CRS: USA Contiguous Albers (WKID:102039)
+    'illinoian': {
+        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'layer': 'illinoian_glacial_extent',
+        'crs': 'ESRI:102039',
+        'description': 'Illinoian glaciation maximum extent',
+        'age_ka': (130, 190),  # ~130,000-190,000 years BP
+    },
+
+    # Driftless Area - definitely never glaciated
+    # CRS: NAD 1983 UTM 15N (EPSG:26915)
+    'driftless_definite': {
+        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'layer': 'definite_driftless_area_never_glaciated',
+        'crs': 'EPSG:26915',
+        'description': 'Driftless Area - never glaciated (definite)',
+        'age_ka': None,  # Never glaciated
+    },
+
+    # Larger Driftless Area - may have pre-Illinoian till
+    # CRS: NAD 1983 UTM 15N (EPSG:26915)
+    'driftless_larger': {
+        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'layer': 'larger_driftless_area_may_have_beenglaciatiated',
+        'crs': 'EPSG:26915',
+        'description': 'Larger Driftless Area - may have pre-Illinoian till',
+        'age_ka': (300, None),  # Possibly >300,000 years BP if glaciated
+    },
+}
+
+# Glacial stage classification order (youngest to oldest)
+GLACIAL_CHRONOLOGY = {
+    'wisconsin': {
+        'name': 'Wisconsin',
+        'age_ka': (15, 25),
+        'color': '#1f77b4',  # Blue
+        'order': 1,
+    },
+    'illinoian': {
+        'name': 'Illinoian',
+        'age_ka': (130, 190),
+        'color': '#ff7f0e',  # Orange
+        'order': 2,
+    },
+    'pre_illinoian': {
+        'name': 'Pre-Illinoian',
+        'age_ka': (300, None),
+        'color': '#2ca02c',  # Green
+        'order': 3,
+    },
+    'driftless': {
+        'name': 'Driftless (Never Glaciated)',
+        'age_ka': None,
+        'color': '#d62728',  # Red
+        'order': 4,
+    },
+    'alpine': {
+        'name': 'Western Alpine (Dalton)',
+        'age_ka': 18,
+        'color': '#9467bd',  # Purple
+        'order': 0,  # Special category
+    },
+}
+
 # Shapefile metadata
 SHAPEFILE_METADATA = {
     'conus_boundary': {
