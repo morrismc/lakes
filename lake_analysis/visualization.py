@@ -4275,6 +4275,301 @@ def plot_glacial_chronosequence_summary(results, figsize=(16, 12), save_path=Non
     return fig, [ax1, ax2, ax3, ax4]
 
 
+def plot_bimodal_decomposition(bimodal_results, figsize=(16, 10), save_path=None):
+    """
+    Visualize bimodal pattern decomposition by glacial status.
+
+    Shows how glaciated vs never-glaciated regions contribute to the
+    bimodal lake distribution pattern observed in elevation-normalized density.
+
+    Parameters
+    ----------
+    bimodal_results : dict
+        Output from decompose_bimodal_by_glacial_status() containing:
+        - elevation_bins : array of elevation bin edges
+        - glaciated_density : density from glaciated regions
+        - never_glaciated_density : density from never-glaciated regions
+        - total_density : total normalized density
+        - lowland_peak_stats : stats for low-elevation peak
+        - highland_peak_stats : stats for high-elevation peak
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    # Panel A: Stacked area plot showing contributions
+    ax1 = axes[0, 0]
+
+    elev_bins = bimodal_results.get('elevation_bins', [])
+    glaciated = bimodal_results.get('glaciated_density', [])
+    never_glac = bimodal_results.get('never_glaciated_density', [])
+
+    if len(elev_bins) > 1:
+        # Use bin midpoints for plotting
+        midpoints = [(elev_bins[i] + elev_bins[i+1])/2 for i in range(len(elev_bins)-1)]
+
+        # Ensure arrays match length
+        if len(glaciated) == len(midpoints) and len(never_glac) == len(midpoints):
+            ax1.fill_between(midpoints, 0, glaciated, alpha=0.7,
+                           label='Glaciated regions', color='#1f77b4')
+            ax1.fill_between(midpoints, glaciated,
+                           np.array(glaciated) + np.array(never_glac),
+                           alpha=0.7, label='Never glaciated', color='#ff7f0e')
+            ax1.set_xlabel('Elevation (m)', fontsize=12)
+            ax1.set_ylabel('Normalized Lake Density', fontsize=12)
+            ax1.set_title('A) Bimodal Pattern Decomposition', fontsize=14, fontweight='bold')
+            ax1.legend(loc='upper right', fontsize=10)
+            ax1.grid(True, alpha=0.3)
+
+    # Panel B: Line plot comparing patterns
+    ax2 = axes[0, 1]
+
+    total = bimodal_results.get('total_density', [])
+    if len(elev_bins) > 1 and len(total) == len(midpoints):
+        ax2.plot(midpoints, total, 'k-', linewidth=2.5, label='Total', zorder=3)
+        if len(glaciated) == len(midpoints):
+            ax2.plot(midpoints, glaciated, '--', linewidth=2,
+                    label='Glaciated', color='#1f77b4')
+        if len(never_glac) == len(midpoints):
+            ax2.plot(midpoints, never_glac, ':', linewidth=2,
+                    label='Never glaciated', color='#ff7f0e')
+
+        ax2.set_xlabel('Elevation (m)', fontsize=12)
+        ax2.set_ylabel('Normalized Lake Density', fontsize=12)
+        ax2.set_title('B) Pattern Comparison', fontsize=14, fontweight='bold')
+        ax2.legend(loc='upper right', fontsize=10)
+        ax2.grid(True, alpha=0.3)
+
+    # Panel C: Peak statistics
+    ax3 = axes[1, 0]
+    ax3.axis('off')
+
+    lowland = bimodal_results.get('lowland_peak_stats', {})
+    highland = bimodal_results.get('highland_peak_stats', {})
+
+    table_data = []
+    headers = ['Metric', 'Lowland Peak', 'Highland Peak']
+
+    metrics = [
+        ('Peak elevation (m)', 'peak_elevation'),
+        ('Peak density', 'peak_density'),
+        ('Glaciated fraction', 'glaciated_fraction'),
+        ('Primary driver', 'primary_driver'),
+    ]
+
+    for label, key in metrics:
+        row = [label]
+        for peak in [lowland, highland]:
+            val = peak.get(key, 'N/A')
+            if isinstance(val, float):
+                row.append(f'{val:.3f}')
+            else:
+                row.append(str(val))
+        table_data.append(row)
+
+    if table_data:
+        table = ax3.table(cellText=table_data, colLabels=headers,
+                         loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(11)
+        table.scale(1.2, 1.8)
+
+        # Style header
+        for i in range(len(headers)):
+            table[(0, i)].set_facecolor('#4472C4')
+            table[(0, i)].set_text_props(color='white', fontweight='bold')
+
+    ax3.set_title('C) Peak Statistics', fontsize=14, fontweight='bold', y=0.9)
+
+    # Panel D: Interpretation
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+
+    interpretation = bimodal_results.get('interpretation', {})
+    text_lines = [
+        'Bimodal Pattern Interpretation:',
+        '',
+        f"• Lowland peak: {interpretation.get('lowland_explanation', 'N/A')}",
+        f"• Highland peak: {interpretation.get('highland_explanation', 'N/A')}",
+        '',
+        'Key Finding:',
+        interpretation.get('key_finding', 'Analysis pending'),
+    ]
+
+    ax4.text(0.1, 0.9, '\n'.join(text_lines), transform=ax4.transAxes,
+            fontsize=11, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    ax4.set_title('D) Interpretation', fontsize=14, fontweight='bold', y=0.95)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_power_law_by_glacial_zone(power_law_results, figsize=(14, 10), save_path=None):
+    """
+    Visualize power law analysis results by glacial zone.
+
+    Shows how power law exponents (α) and x_min values vary across
+    glacial chronosequence stages.
+
+    Parameters
+    ----------
+    power_law_results : dict
+        Output from power_law_by_glacial_zone() containing fit results
+        for each glacial stage
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    # Extract data from results
+    stages = []
+    alphas = []
+    alpha_errors = []
+    xmins = []
+    n_tails = []
+    ages = []
+
+    for stage, data in power_law_results.items():
+        if isinstance(data, dict) and 'alpha' in data:
+            stages.append(stage)
+            alphas.append(data.get('alpha', np.nan))
+            # Error from bootstrap CI
+            alpha_ci = data.get('alpha_ci', (np.nan, np.nan))
+            if isinstance(alpha_ci, (list, tuple)) and len(alpha_ci) == 2:
+                alpha_errors.append((data['alpha'] - alpha_ci[0], alpha_ci[1] - data['alpha']))
+            else:
+                alpha_errors.append((0, 0))
+            xmins.append(data.get('x_min', np.nan))
+            n_tails.append(data.get('n_tail', 0))
+            ages.append(data.get('age_ka', np.nan))
+
+    if len(stages) == 0:
+        for ax in axes.flat:
+            ax.text(0.5, 0.5, 'No valid power law fits', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=14)
+        return fig, axes
+
+    # Sort by age
+    sort_idx = np.argsort([a if not np.isnan(a) else 999999 for a in ages])
+    stages = [stages[i] for i in sort_idx]
+    alphas = [alphas[i] for i in sort_idx]
+    alpha_errors = [alpha_errors[i] for i in sort_idx]
+    xmins = [xmins[i] for i in sort_idx]
+    n_tails = [n_tails[i] for i in sort_idx]
+    ages = [ages[i] for i in sort_idx]
+
+    x_pos = np.arange(len(stages))
+
+    # Panel A: Alpha by glacial zone
+    ax1 = axes[0, 0]
+    yerr_lower = [e[0] for e in alpha_errors]
+    yerr_upper = [e[1] for e in alpha_errors]
+
+    colors = plt.cm.Blues(np.linspace(0.4, 0.9, len(stages)))
+    ax1.bar(x_pos, alphas, yerr=[yerr_lower, yerr_upper], capsize=5,
+           color=colors, edgecolor='black', linewidth=1.5)
+
+    # Reference lines
+    ax1.axhline(2.05, color='red', linestyle='--', linewidth=2,
+               label='Percolation (τ=2.05)')
+    ax1.axhline(2.14, color='green', linestyle=':', linewidth=2,
+               label='Global (τ=2.14)')
+
+    ax1.set_xticks(x_pos)
+    ax1.set_xticklabels(stages, rotation=30, ha='right', fontsize=10)
+    ax1.set_ylabel('Power Law Exponent (α)', fontsize=12)
+    ax1.set_title('A) Power Law Exponent by Glacial Stage', fontsize=14, fontweight='bold')
+    ax1.legend(loc='best', fontsize=9)
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Panel B: x_min by glacial zone
+    ax2 = axes[0, 1]
+    ax2.bar(x_pos, xmins, color=colors, edgecolor='black', linewidth=1.5)
+
+    ax2.set_xticks(x_pos)
+    ax2.set_xticklabels(stages, rotation=30, ha='right', fontsize=10)
+    ax2.set_ylabel('x_min (km²)', fontsize=12)
+    ax2.set_title('B) Optimal x_min by Glacial Stage', fontsize=14, fontweight='bold')
+    ax2.grid(axis='y', alpha=0.3)
+
+    # Panel C: Alpha vs Age scatter
+    ax3 = axes[1, 0]
+    valid_mask = [not np.isnan(a) for a in ages]
+    valid_ages = [ages[i] for i in range(len(ages)) if valid_mask[i]]
+    valid_alphas = [alphas[i] for i in range(len(alphas)) if valid_mask[i]]
+    valid_stages = [stages[i] for i in range(len(stages)) if valid_mask[i]]
+
+    if len(valid_ages) > 1:
+        ax3.scatter(valid_ages, valid_alphas, s=120, c='steelblue',
+                   edgecolors='black', linewidth=2, zorder=5)
+
+        # Add stage labels
+        for age, alpha, stage in zip(valid_ages, valid_alphas, valid_stages):
+            ax3.annotate(stage, (age, alpha), xytext=(5, 5),
+                        textcoords='offset points', fontsize=9)
+
+        # Fit regression line
+        from scipy import stats
+        slope, intercept, r, p, se = stats.linregress(valid_ages, valid_alphas)
+        x_line = np.linspace(min(valid_ages)*0.9, max(valid_ages)*1.1, 100)
+        y_line = slope * x_line + intercept
+        ax3.plot(x_line, y_line, 'r--', linewidth=2)
+
+        ax3.text(0.95, 0.95, f'r = {r:.3f}\np = {p:.4f}',
+                transform=ax3.transAxes, fontsize=11, va='top', ha='right',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='gray'))
+
+    ax3.set_xlabel('Age (ka)', fontsize=12)
+    ax3.set_ylabel('Power Law Exponent (α)', fontsize=12)
+    ax3.set_title('C) α vs Landscape Age', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+
+    # Panel D: Sample size by zone
+    ax4 = axes[1, 1]
+    ax4.bar(x_pos, n_tails, color=colors, edgecolor='black', linewidth=1.5)
+
+    # Add value labels
+    for i, n in enumerate(n_tails):
+        ax4.text(i, n, f'{n:,}', ha='center', va='bottom', fontsize=10)
+
+    ax4.set_xticks(x_pos)
+    ax4.set_xticklabels(stages, rotation=30, ha='right', fontsize=10)
+    ax4.set_ylabel('n Lakes in Power Law Tail', fontsize=12)
+    ax4.set_title('D) Sample Size by Glacial Stage', fontsize=14, fontweight='bold')
+    ax4.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
@@ -4310,3 +4605,5 @@ if __name__ == "__main__":
     print("  - plot_davis_hypothesis_test()")
     print("  - plot_glacial_extent_map()")
     print("  - plot_glacial_chronosequence_summary()")
+    print("  - plot_bimodal_decomposition()")
+    print("  - plot_power_law_by_glacial_zone()")

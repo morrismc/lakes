@@ -1193,6 +1193,609 @@ def get_stage_order():
     return [s[0] for s in sorted(stages, key=lambda x: x[1])]
 
 
+# ============================================================================
+# ALPINE VS CONTINENTAL ICE CLASSIFICATION
+# ============================================================================
+
+def classify_ice_types(dalton_gdf, longitude_threshold=-105.0, area_threshold_km2=50000):
+    """
+    Separate continental (Laurentide) vs alpine (Cordilleran) glaciation.
+
+    The Dalton 18ka data includes both the main Laurentide ice sheet
+    (Great Lakes region) and smaller alpine/Cordilleran glaciers
+    in the western US (Yellowstone, Sierra Nevada, etc.).
+
+    Parameters
+    ----------
+    dalton_gdf : GeoDataFrame
+        Dalton 18ka ice sheet extent (should be in projected CRS)
+    longitude_threshold : float
+        Approximate longitude dividing continental vs alpine (-105° by default)
+    area_threshold_km2 : float
+        Polygons smaller than this are likely alpine glaciers
+
+    Returns
+    -------
+    tuple (GeoDataFrame, GeoDataFrame)
+        (continental_gdf, alpine_gdf) - separated ice types
+    """
+    if dalton_gdf is None or len(dalton_gdf) == 0:
+        return None, None
+
+    # Calculate centroid for each polygon to determine longitude
+    dalton_gdf = dalton_gdf.copy()
+
+    # Get centroids in geographic CRS for longitude comparison
+    centroids_geo = dalton_gdf.geometry.to_crs("EPSG:4326").centroid
+    dalton_gdf['centroid_lon'] = centroids_geo.x
+    dalton_gdf['centroid_lat'] = centroids_geo.y
+
+    # Calculate area in km²
+    dalton_gdf['area_km2'] = dalton_gdf.geometry.area / 1e6
+
+    # Classify based on longitude and area
+    # Western features (west of threshold) AND smaller area = alpine
+    is_western = dalton_gdf['centroid_lon'] < longitude_threshold
+    is_small = dalton_gdf['area_km2'] < area_threshold_km2
+
+    # Alpine: western AND (small OR high elevation centroid)
+    dalton_gdf['ice_type'] = 'continental'
+    dalton_gdf.loc[is_western & is_small, 'ice_type'] = 'alpine'
+
+    # Separate into two GeoDataFrames
+    continental = dalton_gdf[dalton_gdf['ice_type'] == 'continental'].copy()
+    alpine = dalton_gdf[dalton_gdf['ice_type'] == 'alpine'].copy()
+
+    print(f"\nIce type classification:")
+    print(f"  Continental: {len(continental)} polygons, {continental['area_km2'].sum():,.0f} km²")
+    print(f"  Alpine: {len(alpine)} polygons, {alpine['area_km2'].sum():,.0f} km²")
+
+    return continental, alpine
+
+
+# ============================================================================
+# NESTED POLYGON CLASSIFICATION
+# ============================================================================
+
+def create_mutually_exclusive_zones(boundaries, verbose=True):
+    """
+    Create mutually exclusive polygons for each glacial age class.
+
+    The glacial boundaries overlap (Wisconsin ⊂ Illinoian), so this function
+    creates non-overlapping zones representing actual surface age:
+
+    1. Wisconsin-only: Wisconsin extent (youngest surface)
+    2. Illinoian-only: Illinoian extent minus Wisconsin extent
+    3. Driftless: Never glaciated (oldest surface)
+    4. Alpine: From Dalton, western US (similar age to Wisconsin)
+
+    Parameters
+    ----------
+    boundaries : dict
+        Dictionary of glacial boundary GeoDataFrames
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    GeoDataFrame
+        Unified polygon layer with 'glacial_zone' column
+    """
+    from shapely.ops import unary_union
+
+    if verbose:
+        print("\nCreating mutually exclusive glacial zones...")
+
+    zones = []
+
+    wisconsin = boundaries.get('wisconsin')
+    illinoian = boundaries.get('illinoian')
+    driftless = boundaries.get('driftless')
+    dalton = boundaries.get('dalton_18ka')
+
+    # Ensure all are in same CRS
+    target_crs = get_target_crs()
+
+    # Wisconsin zone (youngest, most recent glaciation)
+    if wisconsin is not None:
+        if str(wisconsin.crs) != str(target_crs):
+            wisconsin = wisconsin.to_crs(target_crs)
+        wisconsin_union = unary_union(wisconsin.geometry)
+        zones.append({
+            'glacial_zone': 'wisconsin',
+            'description': 'Wisconsin glaciation (youngest)',
+            'age_ka': 20,  # mean age
+            'geometry': wisconsin_union
+        })
+        if verbose:
+            print(f"  Wisconsin: {wisconsin_union.area / 1e6:,.0f} km²")
+
+    # Illinoian-only zone (Illinoian minus Wisconsin)
+    if illinoian is not None and wisconsin is not None:
+        if str(illinoian.crs) != str(target_crs):
+            illinoian = illinoian.to_crs(target_crs)
+        illinoian_union = unary_union(illinoian.geometry)
+
+        # Subtract Wisconsin from Illinoian to get Illinoian-only
+        illinoian_only = illinoian_union.difference(wisconsin_union)
+        if not illinoian_only.is_empty:
+            zones.append({
+                'glacial_zone': 'illinoian_only',
+                'description': 'Illinoian glaciation only (not Wisconsin)',
+                'age_ka': 160,  # mean age
+                'geometry': illinoian_only
+            })
+            if verbose:
+                print(f"  Illinoian-only: {illinoian_only.area / 1e6:,.0f} km²")
+
+    # Driftless zone (never glaciated)
+    if driftless is not None:
+        if str(driftless.crs) != str(target_crs):
+            driftless = driftless.to_crs(target_crs)
+        driftless_union = unary_union(driftless.geometry)
+        zones.append({
+            'glacial_zone': 'driftless',
+            'description': 'Never glaciated (Driftless)',
+            'age_ka': None,
+            'geometry': driftless_union
+        })
+        if verbose:
+            print(f"  Driftless: {driftless_union.area / 1e6:,.0f} km²")
+
+    # Alpine zone (from Dalton, western US)
+    if dalton is not None:
+        if str(dalton.crs) != str(target_crs):
+            dalton = dalton.to_crs(target_crs)
+
+        # Classify and get alpine portion
+        continental, alpine = classify_ice_types(dalton)
+        if alpine is not None and len(alpine) > 0:
+            alpine_union = unary_union(alpine.geometry)
+            zones.append({
+                'glacial_zone': 'alpine',
+                'description': 'Western alpine glaciation',
+                'age_ka': 18,
+                'geometry': alpine_union
+            })
+            if verbose:
+                print(f"  Alpine: {alpine_union.area / 1e6:,.0f} km²")
+
+    if len(zones) == 0:
+        return None
+
+    # Create GeoDataFrame
+    zones_gdf = gpd.GeoDataFrame(zones, crs=target_crs)
+
+    return zones_gdf
+
+
+# ============================================================================
+# POWER LAW ANALYSIS BY GLACIAL ZONE
+# ============================================================================
+
+def power_law_by_glacial_zone(lake_gdf, xmin_threshold=0.024, verbose=True):
+    """
+    Fit power law to lake size distribution within each glacial zone.
+
+    Tests whether the power law exponent (alpha) differs by glacial stage,
+    which would indicate different lake-forming/draining processes.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with glacial_stage column
+    xmin_threshold : float
+        Minimum lake area for power law fitting (default 0.024 km²)
+    verbose : bool
+        Print results
+
+    Returns
+    -------
+    DataFrame
+        Power law parameters by glacial zone
+    """
+    from scipy import stats
+
+    if verbose:
+        print("\n" + "=" * 60)
+        print("POWER LAW ANALYSIS BY GLACIAL ZONE")
+        print("=" * 60)
+
+    area_col = COLS.get('area', 'AREASQKM')
+    results = []
+
+    stages = lake_gdf['glacial_stage'].unique()
+
+    for stage in stages:
+        stage_lakes = lake_gdf[lake_gdf['glacial_stage'] == stage]
+        areas = stage_lakes[area_col].dropna().values
+
+        # Filter to lakes above threshold
+        areas_above = areas[areas >= xmin_threshold]
+
+        if len(areas_above) < 30:
+            if verbose:
+                print(f"\n{stage}: Insufficient data (n={len(areas_above)})")
+            results.append({
+                'glacial_stage': stage,
+                'n_total': len(areas),
+                'n_above_xmin': len(areas_above),
+                'alpha': np.nan,
+                'alpha_se': np.nan,
+                'xmin': xmin_threshold,
+                'warning': 'Insufficient data'
+            })
+            continue
+
+        # MLE estimate of alpha for power law: P(x) ~ x^(-alpha)
+        # For continuous power law above xmin:
+        # alpha_mle = 1 + n / sum(log(x/xmin))
+        log_ratios = np.log(areas_above / xmin_threshold)
+        n = len(areas_above)
+        alpha_mle = 1 + n / np.sum(log_ratios)
+
+        # Standard error: SE = (alpha - 1) / sqrt(n)
+        alpha_se = (alpha_mle - 1) / np.sqrt(n)
+
+        # KS statistic for goodness of fit
+        # Compare empirical CDF to theoretical power law
+        sorted_areas = np.sort(areas_above)
+        empirical_cdf = np.arange(1, n + 1) / n
+        theoretical_cdf = 1 - (xmin_threshold / sorted_areas) ** (alpha_mle - 1)
+        ks_stat = np.max(np.abs(empirical_cdf - theoretical_cdf))
+
+        # Get age for this stage
+        chrono = GLACIAL_CHRONOLOGY.get(stage.lower(), {})
+        age_ka = chrono.get('age_ka')
+        if isinstance(age_ka, tuple):
+            age_ka = (age_ka[0] + age_ka[1]) / 2
+
+        results.append({
+            'glacial_stage': stage,
+            'n_total': len(areas),
+            'n_above_xmin': n,
+            'alpha': alpha_mle,
+            'alpha_se': alpha_se,
+            'xmin': xmin_threshold,
+            'ks_statistic': ks_stat,
+            'age_ka': age_ka,
+            'mean_area_km2': np.mean(areas_above),
+            'median_area_km2': np.median(areas_above),
+        })
+
+        if verbose:
+            print(f"\n{stage}:")
+            print(f"  n = {n:,} lakes above x_min = {xmin_threshold} km²")
+            print(f"  α = {alpha_mle:.3f} ± {alpha_se:.3f}")
+            print(f"  KS statistic = {ks_stat:.4f}")
+            # Compare to percolation theory prediction
+            diff = alpha_mle - 2.05
+            print(f"  Deviation from τ=2.05: {diff:+.3f}")
+
+    result_df = pd.DataFrame(results)
+
+    # Test for trend in alpha with age
+    if verbose and len(result_df.dropna(subset=['alpha', 'age_ka'])) >= 3:
+        valid = result_df.dropna(subset=['alpha', 'age_ka'])
+        corr, p_val = stats.pearsonr(valid['age_ka'], valid['alpha'])
+        print(f"\nTrend: α vs age")
+        print(f"  Pearson r = {corr:.3f}, p = {p_val:.4f}")
+        if corr > 0 and p_val < 0.1:
+            print(f"  → α increases with age (large lakes removed over time)")
+
+    return result_df
+
+
+# ============================================================================
+# BIMODAL PATTERN DECOMPOSITION
+# ============================================================================
+
+def decompose_bimodal_by_glacial_status(lake_gdf, elev_breaks=None, verbose=True):
+    """
+    Test whether the bimodal elevation-density pattern can be explained
+    by the mixture of glacial + non-glacial lakes.
+
+    This separates lakes into glaciated vs non-glaciated and plots their
+    elevation distributions separately to test if:
+    - High-elevation peak = glacial process domain
+    - Low-elevation peak = fluvial/coastal process domain
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with glacial_stage column
+    elev_breaks : list, optional
+        Elevation bin edges
+    verbose : bool
+        Print results
+
+    Returns
+    -------
+    dict
+        Decomposition results with separate distributions
+    """
+    if elev_breaks is None:
+        elev_breaks = ELEV_BREAKS
+
+    elev_col = COLS.get('elevation', 'Elevation_')
+
+    if verbose:
+        print("\n" + "=" * 60)
+        print("BIMODAL PATTERN DECOMPOSITION")
+        print("=" * 60)
+
+    # Classify as glaciated vs non-glaciated
+    lake_gdf = lake_gdf.copy()
+    glaciated_stages = ['Wisconsin', 'Illinoian']
+    lake_gdf['is_glaciated'] = lake_gdf['glacial_stage'].isin(glaciated_stages)
+
+    # Also flag alpine glaciation
+    if 'in_dalton_18ka' in lake_gdf.columns:
+        lake_gdf['is_glaciated'] = lake_gdf['is_glaciated'] | lake_gdf['in_dalton_18ka']
+
+    glaciated = lake_gdf[lake_gdf['is_glaciated']]
+    non_glaciated = lake_gdf[~lake_gdf['is_glaciated']]
+
+    if verbose:
+        print(f"\nLake classification:")
+        print(f"  Glaciated: {len(glaciated):,} lakes")
+        print(f"  Non-glaciated: {len(non_glaciated):,} lakes")
+
+    # Bin by elevation
+    def bin_elevations(df, breaks, label):
+        elevs = df[elev_col].dropna()
+        counts, _ = np.histogram(elevs, bins=breaks)
+        bin_mids = [(breaks[i] + breaks[i+1]) / 2 for i in range(len(breaks)-1)]
+        return pd.DataFrame({
+            'elevation_mid': bin_mids,
+            'n_lakes': counts,
+            'category': label
+        })
+
+    glaciated_dist = bin_elevations(glaciated, elev_breaks, 'Glaciated')
+    non_glaciated_dist = bin_elevations(non_glaciated, elev_breaks, 'Non-glaciated')
+
+    combined = pd.concat([glaciated_dist, non_glaciated_dist], ignore_index=True)
+
+    # Find peaks in each distribution
+    from scipy.signal import find_peaks
+
+    def find_distribution_peaks(counts, min_height_frac=0.1):
+        if np.max(counts) == 0:
+            return []
+        min_height = np.max(counts) * min_height_frac
+        peaks, _ = find_peaks(counts, height=min_height, distance=2)
+        return peaks
+
+    glaciated_peaks = find_distribution_peaks(glaciated_dist['n_lakes'].values)
+    non_glaciated_peaks = find_distribution_peaks(non_glaciated_dist['n_lakes'].values)
+
+    if verbose:
+        print(f"\nPeak elevations:")
+        for i, peak_idx in enumerate(glaciated_peaks):
+            elev = glaciated_dist['elevation_mid'].iloc[peak_idx]
+            count = glaciated_dist['n_lakes'].iloc[peak_idx]
+            print(f"  Glaciated peak {i+1}: {elev:.0f} m ({count:,} lakes)")
+
+        for i, peak_idx in enumerate(non_glaciated_peaks):
+            elev = non_glaciated_dist['elevation_mid'].iloc[peak_idx]
+            count = non_glaciated_dist['n_lakes'].iloc[peak_idx]
+            print(f"  Non-glaciated peak {i+1}: {elev:.0f} m ({count:,} lakes)")
+
+    # Compute statistics
+    results = {
+        'combined_distribution': combined,
+        'glaciated_distribution': glaciated_dist,
+        'non_glaciated_distribution': non_glaciated_dist,
+        'n_glaciated': len(glaciated),
+        'n_non_glaciated': len(non_glaciated),
+        'glaciated_peaks': glaciated_peaks.tolist() if len(glaciated_peaks) > 0 else [],
+        'non_glaciated_peaks': non_glaciated_peaks.tolist() if len(non_glaciated_peaks) > 0 else [],
+        'glaciated_mean_elev': glaciated[elev_col].mean() if len(glaciated) > 0 else np.nan,
+        'non_glaciated_mean_elev': non_glaciated[elev_col].mean() if len(non_glaciated) > 0 else np.nan,
+    }
+
+    if verbose:
+        print(f"\nMean elevation:")
+        print(f"  Glaciated: {results['glaciated_mean_elev']:.0f} m")
+        print(f"  Non-glaciated: {results['non_glaciated_mean_elev']:.0f} m")
+
+    return results
+
+
+def western_alpine_analysis(lake_gdf, dalton_alpine_gdf, longitude_threshold=-105.0,
+                            elev_breaks=None, verbose=True):
+    """
+    Focused analysis on western alpine glaciation.
+
+    Tests whether the high-elevation peak in the bimodal distribution
+    persists in the western US where continental ice didn't reach.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        All lakes with coordinates
+    dalton_alpine_gdf : GeoDataFrame
+        Alpine glaciation extent from Dalton
+    longitude_threshold : float
+        Western boundary for analysis
+    elev_breaks : list, optional
+        Elevation bin edges
+    verbose : bool
+        Print results
+
+    Returns
+    -------
+    dict
+        Western alpine analysis results
+    """
+    if elev_breaks is None:
+        elev_breaks = ELEV_BREAKS
+
+    if verbose:
+        print("\n" + "=" * 60)
+        print("WESTERN ALPINE GLACIATION ANALYSIS")
+        print("=" * 60)
+
+    # Get lake coordinates in geographic CRS
+    lakes_geo = lake_gdf.to_crs("EPSG:4326")
+    lakes_geo['longitude'] = lakes_geo.geometry.x
+
+    # Filter to western US
+    western_lakes = lake_gdf[lakes_geo['longitude'] < longitude_threshold].copy()
+
+    if verbose:
+        print(f"\nWestern lakes (west of {longitude_threshold}°):")
+        print(f"  Total: {len(western_lakes):,} lakes")
+
+    # Classify western lakes by alpine glaciation
+    if dalton_alpine_gdf is not None and len(dalton_alpine_gdf) > 0:
+        # Spatial join to identify lakes within alpine glaciated areas
+        target_crs = str(western_lakes.crs)
+        if str(dalton_alpine_gdf.crs) != target_crs:
+            dalton_alpine_gdf = dalton_alpine_gdf.to_crs(target_crs)
+
+        # Dissolve alpine boundary
+        alpine_dissolved = unary_union(dalton_alpine_gdf.geometry)
+        alpine_gdf = gpd.GeoDataFrame(geometry=[alpine_dissolved], crs=target_crs)
+
+        joined = gpd.sjoin(
+            western_lakes[['geometry']].reset_index(),
+            alpine_gdf,
+            how='inner',
+            predicate='within'
+        )
+
+        western_lakes['in_alpine'] = western_lakes.index.isin(joined['index'].values)
+
+        n_alpine = western_lakes['in_alpine'].sum()
+        n_non_alpine = len(western_lakes) - n_alpine
+
+        if verbose:
+            print(f"  Within alpine glaciation: {n_alpine:,}")
+            print(f"  Outside alpine glaciation: {n_non_alpine:,}")
+
+    else:
+        western_lakes['in_alpine'] = False
+        if verbose:
+            print("  Note: Alpine boundary not available")
+
+    # Compute elevation distribution
+    elev_col = COLS.get('elevation', 'Elevation_')
+
+    alpine_lakes = western_lakes[western_lakes['in_alpine']]
+    non_alpine_western = western_lakes[~western_lakes['in_alpine']]
+
+    results = {
+        'n_western_total': len(western_lakes),
+        'n_alpine': len(alpine_lakes),
+        'n_non_alpine': len(non_alpine_western),
+        'alpine_mean_elev': alpine_lakes[elev_col].mean() if len(alpine_lakes) > 0 else np.nan,
+        'non_alpine_mean_elev': non_alpine_western[elev_col].mean() if len(non_alpine_western) > 0 else np.nan,
+        'western_lakes': western_lakes,
+    }
+
+    if verbose:
+        print(f"\nMean elevation (western lakes):")
+        print(f"  Alpine glaciated: {results['alpine_mean_elev']:.0f} m")
+        print(f"  Non-alpine: {results['non_alpine_mean_elev']:.0f} m")
+
+    return results
+
+
+# ============================================================================
+# VALIDATION AND QUALITY CHECKS
+# ============================================================================
+
+def validate_glacial_boundaries(boundaries, verbose=True):
+    """
+    Sanity checks on glacial boundary data.
+
+    Verifies:
+    1. CRS are properly set
+    2. Boundaries are nested (Wisconsin ⊂ Illinoian)
+    3. Wisconsin area < Illinoian area
+    4. Driftless does not overlap Wisconsin
+    5. Total coverage of CONUS
+
+    Parameters
+    ----------
+    boundaries : dict
+        Dictionary of glacial boundary GeoDataFrames
+    verbose : bool
+        Print validation results
+
+    Returns
+    -------
+    dict
+        Validation results with any warnings
+    """
+    if verbose:
+        print("\n" + "=" * 60)
+        print("VALIDATING GLACIAL BOUNDARIES")
+        print("=" * 60)
+
+    results = {'valid': True, 'warnings': [], 'checks': {}}
+
+    wisconsin = boundaries.get('wisconsin')
+    illinoian = boundaries.get('illinoian')
+    driftless = boundaries.get('driftless')
+
+    # Check 1: CRS verification
+    target_crs = get_target_crs()
+    for name, gdf in boundaries.items():
+        if gdf is not None:
+            crs_match = str(gdf.crs) == str(target_crs)
+            results['checks'][f'{name}_crs'] = crs_match
+            if not crs_match:
+                results['warnings'].append(f"{name} CRS mismatch")
+                if verbose:
+                    print(f"  WARNING: {name} CRS = {gdf.crs}, expected {target_crs}")
+
+    # Check 2: Area comparison (Wisconsin < Illinoian)
+    if wisconsin is not None and illinoian is not None:
+        wisc_area = wisconsin.geometry.area.sum() / 1e6
+        ill_area = illinoian.geometry.area.sum() / 1e6
+        area_ok = wisc_area < ill_area
+        results['checks']['wisconsin_smaller'] = area_ok
+
+        if verbose:
+            status = "✓" if area_ok else "✗"
+            print(f"  [{status}] Wisconsin ({wisc_area:,.0f} km²) < Illinoian ({ill_area:,.0f} km²)")
+
+        if not area_ok:
+            results['warnings'].append("Wisconsin area >= Illinoian area")
+            results['valid'] = False
+
+    # Check 3: Driftless doesn't overlap Wisconsin
+    if driftless is not None and wisconsin is not None:
+        from shapely.ops import unary_union
+        drift_union = unary_union(driftless.geometry)
+        wisc_union = unary_union(wisconsin.geometry)
+        overlap = drift_union.intersection(wisc_union)
+        overlap_area_km2 = overlap.area / 1e6
+
+        no_overlap = overlap_area_km2 < 100  # Allow small tolerance
+        results['checks']['driftless_no_overlap'] = no_overlap
+
+        if verbose:
+            status = "✓" if no_overlap else "✗"
+            print(f"  [{status}] Driftless-Wisconsin overlap: {overlap_area_km2:,.0f} km²")
+
+        if not no_overlap:
+            results['warnings'].append(f"Driftless overlaps Wisconsin by {overlap_area_km2:.0f} km²")
+
+    if verbose:
+        if results['valid'] and len(results['warnings']) == 0:
+            print("\n  All validation checks passed!")
+        else:
+            print(f"\n  Warnings: {len(results['warnings'])}")
+            for w in results['warnings']:
+                print(f"    - {w}")
+
+    return results
+
+
 if __name__ == "__main__":
     print("Glacial Chronosequence Analysis Module")
     print("=" * 40)

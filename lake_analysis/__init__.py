@@ -83,7 +83,14 @@ from .glacial_chronosequence import (
     load_all_glacial_boundaries,
     classify_lakes_by_glacial_extent,
     compute_lake_density_by_glacial_stage,
-    test_davis_hypothesis
+    test_davis_hypothesis,
+    # Enhanced analysis functions
+    classify_ice_types,
+    create_mutually_exclusive_zones,
+    power_law_by_glacial_zone,
+    decompose_bimodal_by_glacial_status,
+    western_alpine_analysis,
+    validate_glacial_boundaries,
 )
 
 # Glacial visualization functions
@@ -91,5 +98,7 @@ from .visualization import (
     plot_density_by_glacial_stage,
     plot_elevation_histogram_by_glacial_stage,
     plot_davis_hypothesis_test,
-    plot_glacial_chronosequence_summary
+    plot_glacial_chronosequence_summary,
+    plot_bimodal_decomposition,
+    plot_power_law_by_glacial_zone
 )
