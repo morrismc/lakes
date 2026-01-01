@@ -114,3 +114,21 @@ from .visualization import (
     plot_glacial_geographic_lakes,
     plot_glacial_comprehensive_summary
 )
+
+# Spatial scaling analysis
+from .spatial_scaling import (
+    analyze_latitudinal_scaling,
+    analyze_longitudinal_scaling,
+    compare_glacial_vs_nonglacial_scaling,
+    analyze_elevation_size_scaling,
+    run_spatial_scaling_analysis,
+    create_hypothesis_summary_table
+)
+
+# Spatial scaling visualization functions
+from .visualization import (
+    plot_latitudinal_scaling,
+    plot_glacial_vs_nonglacial_comparison,
+    plot_colorful_hypothesis_table,
+    plot_spatial_scaling_summary
+)

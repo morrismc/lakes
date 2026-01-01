@@ -287,6 +287,21 @@ try:
         plot_glacial_geographic_lakes,
         plot_glacial_comprehensive_summary
     )
+    # Spatial scaling analysis
+    from .spatial_scaling import (
+        analyze_latitudinal_scaling,
+        analyze_longitudinal_scaling,
+        compare_glacial_vs_nonglacial_scaling,
+        analyze_elevation_size_scaling,
+        run_spatial_scaling_analysis,
+        create_hypothesis_summary_table
+    )
+    from .visualization import (
+        plot_latitudinal_scaling,
+        plot_glacial_vs_nonglacial_comparison,
+        plot_colorful_hypothesis_table,
+        plot_spatial_scaling_summary
+    )
 except ImportError:
     from config import (
         LAKE_GDB_PATH, LAKE_FEATURE_CLASS, RASTERS, OUTPUT_DIR,
@@ -357,6 +372,21 @@ except ImportError:
         plot_glacial_xmin_sensitivity,
         plot_glacial_geographic_lakes,
         plot_glacial_comprehensive_summary
+    )
+    # Spatial scaling analysis
+    from spatial_scaling import (
+        analyze_latitudinal_scaling,
+        analyze_longitudinal_scaling,
+        compare_glacial_vs_nonglacial_scaling,
+        analyze_elevation_size_scaling,
+        run_spatial_scaling_analysis,
+        create_hypothesis_summary_table
+    )
+    from visualization import (
+        plot_latitudinal_scaling,
+        plot_glacial_vs_nonglacial_comparison,
+        plot_colorful_hypothesis_table,
+        plot_spatial_scaling_summary
     )
 
 
@@ -1523,10 +1553,146 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
 
 
 # ============================================================================
+# SPATIAL SCALING ANALYSIS
+# ============================================================================
+
+def analyze_spatial_scaling(lakes, lake_gdf=None, save_figures=True, verbose=True):
+    """
+    Run comprehensive spatial scaling analysis.
+
+    Analyzes geographic patterns in lake distributions including:
+    - Latitudinal gradients (north-south)
+    - Longitudinal gradients (east-west)
+    - Elevation-dependent size scaling
+    - Glacial vs non-glacial comparison
+
+    Parameters
+    ----------
+    lakes : DataFrame
+        Lake data with lat/lon/elevation columns
+    lake_gdf : GeoDataFrame, optional
+        Lake data with glacial classification for glacial comparison
+    save_figures : bool
+        Generate and save visualizations
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    dict
+        Analysis results including:
+        - latitudinal: Latitude scaling analysis
+        - longitudinal: Longitude scaling analysis
+        - elevation: Elevation size scaling
+        - glacial_comparison: Glacial vs non-glacial (if lake_gdf provided)
+        - hypothesis_table: Summary of all hypothesis tests
+    """
+    print("\n" + "=" * 60)
+    print("SPATIAL SCALING ANALYSIS")
+    print("=" * 60)
+
+    try:
+        # Run the comprehensive spatial scaling analysis
+        results = run_spatial_scaling_analysis(lakes, lake_gdf, verbose=verbose)
+
+        if results is None or 'error' in results:
+            print(f"\n[WARNING] Spatial scaling analysis could not be completed")
+            return None
+
+        # Create hypothesis summary table
+        hypothesis_table = create_hypothesis_summary_table(results)
+        results['hypothesis_table'] = hypothesis_table
+
+        if verbose and hypothesis_table is not None and not hypothesis_table.empty:
+            print("\n" + "=" * 60)
+            print("HYPOTHESIS TEST SUMMARY TABLE")
+            print("=" * 60)
+            print(hypothesis_table.to_string(index=False))
+
+        # Generate visualizations
+        if save_figures:
+            ensure_output_dir()
+            spatial_output = Path(OUTPUT_DIR) / 'spatial_scaling'
+            spatial_output.mkdir(exist_ok=True)
+
+            print("\n  Generating spatial scaling visualizations...")
+
+            # Latitudinal scaling plot
+            if 'latitudinal' in results and 'error' not in results.get('latitudinal', {}):
+                try:
+                    fig, axes = plot_latitudinal_scaling(
+                        results['latitudinal'],
+                        save_path=str(spatial_output / 'latitudinal_scaling.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Latitudinal scaling plot saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create latitudinal plot: {e}")
+
+            # Glacial vs non-glacial comparison
+            if results.get('glacial_comparison') and 'error' not in results.get('glacial_comparison', {}):
+                try:
+                    fig, axes = plot_glacial_vs_nonglacial_comparison(
+                        results['glacial_comparison'],
+                        save_path=str(spatial_output / 'glacial_vs_nonglacial.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Glacial vs non-glacial comparison saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create glacial comparison plot: {e}")
+
+            # Colorful hypothesis testing table
+            if hypothesis_table is not None and not hypothesis_table.empty:
+                try:
+                    fig, ax = plot_colorful_hypothesis_table(
+                        hypothesis_table,
+                        save_path=str(spatial_output / 'hypothesis_test_table.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                        print("    Colorful hypothesis table saved!")
+                except Exception as e:
+                    print(f"    Warning: Could not create hypothesis table: {e}")
+
+            # Comprehensive summary figure
+            try:
+                fig, axes = plot_spatial_scaling_summary(
+                    results,
+                    save_path=str(spatial_output / 'spatial_scaling_summary.png')
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Spatial scaling summary saved!")
+            except Exception as e:
+                print(f"    Warning: Could not create summary figure: {e}")
+
+            # Save hypothesis table to CSV
+            if hypothesis_table is not None:
+                hypothesis_table.to_csv(
+                    str(spatial_output / 'hypothesis_test_summary.csv'),
+                    index=False
+                )
+                print("    Hypothesis test summary CSV saved!")
+
+        print("\n[SUCCESS] Spatial scaling analysis complete!")
+        return results
+
+    except Exception as e:
+        print(f"\n[ERROR] Spatial scaling analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# ============================================================================
 # FULL ANALYSIS PIPELINE
 # ============================================================================
 
-def run_full_analysis(data_source='conus', include_xmin_by_elevation=True, include_glacial_analysis=True):
+def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
+                       include_glacial_analysis=True, include_spatial_scaling=True,
+                       min_lake_area=None, prompt_for_threshold=False):
     """
     Run complete analysis pipeline for all hypotheses.
 
@@ -1542,14 +1708,59 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True, inclu
     include_glacial_analysis : bool
         If True (default), run glacial chronosequence analysis (Davis's hypothesis).
         Requires glacial boundary shapefiles configured in config.py.
-        Generates comprehensive visualizations including power law comparisons,
-        size distributions, and x_min sensitivity analyses by glacial stage.
+    include_spatial_scaling : bool
+        If True (default), run spatial scaling analysis (lat/lon/elevation patterns)
+    min_lake_area : float, optional
+        Minimum lake area (km²) for power law analyses. If None, uses config default.
+        Lower values include more lakes but may violate power law assumptions.
+        Suggested: 0.001 (all), 0.01 (small+), 0.1 (medium+), 1.0 (large only)
+    prompt_for_threshold : bool
+        If True, interactively prompt user to choose minimum lake area threshold
 
     Returns
     -------
     dict
-        All results
+        All results including:
+        - lakes: Raw lake data
+        - H1-H6: Hypothesis test results
+        - glacial_chronosequence: Davis's hypothesis results
+        - spatial_scaling: Geographic pattern analysis
     """
+    # Handle minimum lake area threshold
+    if prompt_for_threshold:
+        print("\n" + "=" * 60)
+        print("MINIMUM LAKE AREA THRESHOLD SELECTION")
+        print("=" * 60)
+        print("\nChoose minimum lake area for power law analyses:")
+        print("  1) 0.001 km² - Include all lakes (max data)")
+        print("  2) 0.01 km²  - Small lakes+ (recommended for glacial)")
+        print("  3) 0.1 km²   - Medium lakes+ (standard threshold)")
+        print("  4) 1.0 km²   - Large lakes only (conservative)")
+        print("  5) Custom value")
+        print("")
+
+        try:
+            choice = input("Enter choice (1-5) [default: 2]: ").strip()
+            if choice == '' or choice == '2':
+                min_lake_area = 0.01
+            elif choice == '1':
+                min_lake_area = 0.001
+            elif choice == '3':
+                min_lake_area = 0.1
+            elif choice == '4':
+                min_lake_area = 1.0
+            elif choice == '5':
+                custom = input("Enter minimum lake area (km²): ").strip()
+                min_lake_area = float(custom)
+            else:
+                print("Invalid choice, using default (0.01 km²)")
+                min_lake_area = 0.01
+        except (ValueError, EOFError):
+            print("Using default threshold (0.01 km²)")
+            min_lake_area = 0.01
+
+        print(f"\n→ Using minimum lake area: {min_lake_area} km²")
+
     # Initialize timer
     timer = reset_timer()
     total_steps = 12
@@ -1557,12 +1768,16 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True, inclu
         total_steps += 1
     if include_glacial_analysis:
         total_steps += 1
+    if include_spatial_scaling:
+        total_steps += 1
 
     print("\n" + "=" * 70)
     print("LAKE DISTRIBUTION ANALYSIS - FULL PIPELINE")
     print("=" * 70)
     print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Total steps: {total_steps}")
+    if min_lake_area is not None:
+        print(f"Minimum lake area: {min_lake_area} km²")
     print("=" * 70)
 
     # Setup
@@ -1648,7 +1863,18 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True, inclu
         with timed_step(timer, "Glacial chronosequence analysis"):
             results['glacial_chronosequence'] = analyze_glacial_chronosequence(lakes)
 
-    # Step 13: Generate additional figures
+    # Step 13: Spatial scaling analysis (if enabled)
+    if include_spatial_scaling:
+        step += 1
+        print_step_header(step, total_steps, "Spatial Scaling Analysis (Geographic Patterns)")
+        with timed_step(timer, "Spatial scaling analysis"):
+            # Use glacial GeoDataFrame if available from glacial analysis
+            lake_gdf = None
+            if results.get('glacial_chronosequence') and results['glacial_chronosequence'].get('lake_gdf') is not None:
+                lake_gdf = results['glacial_chronosequence']['lake_gdf']
+            results['spatial_scaling'] = analyze_spatial_scaling(lakes, lake_gdf=lake_gdf)
+
+    # Step 14: Generate additional figures
     step += 1
     print_step_header(step, total_steps, "Generating Summary Figures")
     with timed_step(timer, "Summary figures"):
@@ -2030,15 +2256,20 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    >>> results = analyze_glacial_chronosequence(lakes)
    # Tests if lake density decreases with landscape age
 
-6. Run full pipeline (with progress tracking):
+6. Spatial scaling analysis (geographic patterns):
+   >>> results = analyze_spatial_scaling(lakes)
+   # Analyzes lat/lon/elevation patterns, glacial vs non-glacial
+
+7. Run full pipeline (with progress tracking):
    >>> all_results = run_full_analysis()
 
    Options:
    >>> run_full_analysis(data_source='conus')              # Default
    >>> run_full_analysis(include_xmin_by_elevation=False)  # Skip detailed x_min
    >>> run_full_analysis(include_glacial_analysis=True)    # Include Davis hypothesis
+   >>> run_full_analysis(include_spatial_scaling=True)     # Include spatial patterns
 
-7. Classify domains:
+8. Classify domains:
    >>> lakes_classified = analyze_domains(lakes)
 
 Key Outputs:
@@ -2048,6 +2279,9 @@ Key Outputs:
 - x_min sensitivity analysis (how threshold affects alpha)
 - x_min sensitivity BY ELEVATION (does optimal x_min vary?)
 - Comparison to Cael & Seekell (2016) global result
+- Glacial chronosequence analysis (Davis's hypothesis test)
+- Spatial scaling analysis (lat/lon/elevation patterns)
+- Colorful hypothesis testing summary tables
 
 Runtime Tracking:
 - Progress bars show step completion
@@ -2086,6 +2320,10 @@ if __name__ == "__main__":
                        help='Run glacial chronosequence analysis (Davis hypothesis)')
     parser.add_argument('--include-glacial', action='store_true',
                        help='Include glacial analysis in full pipeline')
+    parser.add_argument('--spatial', action='store_true',
+                       help='Run only spatial scaling analysis')
+    parser.add_argument('--include-spatial', action='store_true',
+                       help='Include spatial scaling analysis in full pipeline')
 
     args = parser.parse_args()
 
@@ -2094,11 +2332,15 @@ if __name__ == "__main__":
     elif args.glacial:
         lakes = load_data(source=args.source)
         analyze_glacial_chronosequence(lakes)
+    elif args.spatial:
+        lakes = load_data(source=args.source)
+        analyze_spatial_scaling(lakes)
     elif args.full:
         run_full_analysis(
             data_source=args.source,
             include_xmin_by_elevation=not args.no_xmin_elevation,
-            include_glacial_analysis=args.include_glacial
+            include_glacial_analysis=args.include_glacial,
+            include_spatial_scaling=args.include_spatial
         )
     elif args.xmin_elevation:
         lakes = load_data(source=args.source)

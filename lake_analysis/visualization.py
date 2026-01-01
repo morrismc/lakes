@@ -5469,6 +5469,512 @@ def plot_glacial_comprehensive_summary(results, lake_gdf=None, figsize=(20, 16),
     return fig, [ax1, ax2, ax3, ax4, ax5, ax6]
 
 
+# ============================================================================
+# SPATIAL SCALING VISUALIZATIONS
+# ============================================================================
+
+def plot_latitudinal_scaling(lat_results, figsize=(16, 10), save_path=None):
+    """
+    Visualize latitudinal scaling patterns in lake properties.
+
+    Parameters
+    ----------
+    lat_results : dict
+        Output from analyze_latitudinal_scaling()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    binned = lat_results.get('binned_stats')
+    if binned is None or len(binned) == 0:
+        return fig, axes
+
+    # Panel A: Lake count by latitude
+    ax1 = axes[0, 0]
+    colors = plt.cm.coolwarm(np.linspace(0, 1, len(binned)))
+    bars = ax1.bar(range(len(binned)), binned['n_lakes'], color=colors, edgecolor='black')
+    ax1.set_xticks(range(len(binned)))
+    ax1.set_xticklabels(binned['lat_band'], rotation=45, ha='right', fontsize=9)
+    ax1.set_ylabel('Number of Lakes', fontsize=12)
+    ax1.set_title('A) Lake Count by Latitude', fontsize=14, fontweight='bold')
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Panel B: Mean lake size by latitude
+    ax2 = axes[0, 1]
+    ax2.errorbar(binned['lat_mid'], binned['mean_area_km2'],
+                fmt='o-', color='steelblue', linewidth=2, markersize=10,
+                capsize=0, label='Mean')
+    ax2.plot(binned['lat_mid'], binned['median_area_km2'],
+            's--', color='coral', linewidth=2, markersize=8, label='Median')
+    ax2.set_xlabel('Latitude (°N)', fontsize=12)
+    ax2.set_ylabel('Lake Area (km²)', fontsize=12)
+    ax2.set_title('B) Lake Size vs Latitude', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper left', fontsize=10)
+    ax2.set_yscale('log')
+    ax2.grid(True, alpha=0.3)
+
+    # Add trend line
+    if 'regression' in lat_results:
+        reg = lat_results['regression']
+        x_line = np.linspace(binned['lat_mid'].min(), binned['lat_mid'].max(), 100)
+        y_line = 10**(reg['slope'] * x_line + reg['intercept'])
+        ax2.plot(x_line, y_line, 'r--', linewidth=2, alpha=0.7,
+                label=f"Trend (R²={reg['r_squared']:.3f})")
+        ax2.legend(loc='upper left', fontsize=9)
+
+    # Panel C: Power law α by latitude
+    ax3 = axes[1, 0]
+    valid = binned.dropna(subset=['alpha'])
+    if len(valid) > 0:
+        ax3.errorbar(valid['lat_mid'], valid['alpha'],
+                    yerr=valid['alpha_se']*1.96, fmt='o-',
+                    color='darkgreen', linewidth=2, markersize=10, capsize=5)
+        ax3.axhline(2.05, color='red', linestyle='--', linewidth=2, label='τ=2.05')
+        ax3.axhline(2.14, color='orange', linestyle=':', linewidth=2, label='τ=2.14')
+        ax3.set_xlabel('Latitude (°N)', fontsize=12)
+        ax3.set_ylabel('Power Law Exponent (α)', fontsize=12)
+        ax3.set_title('C) α vs Latitude', fontsize=14, fontweight='bold')
+        ax3.legend(loc='best', fontsize=10)
+        ax3.grid(True, alpha=0.3)
+
+    # Panel D: Correlation summary
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+
+    corr = lat_results.get('correlation', {})
+    reg = lat_results.get('regression', {})
+    alpha_test = lat_results.get('alpha_latitude_test', {})
+
+    summary_text = "LATITUDINAL SCALING SUMMARY\n" + "=" * 35 + "\n\n"
+    summary_text += f"Lake Size ~ Latitude:\n"
+    summary_text += f"  r = {corr.get('r', np.nan):.4f}\n"
+    summary_text += f"  p = {corr.get('p_value', np.nan):.2e}\n"
+    summary_text += f"  → {corr.get('interpretation', 'N/A')}\n\n"
+
+    summary_text += f"Regression (log₁₀ Area ~ Lat):\n"
+    summary_text += f"  R² = {reg.get('r_squared', np.nan):.4f}\n"
+    summary_text += f"  slope = {reg.get('slope', np.nan):.4f}\n\n"
+
+    if alpha_test:
+        summary_text += f"α ~ Latitude:\n"
+        summary_text += f"  r = {alpha_test.get('r', np.nan):.4f}\n"
+        summary_text += f"  → {alpha_test.get('interpretation', 'N/A')}\n"
+
+    ax4.text(0.1, 0.9, summary_text, transform=ax4.transAxes,
+            fontsize=11, verticalalignment='top', family='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    ax4.set_title('D) Summary', fontsize=14, fontweight='bold', y=0.98)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_glacial_vs_nonglacial_comparison(comparison_results, figsize=(16, 12),
+                                           save_path=None):
+    """
+    Visualize comparison between glaciated and non-glaciated lake distributions.
+
+    Parameters
+    ----------
+    comparison_results : dict
+        Output from compare_glacial_vs_nonglacial_scaling()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    glac = comparison_results.get('glaciated_stats', {})
+    nonglac = comparison_results.get('non_glaciated_stats', {})
+
+    # Panel A: Size distribution comparison (CCDF)
+    ax1 = axes[0, 0]
+    ax1.text(0.5, 0.5, 'CCDF comparison\n(requires lake data)',
+            ha='center', va='center', transform=ax1.transAxes, fontsize=12)
+    ax1.set_title('A) Size Distribution (CCDF)', fontsize=14, fontweight='bold')
+
+    # Panel B: Summary statistics bar chart
+    ax2 = axes[0, 1]
+    metrics = ['Mean Area', 'Median Area', 'Max Area']
+    glac_vals = [glac.get('mean', 0), glac.get('median', 0), glac.get('max', 0)]
+    nonglac_vals = [nonglac.get('mean', 0), nonglac.get('median', 0), nonglac.get('max', 0)]
+
+    x = np.arange(len(metrics))
+    width = 0.35
+    ax2.bar(x - width/2, glac_vals, width, label='Glaciated', color='steelblue', edgecolor='black')
+    ax2.bar(x + width/2, nonglac_vals, width, label='Non-Glaciated', color='coral', edgecolor='black')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(metrics, fontsize=11)
+    ax2.set_ylabel('Lake Area (km²)', fontsize=12)
+    ax2.set_title('B) Size Statistics Comparison', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=10)
+    ax2.set_yscale('log')
+    ax2.grid(axis='y', alpha=0.3)
+
+    # Panel C: Power law comparison
+    ax3 = axes[1, 0]
+    pl = comparison_results.get('power_law_comparison', {})
+
+    if pl.get('glaciated_alpha') and pl.get('non_glaciated_alpha'):
+        categories = ['Glaciated', 'Non-Glaciated']
+        alphas = [pl['glaciated_alpha'], pl['non_glaciated_alpha']]
+        errors = [pl.get('glaciated_se', 0) * 1.96, pl.get('non_glaciated_se', 0) * 1.96]
+        colors = ['steelblue', 'coral']
+
+        bars = ax3.bar(categories, alphas, yerr=errors, capsize=10,
+                      color=colors, edgecolor='black', linewidth=2)
+        ax3.axhline(2.05, color='red', linestyle='--', linewidth=2, label='τ=2.05')
+        ax3.axhline(2.14, color='green', linestyle=':', linewidth=2, label='τ=2.14')
+
+        # Add significance annotation
+        if pl.get('significant'):
+            max_y = max(alphas) + max(errors) + 0.1
+            ax3.annotate('*', xy=(0.5, max_y), fontsize=24, ha='center', fontweight='bold')
+            ax3.plot([0, 1], [max_y - 0.02, max_y - 0.02], 'k-', linewidth=2)
+
+        ax3.set_ylabel('Power Law Exponent (α)', fontsize=12)
+        ax3.set_title('C) Power Law Exponent Comparison', fontsize=14, fontweight='bold')
+        ax3.legend(loc='upper right', fontsize=10)
+        ax3.grid(axis='y', alpha=0.3)
+
+    # Panel D: Colorful hypothesis test summary table
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+
+    # Create colorful table
+    table_data = []
+    colors_table = []
+
+    # Mann-Whitney test
+    mw = comparison_results.get('mann_whitney_test', {})
+    if mw:
+        sig = mw.get('significant', False)
+        table_data.append(['Size Distribution', f"U = {mw.get('U_statistic', 0):.0f}",
+                          f"{mw.get('p_value', 1):.2e}", 'Yes' if sig else 'No'])
+        colors_table.append(['lightgreen' if sig else 'lightcoral'] * 4)
+
+    # KS test
+    ks = comparison_results.get('ks_test', {})
+    if ks:
+        sig = ks.get('significant', False)
+        table_data.append(['Distribution Shape', f"D = {ks.get('D_statistic', 0):.4f}",
+                          f"{ks.get('p_value', 1):.2e}", 'Yes' if sig else 'No'])
+        colors_table.append(['lightgreen' if sig else 'lightcoral'] * 4)
+
+    # Power law
+    if pl.get('p_value'):
+        sig = pl.get('significant', False)
+        table_data.append(['α Difference', f"z = {pl.get('z_statistic', 0):.2f}",
+                          f"{pl.get('p_value', 1):.4f}", 'Yes' if sig else 'No'])
+        colors_table.append(['lightgreen' if sig else 'lightcoral'] * 4)
+
+    if table_data:
+        headers = ['Test', 'Statistic', 'p-value', 'Significant?']
+        table = ax4.table(cellText=table_data, colLabels=headers,
+                         cellColours=colors_table,
+                         loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(11)
+        table.scale(1.2, 2.0)
+
+        # Style header
+        for i in range(len(headers)):
+            table[(0, i)].set_facecolor('#4472C4')
+            table[(0, i)].set_text_props(color='white', fontweight='bold')
+
+    ax4.set_title('D) Hypothesis Test Results', fontsize=14, fontweight='bold', y=0.95)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_colorful_hypothesis_table(hypothesis_df, figsize=(14, 8), save_path=None):
+    """
+    Create a colorful, publication-quality hypothesis test summary table.
+
+    Parameters
+    ----------
+    hypothesis_df : DataFrame
+        Table with columns: Hypothesis, Test, Statistic, p-value, Significant, Conclusion
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, ax)
+    """
+    setup_plot_style()
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis('off')
+
+    if hypothesis_df is None or len(hypothesis_df) == 0:
+        ax.text(0.5, 0.5, 'No hypothesis tests available',
+               ha='center', va='center', fontsize=14)
+        return fig, ax
+
+    # Prepare data
+    columns = ['Hypothesis', 'Test', 'Statistic', 'p-value', 'Conclusion']
+    cell_text = []
+    cell_colors = []
+
+    for _, row in hypothesis_df.iterrows():
+        sig = row.get('Significant', False)
+        p_val = row.get('p-value', 1)
+
+        # Format p-value
+        if p_val < 0.001:
+            p_str = f"{p_val:.2e}"
+        else:
+            p_str = f"{p_val:.4f}"
+
+        cell_text.append([
+            row.get('Hypothesis', ''),
+            row.get('Test', ''),
+            row.get('Statistic', ''),
+            p_str,
+            row.get('Conclusion', '')
+        ])
+
+        # Color based on significance
+        if sig:
+            # Gradient based on p-value (more significant = more green)
+            if p_val < 0.001:
+                color = '#90EE90'  # Light green
+            elif p_val < 0.01:
+                color = '#98FB98'  # Pale green
+            else:
+                color = '#F0FFF0'  # Honeydew
+        else:
+            color = '#FFE4E1'  # Misty rose
+
+        cell_colors.append([color] * len(columns))
+
+    # Create table
+    table = ax.table(cellText=cell_text,
+                    colLabels=columns,
+                    cellColours=cell_colors,
+                    loc='center',
+                    cellLoc='center')
+
+    # Style
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1.2, 2.5)
+
+    # Style header
+    for i, col in enumerate(columns):
+        table[(0, i)].set_facecolor('#2E86AB')
+        table[(0, i)].set_text_props(color='white', fontweight='bold', fontsize=11)
+
+    # Add legend
+    ax.text(0.02, 0.02, '■ Significant (p < 0.05)', color='green',
+           transform=ax.transAxes, fontsize=10, fontweight='bold')
+    ax.text(0.25, 0.02, '■ Not Significant', color='red',
+           transform=ax.transAxes, fontsize=10, fontweight='bold')
+
+    ax.set_title('Hypothesis Test Summary',
+                fontsize=16, fontweight='bold', pad=20)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_spatial_scaling_summary(spatial_results, figsize=(20, 16), save_path=None):
+    """
+    Create comprehensive 6-panel summary of spatial scaling analysis.
+
+    Parameters
+    ----------
+    spatial_results : dict
+        Output from run_spatial_scaling_analysis()
+    figsize : tuple
+    save_path : str, optional
+
+    Returns
+    -------
+    tuple (fig, axes)
+    """
+    setup_plot_style()
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.25)
+
+    # Panel A: Latitudinal pattern
+    ax1 = fig.add_subplot(gs[0, 0])
+    lat_results = spatial_results.get('latitudinal', {})
+    if 'binned_stats' in lat_results:
+        binned = lat_results['binned_stats']
+        colors = plt.cm.coolwarm(np.linspace(0, 1, len(binned)))
+        ax1.bar(range(len(binned)), binned['n_lakes'], color=colors, edgecolor='black')
+        ax1.set_xticks(range(len(binned)))
+        ax1.set_xticklabels(binned['lat_band'], rotation=45, ha='right', fontsize=8)
+        ax1.set_ylabel('Number of Lakes', fontsize=11)
+        ax1.set_title('A) Lake Count by Latitude', fontsize=12, fontweight='bold')
+        ax1.grid(axis='y', alpha=0.3)
+
+    # Panel B: Longitudinal pattern
+    ax2 = fig.add_subplot(gs[0, 1])
+    lon_results = spatial_results.get('longitudinal', {})
+    if 'binned_stats' in lon_results:
+        binned = lon_results['binned_stats']
+        colors = plt.cm.RdYlGn(np.linspace(0, 1, len(binned)))
+        ax2.bar(range(len(binned)), binned['n_lakes'], color=colors, edgecolor='black')
+        ax2.set_xticks(range(len(binned)))
+        ax2.set_xticklabels(binned['lon_band'], rotation=45, ha='right', fontsize=8)
+        ax2.set_ylabel('Number of Lakes', fontsize=11)
+        ax2.set_title('B) Lake Count by Longitude', fontsize=12, fontweight='bold')
+        ax2.grid(axis='y', alpha=0.3)
+
+    # Panel C: Elevation pattern
+    ax3 = fig.add_subplot(gs[1, 0])
+    elev_results = spatial_results.get('elevation', {})
+    if 'binned_stats' in elev_results:
+        binned = elev_results['binned_stats']
+        ax3.plot(binned['elev_mid'], binned['mean_area_km2'], 'o-',
+                color='steelblue', linewidth=2, markersize=8, label='Mean')
+        ax3.plot(binned['elev_mid'], binned['median_area_km2'], 's--',
+                color='coral', linewidth=2, markersize=6, label='Median')
+        ax3.set_xlabel('Elevation (m)', fontsize=11)
+        ax3.set_ylabel('Lake Area (km²)', fontsize=11)
+        ax3.set_title('C) Lake Size vs Elevation', fontsize=12, fontweight='bold')
+        ax3.set_yscale('log')
+        ax3.legend(loc='upper right', fontsize=9)
+        ax3.grid(True, alpha=0.3)
+
+    # Panel D: Glacial comparison
+    ax4 = fig.add_subplot(gs[1, 1])
+    glac_results = spatial_results.get('glacial_comparison', {})
+    if glac_results and 'glaciated_stats' in glac_results:
+        glac = glac_results['glaciated_stats']
+        nonglac = glac_results['non_glaciated_stats']
+
+        categories = ['Glaciated', 'Non-Glaciated']
+        means = [glac.get('mean', 0), nonglac.get('mean', 0)]
+        medians = [glac.get('median', 0), nonglac.get('median', 0)]
+
+        x = np.arange(2)
+        width = 0.35
+        ax4.bar(x - width/2, means, width, label='Mean', color='steelblue', edgecolor='black')
+        ax4.bar(x + width/2, medians, width, label='Median', color='coral', edgecolor='black')
+        ax4.set_xticks(x)
+        ax4.set_xticklabels(categories, fontsize=11)
+        ax4.set_ylabel('Lake Area (km²)', fontsize=11)
+        ax4.set_title('D) Glaciated vs Non-Glaciated', fontsize=12, fontweight='bold')
+        ax4.legend(loc='upper right', fontsize=9)
+        ax4.set_yscale('log')
+        ax4.grid(axis='y', alpha=0.3)
+    else:
+        ax4.text(0.5, 0.5, 'Glacial comparison\nnot available',
+                ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+        ax4.set_title('D) Glaciated vs Non-Glaciated', fontsize=12, fontweight='bold')
+
+    # Panel E: Alpha by latitude
+    ax5 = fig.add_subplot(gs[2, 0])
+    if 'binned_stats' in lat_results:
+        binned = lat_results['binned_stats']
+        valid = binned.dropna(subset=['alpha'])
+        if len(valid) > 0:
+            ax5.errorbar(valid['lat_mid'], valid['alpha'],
+                        yerr=valid['alpha_se']*1.96, fmt='o-',
+                        color='darkgreen', linewidth=2, markersize=8, capsize=5)
+            ax5.axhline(2.05, color='red', linestyle='--', linewidth=2, label='τ=2.05')
+            ax5.set_xlabel('Latitude (°N)', fontsize=11)
+            ax5.set_ylabel('Power Law α', fontsize=11)
+            ax5.set_title('E) Power Law Exponent vs Latitude', fontsize=12, fontweight='bold')
+            ax5.legend(loc='best', fontsize=9)
+            ax5.grid(True, alpha=0.3)
+
+    # Panel F: Summary table
+    ax6 = fig.add_subplot(gs[2, 1])
+    ax6.axis('off')
+
+    # Build summary
+    summary_data = []
+    summary_colors = []
+
+    # Latitudinal
+    if 'correlation' in lat_results:
+        corr = lat_results['correlation']
+        sig = corr.get('p_value', 1) < 0.05
+        summary_data.append(['Latitude ~ Size', f"r={corr.get('r', 0):.3f}",
+                            f"{corr.get('p_value', 1):.2e}", 'Yes' if sig else 'No'])
+        summary_colors.append(['lightgreen' if sig else 'lightcoral'] * 4)
+
+    # Longitudinal
+    if 'correlation' in lon_results:
+        corr = lon_results['correlation']
+        sig = corr.get('p_value', 1) < 0.05
+        summary_data.append(['Longitude ~ Size', f"r={corr.get('r', 0):.3f}",
+                            f"{corr.get('p_value', 1):.2e}", 'Yes' if sig else 'No'])
+        summary_colors.append(['lightgreen' if sig else 'lightcoral'] * 4)
+
+    # Elevation
+    if 'size_elevation_correlation' in elev_results:
+        corr = elev_results['size_elevation_correlation']
+        sig = corr.get('p_value', 1) < 0.05
+        summary_data.append(['Elevation ~ Size', f"r={corr.get('r', 0):.3f}",
+                            f"{corr.get('p_value', 1):.2e}", 'Yes' if sig else 'No'])
+        summary_colors.append(['lightgreen' if sig else 'lightcoral'] * 4)
+
+    # Glacial
+    if glac_results and 'mann_whitney_test' in glac_results:
+        mw = glac_results['mann_whitney_test']
+        sig = mw.get('significant', False)
+        summary_data.append(['Glacial Effect', f"U={mw.get('U_statistic', 0):.0f}",
+                            f"{mw.get('p_value', 1):.2e}", 'Yes' if sig else 'No'])
+        summary_colors.append(['lightgreen' if sig else 'lightcoral'] * 4)
+
+    if summary_data:
+        table = ax6.table(cellText=summary_data,
+                         colLabels=['Pattern', 'Statistic', 'p-value', 'Significant'],
+                         cellColours=summary_colors,
+                         loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1.2, 2.0)
+
+        for i in range(4):
+            table[(0, i)].set_facecolor('#4472C4')
+            table[(0, i)].set_text_props(color='white', fontweight='bold')
+
+    ax6.set_title('F) Hypothesis Test Summary', fontsize=12, fontweight='bold', y=0.95)
+
+    fig.suptitle('Spatial Scaling Analysis - Comprehensive Summary',
+                fontsize=16, fontweight='bold', y=1.01)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, [ax1, ax2, ax3, ax4, ax5, ax6]
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
@@ -5513,3 +6019,9 @@ if __name__ == "__main__":
     print("  - plot_glacial_xmin_sensitivity()")
     print("  - plot_glacial_geographic_lakes()")
     print("  - plot_glacial_comprehensive_summary()")
+    print("  # Spatial scaling visualizations:")
+    print("  - plot_latitudinal_scaling()")
+    print("  - plot_longitudinal_scaling()")
+    print("  - plot_glacial_vs_nonglacial_comparison()")
+    print("  - plot_spatial_scaling_summary()")
+    print("  - plot_colorful_hypothesis_table()")
