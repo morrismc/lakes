@@ -206,12 +206,13 @@ def load_lake_data_from_parquet(parquet_path=LAKE_PARQUET_PATH,
     return df
 
 
-def apply_lake_quality_filters(df, verbose=True):
+def apply_lake_quality_filters(df, verbose=True, min_lake_area=None):
     """
     Apply data quality filters to lake DataFrame.
 
     Filters:
-    - Remove lakes with area = 0 or below minimum threshold
+    - Remove lakes with area = 0
+    - Optionally remove lakes below minimum area threshold
     - Remove records with NoData (-9999) in key columns
     - Remove negative elevations (errors)
 
@@ -221,6 +222,10 @@ def apply_lake_quality_filters(df, verbose=True):
         Lake data
     verbose : bool
         Print filtering statistics
+    min_lake_area : float, optional
+        Minimum lake area in km². If None, no area threshold is applied
+        (only zero-area lakes are removed). This allows filtering at
+        analysis time rather than data loading time.
 
     Returns
     -------
@@ -236,9 +241,15 @@ def apply_lake_quality_filters(df, verbose=True):
     area_col = COLS['area']
     if area_col in df.columns:
         mask &= (df[area_col] != 0)
-        mask &= (df[area_col] >= MIN_LAKE_AREA)
+        mask &= (df[area_col] > 0)  # Remove negative/invalid areas
         if verbose:
-            print(f"  After area filter (>= {MIN_LAKE_AREA} km²): {mask.sum():,}")
+            print(f"  After removing zero/invalid areas: {mask.sum():,}")
+
+        # Only apply min area filter if explicitly specified
+        if min_lake_area is not None:
+            mask &= (df[area_col] >= min_lake_area)
+            if verbose:
+                print(f"  After area threshold (>= {min_lake_area} km²): {mask.sum():,}")
 
     # Elevation filters
     elev_col = COLS['elevation']
@@ -1071,6 +1082,70 @@ def load_conus_lake_data(create_if_missing=True):
             f"CONUS lake dataset not found: {LAKE_CONUS_PARQUET_PATH}\n"
             "Run create_conus_lake_dataset() first to create it."
         )
+
+
+def recreate_conus_parquet(force=False):
+    """
+    Recreate the CONUS lake parquet file from the original geodatabase.
+
+    Use this after changing filter settings or to get an unfiltered dataset.
+    The new parquet will include ALL lakes (no area threshold filtering).
+    Area filtering can then be applied at analysis time via min_lake_area parameter.
+
+    Parameters
+    ----------
+    force : bool
+        If True, recreate even if file exists. If False, asks for confirmation.
+
+    Returns
+    -------
+    DataFrame
+        The new CONUS lake dataset
+
+    Example
+    -------
+    >>> from lake_analysis.data_loading import recreate_conus_parquet
+    >>> lakes = recreate_conus_parquet(force=True)
+    >>> print(f"New dataset has {len(lakes):,} lakes")
+    >>> print(f"Minimum area: {lakes['AREASQKM'].min():.6f} km²")
+    """
+    import os
+
+    if os.path.exists(LAKE_CONUS_PARQUET_PATH):
+        if not force:
+            print(f"\nExisting CONUS parquet found: {LAKE_CONUS_PARQUET_PATH}")
+            current_lakes = pd.read_parquet(LAKE_CONUS_PARQUET_PATH)
+            area_col = COLS.get('area', 'AREASQKM')
+            if area_col in current_lakes.columns:
+                print(f"  Current lake count: {len(current_lakes):,}")
+                print(f"  Current min area: {current_lakes[area_col].min():.6f} km²")
+
+            response = input("\nRecreate with unfiltered data? (y/n): ").strip().lower()
+            if response != 'y':
+                print("Cancelled.")
+                return None
+
+        # Delete existing file
+        os.remove(LAKE_CONUS_PARQUET_PATH)
+        print(f"\nRemoved old parquet file.")
+
+    # Create new dataset (will use updated filter function with no area threshold)
+    print("\nCreating new CONUS parquet from geodatabase...")
+    print("This will include ALL lakes (no area threshold).")
+    lakes = create_conus_lake_dataset(source='gdb')
+
+    # Report results
+    area_col = COLS.get('area', 'AREASQKM')
+    if area_col in lakes.columns:
+        print(f"\nNew dataset summary:")
+        print(f"  Total lakes: {len(lakes):,}")
+        print(f"  Min area: {lakes[area_col].min():.6f} km²")
+        print(f"  Max area: {lakes[area_col].max():.1f} km²")
+
+    print(f"\nTo filter at analysis time, use:")
+    print(f"  run_full_analysis(min_lake_area=0.01)  # or any threshold")
+
+    return lakes
 
 
 def get_target_crs_info():

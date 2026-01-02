@@ -1874,6 +1874,21 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
     print_step_header(step, total_steps, "Loading Lake Data")
     with timed_step(timer, "Load data"):
         lakes = load_data(source=data_source)
+
+        # Apply minimum lake area filter if specified
+        if min_lake_area is not None:
+            area_col = COLS.get('area', 'AREASQKM')
+            if area_col in lakes.columns:
+                original_count = len(lakes)
+                lakes = lakes[lakes[area_col] >= min_lake_area].copy()
+                filtered_count = len(lakes)
+                print(f"\n  Applied min_lake_area filter: {min_lake_area} km²")
+                print(f"  Lakes before filter: {original_count:,}")
+                print(f"  Lakes after filter: {filtered_count:,}")
+                print(f"  Removed: {original_count - filtered_count:,} lakes ({100*(original_count - filtered_count)/original_count:.1f}%)")
+            else:
+                print(f"\n  Warning: Could not apply min_lake_area filter - column '{area_col}' not found")
+
         results['lakes'] = lakes
 
     # Step 2: H1 - Elevation bimodality
