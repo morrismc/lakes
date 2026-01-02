@@ -282,6 +282,7 @@ try:
     from .visualization import (
         plot_density_by_glacial_stage,
         plot_elevation_histogram_by_glacial_stage,
+        plot_elevation_glacial_multipanel,
         plot_davis_hypothesis_test,
         plot_glacial_extent_map,
         plot_glacial_chronosequence_summary,
@@ -376,6 +377,7 @@ except ImportError:
     from visualization import (
         plot_density_by_glacial_stage,
         plot_elevation_histogram_by_glacial_stage,
+        plot_elevation_glacial_multipanel,
         plot_davis_hypothesis_test,
         plot_glacial_extent_map,
         plot_glacial_chronosequence_summary,
@@ -1594,6 +1596,21 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                                 plt.close(fig)
                                 print("    x_min sensitivity by glacial zone saved!")
 
+                    # Multi-panel elevation figure with Dalton data
+                    if results.get('elevation_by_stage') is not None:
+                        try:
+                            dalton_elev = dalton_results.get('elevation_by_dalton')
+                            fig, axes = plot_elevation_glacial_multipanel(
+                                results['elevation_by_stage'],
+                                dalton_df=dalton_elev,
+                                save_path=str(glacial_output / 'elevation_glacial_multipanel.png')
+                            )
+                            if fig:
+                                plt.close(fig)
+                                print("    Multi-panel elevation figure saved!")
+                        except Exception as e:
+                            print(f"    Warning: Could not create multipanel elevation plot: {e}")
+
             except Exception as e:
                 print(f"    Warning: Could not complete Dalton 18ka analysis: {e}")
 
@@ -1982,6 +1999,9 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
             plt.close(fig)
             print("    Summary figure saved!")
 
+    # Print organized summary of results
+    print_analysis_summary(results)
+
     # Final output
     print("\n" + "=" * 70)
     print("ANALYSIS COMPLETE")
@@ -1994,6 +2014,175 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
     results['timing'] = timing_results
 
     return results
+
+
+def print_analysis_summary(results):
+    """
+    Print an organized summary of all analysis results.
+
+    Parameters
+    ----------
+    results : dict
+        Results dictionary from run_full_analysis
+    """
+    print("\n")
+    print("=" * 80)
+    print("                        ANALYSIS RESULTS SUMMARY")
+    print("=" * 80)
+
+    # 1. DATA OVERVIEW
+    print("\n┌" + "─" * 78 + "┐")
+    print("│ 1. DATA OVERVIEW" + " " * 61 + "│")
+    print("└" + "─" * 78 + "┘")
+
+    lakes = results.get('lakes')
+    if lakes is not None:
+        area_col = COLS.get('area', 'AREASQKM')
+        print(f"  Total lakes analyzed: {len(lakes):,}")
+        if area_col in lakes.columns:
+            print(f"  Lake area range: {lakes[area_col].min():.4f} - {lakes[area_col].max():.1f} km²")
+            print(f"  Median lake area: {lakes[area_col].median():.4f} km²")
+
+    # 2. HYPOTHESIS TEST RESULTS
+    print("\n┌" + "─" * 78 + "┐")
+    print("│ 2. HYPOTHESIS TEST RESULTS" + " " * 51 + "│")
+    print("└" + "─" * 78 + "┘")
+
+    hypothesis_tests = [
+        ('H1_elevation', 'H1: Lakes follow power law across elevations'),
+        ('H2_slope', 'H2: Lakes follow power law across slope classes'),
+        ('H3_relief', 'H3: Lakes follow power law across relief classes'),
+        ('H4_bivariate', 'H4: Slope-relief interaction ("sweet spot")'),
+        ('H5_xmin', 'H5: Power law robust across x_min thresholds'),
+        ('H6_pooled', 'H6: Pooled CONUS follows universal power law'),
+    ]
+
+    for key, name in hypothesis_tests:
+        result = results.get(key, {})
+        if result:
+            alpha = result.get('alpha') or result.get('fit', {}).get('alpha')
+            if alpha:
+                print(f"  {name}")
+                print(f"    → α = {alpha:.3f}")
+                if 'density' in result:
+                    density = result['density']
+                    if hasattr(density, 'mean'):
+                        print(f"    → Mean density: {density.mean():.1f} lakes/km²")
+            else:
+                print(f"  {name}")
+                print(f"    → Analysis completed")
+
+    # 3. GLACIAL CHRONOSEQUENCE RESULTS
+    glacial = results.get('glacial_chronosequence', {})
+    if glacial:
+        print("\n┌" + "─" * 78 + "┐")
+        print("│ 3. GLACIAL CHRONOSEQUENCE (Davis's Hypothesis)" + " " * 31 + "│")
+        print("└" + "─" * 78 + "┘")
+
+        density_df = glacial.get('density_by_stage')
+        if density_df is not None:
+            print("\n  Lake density by glacial stage:")
+            print("  " + "-" * 55)
+            print(f"  {'Stage':<15} {'Lakes':>10} {'Density':>15} {'Age (ka)':>12}")
+            print("  " + "-" * 55)
+            for _, row in density_df.iterrows():
+                stage = row.get('glacial_stage', 'Unknown')
+                n_lakes = row.get('n_lakes', 0)
+                density = row.get('density_per_1000km2', float('nan'))
+                age = row.get('age_ka', float('nan'))
+                density_str = f"{density:.1f}/1000km²" if not np.isnan(density) else "N/A"
+                age_str = f"{age:.0f}" if not np.isnan(age) else "N/A"
+                print(f"  {stage:<15} {n_lakes:>10,} {density_str:>15} {age_str:>12}")
+            print("  " + "-" * 55)
+
+        davis = glacial.get('davis_test', {})
+        if davis:
+            supports = davis.get('supports_hypothesis')
+            if supports is True:
+                print("\n  ✓ Davis's Hypothesis: SUPPORTED")
+            elif supports is False:
+                print("\n  ✗ Davis's Hypothesis: NOT SUPPORTED")
+            else:
+                print("\n  ? Davis's Hypothesis: INCONCLUSIVE")
+
+            if davis.get('correlation') is not None:
+                print(f"    Correlation (age vs density): r = {davis['correlation']:.3f}")
+            if davis.get('p_value') is not None:
+                print(f"    P-value: {davis['p_value']:.4f}")
+
+    # 4. DALTON 18ka RESULTS
+    dalton = results.get('dalton_18ka', {})
+    if dalton:
+        print("\n┌" + "─" * 78 + "┐")
+        print("│ 4. DALTON 18KA (LGM) ANALYSIS" + " " * 48 + "│")
+        print("└" + "─" * 78 + "┘")
+
+        density_comp = dalton.get('density_comparison', {})
+        if density_comp:
+            glaciated = density_comp.get('18ka_glaciated', {})
+            unglaciated = density_comp.get('18ka_unglaciated', {})
+
+            print("\n  18ka glaciated vs unglaciated terrain:")
+            print("  " + "-" * 50)
+            print(f"  {'Region':<20} {'Lakes':>12} {'Density':>15}")
+            print("  " + "-" * 50)
+            if glaciated:
+                print(f"  {'18ka glaciated':<20} {glaciated.get('n_lakes', 0):>12,} "
+                      f"{glaciated.get('density_per_1000km2', 0):.1f}/1000km²")
+            if unglaciated:
+                print(f"  {'18ka unglaciated':<20} {unglaciated.get('n_lakes', 0):>12,} "
+                      f"{unglaciated.get('density_per_1000km2', 0):.1f}/1000km²")
+            print("  " + "-" * 50)
+
+            ratio = density_comp.get('density_ratio')
+            if ratio and not np.isnan(ratio):
+                print(f"\n  Density ratio (glaciated/unglaciated): {ratio:.2f}x")
+
+    # 5. SPATIAL SCALING RESULTS
+    spatial = results.get('spatial_scaling', {})
+    if spatial:
+        print("\n┌" + "─" * 78 + "┐")
+        print("│ 5. SPATIAL SCALING PATTERNS" + " " * 50 + "│")
+        print("└" + "─" * 78 + "┘")
+
+        lat = spatial.get('latitudinal', {})
+        if lat and lat.get('correlation') is not None:
+            print(f"\n  Latitudinal gradient:")
+            print(f"    Correlation (latitude vs α): r = {lat['correlation']:.3f}")
+            if lat.get('p_value') is not None:
+                print(f"    P-value: {lat['p_value']:.4f}")
+
+        lon = spatial.get('longitudinal', {})
+        if lon and lon.get('correlation') is not None:
+            print(f"\n  Longitudinal gradient:")
+            print(f"    Correlation (longitude vs α): r = {lon['correlation']:.3f}")
+            if lon.get('p_value') is not None:
+                print(f"    P-value: {lon['p_value']:.4f}")
+
+    # 6. X_MIN SENSITIVITY
+    xmin = results.get('xmin_by_elevation', {})
+    if xmin and 'summary_table' in xmin:
+        print("\n┌" + "─" * 78 + "┐")
+        print("│ 6. X_MIN SENSITIVITY BY ELEVATION" + " " * 43 + "│")
+        print("└" + "─" * 78 + "┘")
+
+        summary = xmin.get('summary_table', [])
+        if summary:
+            print("\n  Optimal x_min by elevation band:")
+            print("  " + "-" * 60)
+            print(f"  {'Elevation':<12} {'x_min':>10} {'α':>10} {'n_lakes':>12}")
+            print("  " + "-" * 60)
+            for row in summary[:6]:  # Show first 6 bands
+                band = row.get('band', 'Unknown')
+                xmin_val = row.get('optimal_xmin', 0)
+                alpha = row.get('alpha', 0)
+                n = row.get('n_lakes', 0)
+                print(f"  {band:<12} {xmin_val:>10.3f} {alpha:>10.3f} {n:>12,}")
+            print("  " + "-" * 60)
+
+    print("\n" + "=" * 80)
+    print("                          END OF SUMMARY")
+    print("=" * 80)
 
 
 # ============================================================================
