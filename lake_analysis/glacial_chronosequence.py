@@ -689,6 +689,34 @@ def calculate_glacial_zone_areas(boundaries, verbose=True):
         if verbose:
             print(f"  {name}: {area_km2:,.0f} km²")
 
+    # Calculate unclassified area = CONUS - (Wisconsin + Illinoian + Driftless)
+    # Note: Dalton 18ka overlaps with Wisconsin so we don't subtract it
+    try:
+        target_crs = get_target_crs()
+        conus = load_conus_boundary(target_crs=target_crs)
+        conus_area_km2 = conus.geometry.area.sum() / 1e6
+
+        # Sum only the main glacial classification zones (not dalton which overlaps)
+        classified_area = sum(
+            areas.get(zone, 0) for zone in ['wisconsin', 'illinoian', 'driftless']
+        )
+        unclassified_area = conus_area_km2 - classified_area
+
+        if unclassified_area > 0:
+            areas['unclassified'] = unclassified_area
+            if verbose:
+                print(f"  CONUS total: {conus_area_km2:,.0f} km²")
+                print(f"  unclassified: {unclassified_area:,.0f} km²")
+    except Exception as e:
+        if verbose:
+            print(f"  Warning: Could not calculate unclassified area: {e}")
+        # Use approximate CONUS area as fallback
+        conus_approx = 8_080_000  # km² (approximate CONUS land area)
+        classified_area = sum(
+            areas.get(zone, 0) for zone in ['wisconsin', 'illinoian', 'driftless']
+        )
+        areas['unclassified'] = conus_approx - classified_area
+
     return areas
 
 
@@ -744,9 +772,10 @@ def compute_lake_density_by_glacial_stage(lake_gdf, zone_areas=None, verbose=Tru
             'Wisconsin': 'wisconsin',
             'Illinoian': 'illinoian',
             'Driftless': 'driftless',
+            'unclassified': 'unclassified',
         }
 
-        zone_key = stage_key_map.get(stage)
+        zone_key = stage_key_map.get(stage, stage.lower())
         if zone_areas and zone_key in zone_areas:
             zone_area = zone_areas[zone_key]
             density = (n_lakes / zone_area) * 1000
@@ -2007,7 +2036,7 @@ def run_dalton_18ka_analysis(lake_df, save_results=True, verbose=True):
         print("Power Law Analysis by 18ka Glaciation")
         print("-" * 40)
 
-    area_col = COLS.get('area', 'AreaSqKm')
+    area_col = COLS.get('area', 'AREASQKM')
     power_law_results = []
 
     for classification in ['18ka_glaciated', '18ka_unglaciated']:
@@ -2057,6 +2086,71 @@ def run_dalton_18ka_analysis(lake_df, save_results=True, verbose=True):
                 print(f"    x_min = {best['xmin']} km², n_tail = {best['n_tail']:,}")
 
     results['power_law_results'] = power_law_results
+
+    # Compute elevation distribution by Dalton classification
+    if verbose:
+        print("\n" + "-" * 40)
+        print("Elevation Distribution by 18ka Glaciation")
+        print("-" * 40)
+
+    elev_col = COLS.get('elevation', 'Elevation_')
+    elev_breaks = ELEV_BREAKS
+
+    # Check for elevation column with case-insensitive lookup
+    if elev_col not in lake_gdf.columns:
+        for alt_col in ['Elevation_', 'Elevation', 'elevation', 'ELEV', 'elev', 'Mean_Elevation', 'elev_m']:
+            if alt_col in lake_gdf.columns:
+                elev_col = alt_col
+                break
+
+    if elev_col in lake_gdf.columns:
+        # Create elevation bins
+        lake_gdf_copy = lake_gdf.copy()
+        lake_gdf_copy['elev_bin'] = pd.cut(
+            lake_gdf_copy[elev_col],
+            bins=elev_breaks,
+            labels=False,
+            include_lowest=True
+        )
+
+        # Group by Dalton classification and elevation bin
+        dalton_elevation = lake_gdf_copy.groupby(['dalton_classification', 'elev_bin']).size().reset_index(name='n_lakes')
+
+        # Add bin labels
+        bin_labels = []
+        for i in range(len(elev_breaks) - 1):
+            bin_labels.append(f"{elev_breaks[i]}-{elev_breaks[i+1]}")
+
+        dalton_elevation['elev_bin_label'] = dalton_elevation['elev_bin'].apply(
+            lambda x: bin_labels[int(x)] if pd.notna(x) and 0 <= int(x) < len(bin_labels) else 'Unknown'
+        )
+        dalton_elevation['elev_bin_mid'] = dalton_elevation['elev_bin'].apply(
+            lambda x: (elev_breaks[int(x)] + elev_breaks[int(x)+1]) / 2
+            if pd.notna(x) and 0 <= int(x) < len(elev_breaks)-1 else np.nan
+        )
+
+        # Calculate percentage within each classification
+        class_totals = dalton_elevation.groupby('dalton_classification')['n_lakes'].transform('sum')
+        dalton_elevation['pct_of_class'] = 100 * dalton_elevation['n_lakes'] / class_totals
+
+        # Rename to match expected column name
+        dalton_elevation = dalton_elevation.rename(columns={
+            'dalton_classification': 'glacial_stage',
+            'pct_of_class': 'pct_of_stage'
+        })
+
+        results['elevation_by_dalton'] = dalton_elevation
+
+        if verbose:
+            print(f"  Processed {len(dalton_elevation)} classification-elevation combinations")
+            for classification in ['18ka_glaciated', '18ka_unglaciated']:
+                class_data = dalton_elevation[dalton_elevation['glacial_stage'] == classification]
+                if len(class_data) > 0:
+                    peak_elev = class_data.loc[class_data['n_lakes'].idxmax(), 'elev_bin_mid']
+                    print(f"  {classification}: Peak at {peak_elev:.0f}m elevation")
+    else:
+        if verbose:
+            print(f"  Warning: Could not find elevation column (tried: {elev_col})")
 
     # Save results
     if save_results:
@@ -2180,7 +2274,7 @@ def compare_wisconsin_vs_dalton_18ka(lake_df, verbose=True):
             print(f"    {cls}: {count:,} lakes ({pct:.1f}%)")
 
     # Density calculations
-    area_col = COLS.get('area', 'AreaSqKm')
+    area_col = COLS.get('area', 'AREASQKM')
 
     comparison = {
         'wisconsin': {
@@ -2267,7 +2361,7 @@ def xmin_sensitivity_by_glacial_zone(lake_gdf, area_col=None, verbose=True):
         Sensitivity results by glacial zone
     """
     if area_col is None:
-        area_col = COLS.get('area', 'AreaSqKm')
+        area_col = COLS.get('area', 'AREASQKM')
 
     if 'glacial_stage' not in lake_gdf.columns:
         return {'error': 'glacial_stage column not found'}
