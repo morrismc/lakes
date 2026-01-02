@@ -531,8 +531,9 @@ def plot_powerlaw_ccdf(lake_areas, xmin=None, alpha=None,
     areas = areas[areas > 0]
     sorted_areas = np.sort(areas)
 
-    # CCDF: P(X >= x)
-    ccdf = 1 - np.arange(1, len(sorted_areas) + 1) / len(sorted_areas)
+    # CCDF: P(X >= x) - use (n-i)/n to avoid log(0) at the end
+    n = len(sorted_areas)
+    ccdf = (n - np.arange(n)) / n
 
     ax.scatter(sorted_areas, ccdf, s=5, alpha=0.5, c='steelblue', label='Data')
 
@@ -2812,7 +2813,14 @@ def plot_alpha_stability_by_elevation(xmin_results, figsize=(14, 8), save_path=N
 
     fig, ax = plt.subplots(figsize=figsize)
 
+    # Handle both old nested structure and direct band structure
     by_elevation = xmin_results.get('by_elevation', {})
+    if not by_elevation:
+        # Data might be directly keyed by band names (e.g., "0-500m")
+        skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                     'hypothesis_tests', 'hypothesis_report'}
+        by_elevation = {k: v for k, v in xmin_results.items()
+                        if k not in skip_keys and isinstance(v, dict) and 'status' in v}
 
     bands = []
     alphas_opt = []
@@ -2822,20 +2830,56 @@ def plot_alpha_stability_by_elevation(xmin_results, figsize=(14, 8), save_path=N
     alphas_fixed_024 = []
 
     for band_name, band_data in by_elevation.items():
+        # Skip if status is not success
+        if band_data.get('status') != 'success':
+            continue
+
         bands.append(band_name)
 
-        optimal = band_data.get('optimal', {})
-        alphas_opt.append(optimal.get('alpha', np.nan))
+        # Handle both nested structure and flat structure
+        if 'optimal' in band_data:
+            # Nested structure
+            optimal = band_data.get('optimal', {})
+            opt_alpha = optimal.get('alpha', np.nan)
+        else:
+            # Flat structure from xmin_sensitivity_by_elevation
+            opt_alpha = band_data.get('optimal_alpha', np.nan)
 
-        # Get α range from tolerance range
-        tol = band_data.get('tolerance_range', {})
-        alphas_low.append(tol.get('alpha_min', optimal.get('alpha', np.nan) - 0.05))
-        alphas_high.append(tol.get('alpha_max', optimal.get('alpha', np.nan) + 0.05))
+        alphas_opt.append(opt_alpha)
+
+        # Get α range from tolerance range or acceptable_range
+        if 'tolerance_range' in band_data:
+            tol = band_data.get('tolerance_range', {})
+            alphas_low.append(tol.get('alpha_min', opt_alpha - 0.05))
+            alphas_high.append(tol.get('alpha_max', opt_alpha + 0.05))
+        elif 'alpha_stability' in band_data and pd.notna(band_data.get('alpha_stability')):
+            # Use alpha_stability as half-range
+            stability = band_data['alpha_stability']
+            alphas_low.append(opt_alpha - stability/2)
+            alphas_high.append(opt_alpha + stability/2)
+        else:
+            alphas_low.append(opt_alpha - 0.05)
+            alphas_high.append(opt_alpha + 0.05)
 
         # Get α at fixed thresholds
-        fixed = band_data.get('fixed_xmin', {})
-        alphas_fixed_046.append(fixed.get(0.46, {}).get('alpha', np.nan))
-        alphas_fixed_024.append(fixed.get(0.024, {}).get('alpha', np.nan))
+        if 'fixed_xmin' in band_data:
+            fixed = band_data.get('fixed_xmin', {})
+            alphas_fixed_046.append(fixed.get(0.46, {}).get('alpha', np.nan))
+            alphas_fixed_024.append(fixed.get(0.024, {}).get('alpha', np.nan))
+        elif 'alpha_at_fixed_xmin' in band_data:
+            fixed = band_data.get('alpha_at_fixed_xmin', {})
+            alphas_fixed_046.append(fixed.get(0.46, {}).get('alpha', np.nan) if isinstance(fixed.get(0.46), dict) else np.nan)
+            alphas_fixed_024.append(fixed.get(0.024, {}).get('alpha', np.nan) if isinstance(fixed.get(0.024), dict) else np.nan)
+        else:
+            alphas_fixed_046.append(np.nan)
+            alphas_fixed_024.append(np.nan)
+
+    # Check if we have any data to plot
+    if len(bands) == 0:
+        ax.text(0.5, 0.5, 'No elevation band data available\nfor x_min sensitivity analysis',
+                ha='center', va='center', transform=ax.transAxes, fontsize=14)
+        ax.set_title('α Stability: How Sensitive is α to x_min Choice?', fontsize=14, fontweight='bold')
+        return fig, ax
 
     x = np.arange(len(bands))
     width = 0.25
@@ -3933,6 +3977,161 @@ def plot_elevation_histogram_by_glacial_stage(elevation_df, figsize=(14, 8), sav
     return fig, axes
 
 
+def plot_elevation_glacial_multipanel(elevation_df, hypsometry_df=None, dalton_df=None,
+                                       figsize=(10, 18), save_path=None):
+    """
+    Create single-column multi-panel figure for elevation analysis by glacial stage.
+
+    Creates a vertical 3-panel figure:
+    A) Lake count by elevation (stacked bar chart by glacial stage)
+    B) Percent of stage total by elevation (normalized within each stage)
+    C) Area-normalized lake density by elevation (lakes per km² of landscape)
+        with Dalton 18ka data shown as a separate color
+
+    Parameters
+    ----------
+    elevation_df : DataFrame
+        Output from compute_elevation_binned_density_by_stage()
+        Required columns: elev_bin_mid, glacial_stage, n_lakes, pct_of_stage
+    hypsometry_df : DataFrame, optional
+        Landscape hypsometry (area by elevation) for normalization
+        Required columns: elev_bin_mid, area_km2
+    dalton_df : DataFrame, optional
+        Dalton 18ka data with same structure as elevation_df for separate plotting
+    figsize : tuple
+        Figure size (width, height)
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True)
+
+    # Get glacial stage colors from config
+    try:
+        from .config import GLACIAL_CHRONOLOGY
+    except ImportError:
+        from config import GLACIAL_CHRONOLOGY
+
+    stages = elevation_df['glacial_stage'].unique()
+    stage_colors = {}
+    for stage in stages:
+        stage_lower = stage.lower()
+        for key, chrono in GLACIAL_CHRONOLOGY.items():
+            if key in stage_lower or chrono['name'].lower() in stage_lower:
+                stage_colors[stage] = chrono['color']
+                break
+        if stage not in stage_colors:
+            stage_colors[stage] = '#808080'
+
+    # Get elevation bins
+    elev_bins = sorted(elevation_df['elev_bin_mid'].dropna().unique())
+    if len(elev_bins) < 2:
+        for ax in axes:
+            ax.text(0.5, 0.5, 'Insufficient elevation data',
+                   ha='center', va='center', transform=ax.transAxes, fontsize=14)
+        return fig, axes
+
+    bar_width = elev_bins[1] - elev_bins[0] if len(elev_bins) > 1 else 100
+
+    # ====== Panel A: Lake Count by Elevation (stacked by glacial stage) ======
+    ax1 = axes[0]
+    bottom = np.zeros(len(elev_bins))
+
+    for stage in stages:
+        stage_data = elevation_df[elevation_df['glacial_stage'] == stage]
+        counts = []
+        for elev in elev_bins:
+            match = stage_data[stage_data['elev_bin_mid'] == elev]
+            counts.append(match['n_lakes'].values[0] if len(match) > 0 else 0)
+
+        ax1.bar(elev_bins, counts, width=bar_width*0.9, bottom=bottom,
+                label=stage, color=stage_colors[stage], edgecolor='white', linewidth=0.5)
+        bottom += np.array(counts)
+
+    ax1.set_ylabel('Lake Count', fontsize=12)
+    ax1.set_title('A) Lake Count by Elevation (Stacked by Glacial Stage)',
+                 fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=9)
+    ax1.grid(axis='y', alpha=0.3)
+
+    # ====== Panel B: Percent of Stage Total by Elevation ======
+    ax2 = axes[1]
+
+    for stage in stages:
+        stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+        if len(stage_data) > 0:
+            ax2.plot(stage_data['elev_bin_mid'], stage_data['pct_of_stage'],
+                     'o-', linewidth=2, markersize=4, label=stage, color=stage_colors[stage])
+
+    ax2.set_ylabel('Percent of Stage Total (%)', fontsize=12)
+    ax2.set_title('B) Elevation Distribution Within Each Stage (Normalized)',
+                 fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=9)
+    ax2.grid(True, alpha=0.3)
+
+    # ====== Panel C: Area-Normalized Lake Density by Elevation ======
+    ax3 = axes[2]
+
+    # Calculate area-normalized density if hypsometry is available
+    if hypsometry_df is not None and 'area_km2' in hypsometry_df.columns:
+        # Compute density = n_lakes / landscape_area for each stage at each elevation
+        for stage in stages:
+            stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+            if len(stage_data) > 0:
+                densities = []
+                elevs = []
+                for _, row in stage_data.iterrows():
+                    elev_mid = row['elev_bin_mid']
+                    n_lakes = row['n_lakes']
+                    # Find landscape area at this elevation
+                    hyps_match = hypsometry_df[hypsometry_df['elev_bin_mid'] == elev_mid]
+                    if len(hyps_match) > 0 and hyps_match['area_km2'].values[0] > 0:
+                        density = n_lakes / hyps_match['area_km2'].values[0] * 1000  # per 1000 km²
+                        densities.append(density)
+                        elevs.append(elev_mid)
+
+                if len(densities) > 0:
+                    ax3.plot(elevs, densities, 'o-', linewidth=2, markersize=4,
+                            label=stage, color=stage_colors[stage])
+    else:
+        # If no hypsometry, just show normalized counts
+        for stage in stages:
+            stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+            if len(stage_data) > 0:
+                # Normalize by total lakes at each elevation
+                ax3.plot(stage_data['elev_bin_mid'], stage_data['n_lakes'],
+                        'o-', linewidth=2, markersize=4, label=stage, color=stage_colors[stage])
+
+    # Add Dalton data if provided
+    if dalton_df is not None and len(dalton_df) > 0:
+        dalton_color = '#9467bd'  # Purple for Dalton
+        if 'pct_of_stage' in dalton_df.columns:
+            dalton_sorted = dalton_df.sort_values('elev_bin_mid')
+            ax3.plot(dalton_sorted['elev_bin_mid'], dalton_sorted['n_lakes'],
+                    'o-', linewidth=2.5, markersize=6, label='Dalton 18ka',
+                    color=dalton_color, linestyle='--')
+
+    ax3.set_xlabel('Elevation (m)', fontsize=12)
+    ax3.set_ylabel('Lake Density (per 1,000 km²)', fontsize=12)
+    ax3.set_title('C) Area-Normalized Lake Density by Elevation',
+                 fontsize=14, fontweight='bold')
+    ax3.legend(loc='upper right', fontsize=9)
+    ax3.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
 def plot_davis_hypothesis_test(davis_results, density_df=None, figsize=(10, 8), save_path=None):
     """
     Visualize Davis's hypothesis test results.
@@ -4076,7 +4275,7 @@ def plot_glacial_extent_map(lake_gdf, boundaries, figsize=(14, 10), save_path=No
 
     # Plot glacial boundaries in order (oldest first, so newest is on top)
     boundary_order = ['driftless', 'illinoian', 'wisconsin', 'dalton_18ka']
-    alphas = {'driftless': 0.3, 'illinoian': 0.4, 'wisconsin': 0.5, 'dalton_18ka': 0.3}
+    alphas = {'driftless': 0.3, 'illinoian': 0.4, 'wisconsin': 0.5, 'dalton_18ka': 0.6}
 
     for key in boundary_order:
         gdf = boundaries.get(key)
@@ -4620,11 +4819,30 @@ def plot_normalized_density_with_glacial_overlay(lake_gdf, density_df=None, elev
 
     # Check if we have the required columns
     if elev_col not in gdf.columns:
-        # Try common alternatives
-        for alt_col in ['Elevation', 'elevation', 'ELEV', 'elev', 'Mean_Elevation']:
+        # Try common alternatives (including 'Elevation_' with trailing underscore from config)
+        for alt_col in ['Elevation_', 'Elevation', 'elevation', 'ELEV', 'elev', 'Mean_Elevation', 'elev_m']:
             if alt_col in gdf.columns:
                 elev_col = alt_col
                 break
+
+    # Also fix area column if needed
+    if area_col not in gdf.columns:
+        for alt_col in ['AREASQKM', 'AreaSqKm', 'area_km2', 'Area', 'AREA']:
+            if alt_col in gdf.columns:
+                area_col = alt_col
+                break
+
+    # Check if elevation column was found
+    if elev_col not in gdf.columns:
+        print(f"Warning: Elevation column not found. Tried: {['Elevation_', 'Elevation', 'elevation', 'ELEV', 'elev', 'Mean_Elevation', 'elev_m']}")
+        print(f"Available columns: {list(gdf.columns[:20])}...")  # Show first 20 columns
+        ax1.text(0.5, 0.5, f'Elevation column not found in data\nAvailable: {list(gdf.columns[:10])}...',
+                ha='center', va='center', transform=ax1.transAxes, fontsize=11)
+        ax1.set_title('Lake Distribution by Elevation with Glacial Origin Overlay',
+                     fontsize=16, fontweight='bold')
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        return fig, (ax1, ax1)
 
     if 'glacial_stage' not in gdf.columns:
         print("Warning: glacial_stage column not found in data")
@@ -4802,7 +5020,9 @@ def plot_glacial_powerlaw_comparison(lake_gdf, area_col='AreaSqKm',
         areas = areas[areas > 0]
         if len(areas) > 10:
             sorted_areas = np.sort(areas)
-            ccdf = 1 - np.arange(1, len(sorted_areas) + 1) / len(sorted_areas)
+            n = len(sorted_areas)
+            # CCDF: P(X > x) - use (n-i)/n to avoid log(0) at the end
+            ccdf = (n - np.arange(n)) / n
             ax2.loglog(sorted_areas, ccdf, '-', linewidth=2,
                       color=stage_colors[stage], label=stage)
 
@@ -5384,10 +5604,25 @@ def plot_glacial_comprehensive_summary(results, lake_gdf=None, figsize=(20, 16),
         stages = lake_gdf['glacial_stage'].dropna().unique()
         colors = plt.cm.Set1(np.linspace(0, 1, len(stages)))
 
+        # Find area column (case-insensitive)
+        area_col = None
+        for col in lake_gdf.columns:
+            if col.lower() in ['areasqkm', 'area_km2', 'area', 'lakeareasqkm']:
+                area_col = col
+                break
+        if area_col is None:
+            # Fallback: look for columns containing 'area'
+            for col in lake_gdf.columns:
+                if 'area' in col.lower() and lake_gdf[col].dtype in [np.float64, np.float32, np.int64, np.int32]:
+                    area_col = col
+                    break
+        if area_col is None:
+            area_col = lake_gdf.select_dtypes(include=[np.number]).columns[0]
+            print(f"Warning: Using '{area_col}' as area column (no area column found)")
+
         for i, stage in enumerate(stages):
             stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
-            area_col = 'AreaSqKm' if 'AreaSqKm' in lake_gdf.columns else lake_gdf.select_dtypes(include=[np.number]).columns[0]
-            areas = stage_data[area_col].values
+            areas = stage_data[area_col].dropna().values
             areas = areas[areas > 0.01]  # Lower threshold
             if len(areas) > 10:
                 sorted_areas = np.sort(areas)[::-1]
@@ -5406,12 +5641,13 @@ def plot_glacial_comprehensive_summary(results, lake_gdf=None, figsize=(20, 16),
     if lake_gdf is not None and 'glacial_stage' in lake_gdf.columns:
         for i, stage in enumerate(stages):
             stage_data = lake_gdf[lake_gdf['glacial_stage'] == stage]
-            area_col = 'AreaSqKm' if 'AreaSqKm' in lake_gdf.columns else lake_gdf.select_dtypes(include=[np.number]).columns[0]
-            areas = stage_data[area_col].values
+            areas = stage_data[area_col].dropna().values
             areas = areas[areas > 0.001]
             if len(areas) > 10:
                 sorted_areas = np.sort(areas)
-                ccdf = 1 - np.arange(1, len(sorted_areas) + 1) / len(sorted_areas)
+                n = len(sorted_areas)
+                # CCDF: P(X > x) - use (n-i)/n to avoid log(0) at the end
+                ccdf = (n - np.arange(n)) / n
                 ax4.loglog(sorted_areas, ccdf, '-', linewidth=2,
                           color=colors[i], label=stage)
 
@@ -6061,7 +6297,19 @@ def plot_dalton_18ka_comparison(dalton_results, figsize=(16, 12), save_path=None
     # B) Power law CCDFs
     lake_gdf = dalton_results.get('lake_gdf')
     if lake_gdf is not None and 'dalton_classification' in lake_gdf.columns:
-        area_col = 'AreaSqKm' if 'AreaSqKm' in lake_gdf.columns else lake_gdf.select_dtypes(include=[np.number]).columns[0]
+        # Find area column (case-insensitive)
+        area_col = None
+        for col in lake_gdf.columns:
+            if col.lower() in ['areasqkm', 'area_km2', 'area', 'lakeareasqkm']:
+                area_col = col
+                break
+        if area_col is None:
+            for col in lake_gdf.columns:
+                if 'area' in col.lower() and lake_gdf[col].dtype in [np.float64, np.float32, np.int64, np.int32]:
+                    area_col = col
+                    break
+        if area_col is None:
+            area_col = lake_gdf.select_dtypes(include=[np.number]).columns[0]
 
         for classification in ['18ka_glaciated', '18ka_unglaciated']:
             mask = lake_gdf['dalton_classification'] == classification
@@ -6070,8 +6318,9 @@ def plot_dalton_18ka_comparison(dalton_results, figsize=(16, 12), save_path=None
 
             if len(areas) > 10:
                 sorted_areas = np.sort(areas)[::-1]
-                ranks = np.arange(1, len(sorted_areas) + 1)
-                ccdf = ranks / len(sorted_areas)
+                n = len(sorted_areas)
+                # CCDF: P(X > x) - use (n-i)/n to avoid log(0)
+                ccdf = (n - np.arange(n)) / n
 
                 label = 'In 18ka ice' if classification == '18ka_glaciated' else 'Outside 18ka ice'
                 ax2.loglog(sorted_areas, ccdf, 'o-', color=colors[classification],
