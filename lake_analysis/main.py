@@ -1918,7 +1918,8 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
     This is a convenience wrapper that:
     1. Loads lake data (if not provided)
     2. Runs glacial classification to get glacial_stage labels
-    3. Runs aridity vs glacial comparison analysis
+    3. Extracts aridity values from raster for each lake
+    4. Runs aridity vs glacial comparison analysis
 
     Use this to run just the aridity analysis without re-running the full pipeline.
 
@@ -1956,6 +1957,12 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
     >>> # With custom minimum area
     >>> results = analyze_aridity(min_lake_area=0.01)
     """
+    # Import raster sampling function
+    try:
+        from .data_loading import sample_raster_at_coords
+    except ImportError:
+        from data_loading import sample_raster_at_coords
+
     print("\n" + "=" * 70)
     print("STANDALONE ARIDITY ANALYSIS")
     print("=" * 70)
@@ -1965,7 +1972,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
     # Step 1: Load data if not provided
     if lakes is None:
         if verbose:
-            print("\n[Step 1/3] Loading lake data...")
+            print("\n[Step 1/4] Loading lake data...")
         lakes = load_data(data_source)
         if lakes is None:
             print("  ERROR: Could not load lake data")
@@ -1982,7 +1989,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
 
     # Step 2: Run glacial analysis to get classifications
     if verbose:
-        print("\n[Step 2/3] Running glacial classification...")
+        print("\n[Step 2/4] Running glacial classification...")
         print("  (Required to get glacial_stage labels for comparison)")
 
     glacial_results = analyze_glacial_chronosequence(lakes, save_figures=False, verbose=False)
@@ -1999,8 +2006,6 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
         print("  ERROR: No lake GeoDataFrame from glacial analysis")
         return {'error': 'no_lake_gdf'}
 
-    results['lake_gdf'] = lake_gdf
-
     if verbose:
         print(f"  Classified {len(lake_gdf):,} lakes by glacial stage")
         if 'glacial_stage' in lake_gdf.columns:
@@ -2008,9 +2013,85 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
             for stage, count in stage_counts.items():
                 print(f"    {stage}: {count:,}")
 
-    # Step 3: Run aridity analysis
+    # Step 3: Check/extract aridity values
+    ai_col = COLS.get('aridity', 'AI')
+
+    # First check if AI exists in original lakes DataFrame
+    ai_in_original = ai_col in lakes.columns
+    ai_in_gdf = ai_col in lake_gdf.columns
+
     if verbose:
-        print("\n[Step 3/3] Running aridity vs glacial comparison...")
+        print(f"\n[Step 3/4] Checking aridity data...")
+        print(f"  AI column in original data: {ai_in_original}")
+        print(f"  AI column in GeoDataFrame: {ai_in_gdf}")
+
+    if ai_in_gdf:
+        # AI column already exists - use it
+        valid_ai = lake_gdf[ai_col].notna().sum()
+        if verbose:
+            print(f"  Using existing '{ai_col}' column: {valid_ai:,} valid values")
+            # Note: AI values may be scaled (e.g., *10000) in the geodatabase
+            ai_min, ai_max = lake_gdf[ai_col].min(), lake_gdf[ai_col].max()
+            print(f"  AI range: {ai_min:.1f} to {ai_max:.1f}")
+            if ai_max > 100:
+                print(f"  Note: AI values appear scaled (typical range is 0-5)")
+
+    elif ai_in_original and not ai_in_gdf:
+        # AI exists in original but was lost during glacial analysis - copy it over
+        if verbose:
+            print(f"  Copying AI from original lakes DataFrame...")
+        # The GeoDataFrame index should match the original DataFrame
+        lake_gdf[ai_col] = lakes.loc[lake_gdf.index, ai_col].values
+        valid_ai = lake_gdf[ai_col].notna().sum()
+        if verbose:
+            print(f"  Copied {valid_ai:,} AI values")
+
+    else:
+        # AI not in data - need to extract from raster
+        if verbose:
+            print(f"  '{ai_col}' column not found in lake data")
+            print(f"  TIP: Your parquet file may be outdated. To include AI from geodatabase:")
+            print(f"       >>> from lake_analysis.data_loading import recreate_conus_parquet")
+            print(f"       >>> recreate_conus_parquet(force=True)")
+            print(f"  Attempting to sample from aridity raster instead...")
+
+        # Get aridity raster path
+        aridity_raster = RASTERS.get('aridity')
+        if aridity_raster is None or not Path(aridity_raster).exists():
+            print(f"  ERROR: Aridity raster not found at: {aridity_raster}")
+            print("  Please check RASTERS['aridity'] in config.py")
+            return {'error': 'aridity_raster_not_found'}
+
+        # Get lat/lon columns
+        lat_col = COLS.get('lat', 'Latitude')
+        lon_col = COLS.get('lon', 'Longitude')
+
+        # Check if lat/lon are available
+        if lat_col in lake_gdf.columns and lon_col in lake_gdf.columns:
+            # Sample aridity values from raster
+            aridity_values = sample_raster_at_coords(
+                aridity_raster,
+                lake_gdf[lon_col].values,
+                lake_gdf[lat_col].values,
+                points_crs='EPSG:4326',
+                verbose=verbose
+            )
+            lake_gdf[ai_col] = aridity_values
+
+            # Report statistics
+            valid_ai = lake_gdf[ai_col].notna().sum()
+            if verbose:
+                print(f"  Extracted aridity for {valid_ai:,} lakes ({100*valid_ai/len(lake_gdf):.1f}%)")
+                print(f"  Aridity range: {lake_gdf[ai_col].min():.3f} to {lake_gdf[ai_col].max():.3f}")
+        else:
+            print(f"  ERROR: Lat/lon columns not found ({lat_col}, {lon_col})")
+            return {'error': 'lat_lon_not_found'}
+
+    results['lake_gdf'] = lake_gdf
+
+    # Step 4: Run aridity analysis
+    if verbose:
+        print("\n[Step 4/4] Running aridity vs glacial comparison...")
 
     aridity_results = analyze_aridity_effects(
         lake_gdf,
@@ -2254,6 +2335,36 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                 zone_areas = results['glacial_chronosequence'].get('zone_areas')
 
             if lake_gdf is not None:
+                # Check if aridity column exists, extract from raster if not
+                ai_col = COLS.get('aridity', 'AI')
+                if ai_col not in lake_gdf.columns:
+                    print(f"  Extracting aridity values from raster...")
+                    try:
+                        from .data_loading import sample_raster_at_coords
+                    except ImportError:
+                        from data_loading import sample_raster_at_coords
+
+                    aridity_raster = RASTERS.get('aridity')
+                    lat_col = COLS.get('lat', 'Latitude')
+                    lon_col = COLS.get('lon', 'Longitude')
+
+                    if aridity_raster and Path(aridity_raster).exists():
+                        if lat_col in lake_gdf.columns and lon_col in lake_gdf.columns:
+                            aridity_values = sample_raster_at_coords(
+                                aridity_raster,
+                                lake_gdf[lon_col].values,
+                                lake_gdf[lat_col].values,
+                                points_crs='EPSG:4326',
+                                verbose=True
+                            )
+                            lake_gdf[ai_col] = aridity_values
+                            valid_ai = lake_gdf[ai_col].notna().sum()
+                            print(f"  Extracted aridity for {valid_ai:,} lakes")
+                        else:
+                            print(f"  Warning: Lat/lon columns not found. Skipping aridity extraction.")
+                    else:
+                        print(f"  Warning: Aridity raster not found. Skipping aridity extraction.")
+
                 results['aridity_analysis'] = analyze_aridity_effects(
                     lake_gdf, zone_areas=zone_areas
                 )
