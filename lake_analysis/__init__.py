@@ -27,6 +27,12 @@ Glacial Chronosequence Analysis:
     >>> results = analyze_glacial_chronosequence(lakes)
     # Tests Davis's hypothesis that lake density decreases with landscape age
 
+Aridity Analysis (standalone):
+    >>> from lake_analysis import analyze_aridity
+    >>> results = analyze_aridity()
+    # Compares aridity vs glacial stage as lake density predictors
+    # Runs glacial classification first, then aridity comparison
+
 Author: [Your Name]
 Project: Lake Scaling and Occurrence Analysis
 """
@@ -77,6 +83,7 @@ from .main import (
     analyze_relief,
     analyze_powerlaw,
     analyze_glacial_chronosequence,
+    analyze_aridity,
     run_full_analysis,
     quick_start
 )

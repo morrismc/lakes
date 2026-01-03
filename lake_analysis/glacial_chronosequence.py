@@ -45,7 +45,7 @@ try:
         COLS, ELEV_BREAKS, OUTPUT_DIR, ensure_output_dir,
         GLACIAL_BOUNDARIES, GLACIAL_CHRONOLOGY,
         GLACIAL_TARGET_CRS, GLACIAL_TARGET_CRS_PROJ4,
-        SHAPEFILES
+        SHAPEFILES, AI_BREAKS
     )
     from .data_loading import get_raster_info, calculate_landscape_area_by_bin
 except ImportError:
@@ -53,7 +53,7 @@ except ImportError:
         COLS, ELEV_BREAKS, OUTPUT_DIR, ensure_output_dir,
         GLACIAL_BOUNDARIES, GLACIAL_CHRONOLOGY,
         GLACIAL_TARGET_CRS, GLACIAL_TARGET_CRS_PROJ4,
-        SHAPEFILES
+        SHAPEFILES, AI_BREAKS
     )
     from data_loading import get_raster_info, calculate_landscape_area_by_bin
 
