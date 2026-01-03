@@ -50,7 +50,9 @@ from .data_loading import (
     load_lake_data_from_parquet,
     calculate_landscape_area_by_bin,
     quick_data_check,
-    summarize_lake_data
+    summarize_lake_data,
+    sample_raster_at_points,
+    sample_raster_at_coords
 )
 
 from .normalization import (

@@ -588,6 +588,233 @@ def reproject_raster_to_target(input_path, output_path, target_crs=TARGET_CRS,
     return output_path
 
 
+def sample_raster_at_points(raster_path, points_gdf, value_column='raster_value',
+                            src_crs=None, batch_size=50000, verbose=True):
+    """
+    Sample raster values at point locations.
+
+    This function efficiently extracts raster values at the locations of
+    point geometries, handling CRS transformations and NoData values.
+
+    Parameters
+    ----------
+    raster_path : str
+        Path to raster file (GeoTIFF, ESRI Grid, etc.)
+    points_gdf : GeoDataFrame
+        GeoDataFrame with point geometries
+    value_column : str
+        Name of the column to store sampled values (default: 'raster_value')
+    src_crs : str or CRS, optional
+        CRS of the input points. If None, uses points_gdf.crs
+    batch_size : int
+        Number of points to process at once (memory optimization)
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    GeoDataFrame
+        Input GeoDataFrame with new column containing sampled values.
+        NoData locations are set to NaN.
+
+    Notes
+    -----
+    - If points are outside the raster extent, values will be NaN
+    - Points in NoData regions of the raster will have NaN values
+    - CRS transformation is handled automatically
+    """
+    from pyproj import Transformer
+
+    if verbose:
+        print(f"\nSampling raster values at {len(points_gdf):,} point locations...")
+        print(f"  Raster: {Path(raster_path).name}")
+
+    # Open raster to get metadata
+    with rasterio.open(raster_path) as src:
+        raster_crs = src.crs
+        raster_transform = src.transform
+        raster_bounds = src.bounds
+        nodata = src.nodata
+        raster_data = src.read(1)
+
+        if verbose:
+            print(f"  Raster CRS: {raster_crs}")
+            print(f"  Raster shape: {raster_data.shape}")
+            print(f"  NoData value: {nodata}")
+
+        # Determine source CRS
+        if src_crs is None:
+            src_crs = points_gdf.crs
+
+        # Check if we need to transform coordinates
+        need_transform = src_crs is not None and not CRS.from_user_input(src_crs).equals(raster_crs)
+
+        if need_transform:
+            if verbose:
+                print(f"  Transforming points from {src_crs} to {raster_crs}")
+            transformer = Transformer.from_crs(src_crs, raster_crs, always_xy=True)
+
+        # Extract coordinates
+        coords = np.array([(geom.x, geom.y) for geom in points_gdf.geometry])
+
+        if need_transform:
+            x_coords, y_coords = transformer.transform(coords[:, 0], coords[:, 1])
+        else:
+            x_coords = coords[:, 0]
+            y_coords = coords[:, 1]
+
+        # Sample values
+        values = np.full(len(points_gdf), np.nan)
+
+        # Process in batches for memory efficiency
+        n_batches = (len(points_gdf) + batch_size - 1) // batch_size
+        valid_count = 0
+
+        for i in range(n_batches):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, len(points_gdf))
+
+            batch_x = x_coords[start_idx:end_idx]
+            batch_y = y_coords[start_idx:end_idx]
+
+            # Convert coordinates to row/col indices
+            # rasterio transform: ~transform * (col, row) = (x, y)
+            # Inverse: (col, row) = ~transform.inverse * (x, y)
+            cols, rows = ~raster_transform * (batch_x, batch_y)
+            rows = rows.astype(int)
+            cols = cols.astype(int)
+
+            # Check bounds
+            valid_mask = (
+                (rows >= 0) & (rows < raster_data.shape[0]) &
+                (cols >= 0) & (cols < raster_data.shape[1])
+            )
+
+            # Sample valid points
+            valid_rows = rows[valid_mask]
+            valid_cols = cols[valid_mask]
+            sampled = raster_data[valid_rows, valid_cols]
+
+            # Handle NoData
+            if nodata is not None:
+                sampled = sampled.astype(float)
+                sampled[sampled == nodata] = np.nan
+
+            # Store values
+            batch_values = np.full(end_idx - start_idx, np.nan)
+            batch_values[valid_mask] = sampled
+            values[start_idx:end_idx] = batch_values
+
+            valid_count += np.sum(~np.isnan(batch_values))
+
+        if verbose:
+            pct_valid = 100 * valid_count / len(points_gdf)
+            print(f"  Valid samples: {valid_count:,} ({pct_valid:.1f}%)")
+
+    # Add values to GeoDataFrame
+    result_gdf = points_gdf.copy()
+    result_gdf[value_column] = values
+
+    return result_gdf
+
+
+def sample_raster_at_coords(raster_path, lons, lats, points_crs='EPSG:4326',
+                            batch_size=50000, verbose=True):
+    """
+    Sample raster values at coordinate arrays (simpler interface).
+
+    Parameters
+    ----------
+    raster_path : str
+        Path to raster file
+    lons : array-like
+        Longitude values
+    lats : array-like
+        Latitude values
+    points_crs : str
+        CRS of the input coordinates (default: EPSG:4326 for lat/lon)
+    batch_size : int
+        Number of points to process at once
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    numpy.ndarray
+        Sampled raster values (NaN where invalid/NoData)
+    """
+    from pyproj import Transformer
+
+    lons = np.asarray(lons)
+    lats = np.asarray(lats)
+
+    if verbose:
+        print(f"\nSampling raster at {len(lons):,} coordinates...")
+        print(f"  Raster: {Path(raster_path).name}")
+
+    with rasterio.open(raster_path) as src:
+        raster_crs = src.crs
+        raster_transform = src.transform
+        nodata = src.nodata
+        raster_data = src.read(1)
+
+        if verbose:
+            print(f"  Raster CRS: {raster_crs}")
+            print(f"  NoData value: {nodata}")
+
+        # Transform coordinates to raster CRS
+        need_transform = not CRS.from_user_input(points_crs).equals(raster_crs)
+
+        if need_transform:
+            if verbose:
+                print(f"  Transforming from {points_crs} to {raster_crs}")
+            transformer = Transformer.from_crs(points_crs, raster_crs, always_xy=True)
+            x_coords, y_coords = transformer.transform(lons, lats)
+        else:
+            x_coords, y_coords = lons, lats
+
+        # Sample values
+        values = np.full(len(lons), np.nan)
+        valid_count = 0
+
+        n_batches = (len(lons) + batch_size - 1) // batch_size
+        for i in range(n_batches):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, len(lons))
+
+            batch_x = x_coords[start_idx:end_idx]
+            batch_y = y_coords[start_idx:end_idx]
+
+            cols, rows = ~raster_transform * (batch_x, batch_y)
+            rows = rows.astype(int)
+            cols = cols.astype(int)
+
+            valid_mask = (
+                (rows >= 0) & (rows < raster_data.shape[0]) &
+                (cols >= 0) & (cols < raster_data.shape[1])
+            )
+
+            valid_rows = rows[valid_mask]
+            valid_cols = cols[valid_mask]
+            sampled = raster_data[valid_rows, valid_cols]
+
+            if nodata is not None:
+                sampled = sampled.astype(float)
+                sampled[sampled == nodata] = np.nan
+
+            batch_values = np.full(end_idx - start_idx, np.nan)
+            batch_values[valid_mask] = sampled
+            values[start_idx:end_idx] = batch_values
+
+            valid_count += np.sum(~np.isnan(batch_values))
+
+        if verbose:
+            pct_valid = 100 * valid_count / len(lons)
+            print(f"  Valid samples: {valid_count:,} ({pct_valid:.1f}%)")
+
+    return values
+
+
 # ============================================================================
 # LANDSCAPE AREA CALCULATIONS
 # ============================================================================
