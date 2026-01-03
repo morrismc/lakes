@@ -2161,18 +2161,20 @@ def print_analysis_summary(results):
         print("└" + "─" * 78 + "┘")
 
         lat = spatial.get('latitudinal', {})
-        if lat and lat.get('correlation') is not None:
+        lat_corr = lat.get('correlation', {}) if lat else {}
+        if lat_corr and lat_corr.get('r') is not None:
             print(f"\n  Latitudinal gradient:")
-            print(f"    Correlation (latitude vs α): r = {lat['correlation']:.3f}")
-            if lat.get('p_value') is not None:
-                print(f"    P-value: {lat['p_value']:.4f}")
+            print(f"    Correlation (latitude vs α): r = {lat_corr['r']:.3f}")
+            if lat_corr.get('p_value') is not None:
+                print(f"    P-value: {lat_corr['p_value']:.4f}")
 
         lon = spatial.get('longitudinal', {})
-        if lon and lon.get('correlation') is not None:
+        lon_corr = lon.get('correlation', {}) if lon else {}
+        if lon_corr and lon_corr.get('r') is not None:
             print(f"\n  Longitudinal gradient:")
-            print(f"    Correlation (longitude vs α): r = {lon['correlation']:.3f}")
-            if lon.get('p_value') is not None:
-                print(f"    P-value: {lon['p_value']:.4f}")
+            print(f"    Correlation (longitude vs α): r = {lon_corr['r']:.3f}")
+            if lon_corr.get('p_value') is not None:
+                print(f"    P-value: {lon_corr['p_value']:.4f}")
 
     # 6. X_MIN SENSITIVITY
     xmin = results.get('xmin_by_elevation', {})
