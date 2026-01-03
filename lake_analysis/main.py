@@ -2183,17 +2183,18 @@ def print_analysis_summary(results):
         print("│ 6. X_MIN SENSITIVITY BY ELEVATION" + " " * 43 + "│")
         print("└" + "─" * 78 + "┘")
 
-        summary = xmin.get('summary_table', [])
-        if summary:
+        summary = xmin.get('summary_table')
+        if summary is not None and hasattr(summary, 'empty') and not summary.empty:
             print("\n  Optimal x_min by elevation band:")
             print("  " + "-" * 60)
             print(f"  {'Elevation':<12} {'x_min':>10} {'α':>10} {'n_lakes':>12}")
             print("  " + "-" * 60)
-            for row in summary[:6]:  # Show first 6 bands
-                band = row.get('band', 'Unknown')
+            # Handle DataFrame format
+            for _, row in summary.head(6).iterrows():
+                band = row.get('elevation_band', row.get('band', 'Unknown'))
                 xmin_val = row.get('optimal_xmin', 0)
                 alpha = row.get('alpha', 0)
-                n = row.get('n_lakes', 0)
+                n = int(row.get('n_lakes', 0))
                 print(f"  {band:<12} {xmin_val:>10.3f} {alpha:>10.3f} {n:>12,}")
             print("  " + "-" * 60)
 
