@@ -2450,6 +2450,554 @@ def xmin_sensitivity_by_glacial_zone(lake_gdf, area_col=None, verbose=True):
     return results
 
 
+# ============================================================================
+# PER-STAGE HYPSOMETRY AND PROPER NORMALIZATION
+# ============================================================================
+
+def compute_per_stage_hypsometry(lake_gdf, zone_areas, elev_breaks=None, verbose=True):
+    """
+    Compute hypsometry (area by elevation) for each glacial stage.
+
+    Uses the distribution of lakes across elevation bins as a proxy for
+    the landscape elevation distribution within each stage. This assumes
+    lakes are roughly uniformly distributed across the landscape at each
+    elevation (a reasonable first-order approximation).
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with glacial_stage and elevation columns
+    zone_areas : dict
+        Dictionary mapping stage names to total area in km²
+    elev_breaks : list, optional
+        Elevation bin edges (default from config)
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    DataFrame
+        Per-stage hypsometry with columns:
+        - glacial_stage
+        - elev_bin_mid
+        - area_km2 (estimated landscape area at this elevation for this stage)
+    """
+    if elev_breaks is None:
+        elev_breaks = ELEV_BREAKS
+
+    elev_col = COLS.get('elevation', 'Elevation_')
+
+    if verbose:
+        print("\nComputing per-stage hypsometry...")
+
+    results = []
+
+    for stage in ['Wisconsin', 'Illinoian', 'Driftless', 'unclassified']:
+        stage_lakes = lake_gdf[lake_gdf['glacial_stage'] == stage]
+
+        if len(stage_lakes) == 0:
+            continue
+
+        total_stage_area = zone_areas.get(stage.lower(), 0)
+        if total_stage_area == 0:
+            continue
+
+        # Bin lakes by elevation
+        stage_lakes = stage_lakes.copy()
+        stage_lakes['elev_bin'] = pd.cut(
+            stage_lakes[elev_col],
+            bins=elev_breaks,
+            labels=False,
+            include_lowest=True
+        )
+
+        # Count lakes per bin
+        bin_counts = stage_lakes.groupby('elev_bin').size()
+        total_lakes = len(stage_lakes)
+
+        # Distribute total stage area proportionally to lake counts
+        for bin_idx in range(len(elev_breaks) - 1):
+            n_lakes = bin_counts.get(bin_idx, 0)
+            if n_lakes > 0:
+                # Fraction of lakes at this elevation
+                frac = n_lakes / total_lakes
+                # Estimated landscape area
+                area = total_stage_area * frac
+                elev_mid = (elev_breaks[bin_idx] + elev_breaks[bin_idx + 1]) / 2
+
+                results.append({
+                    'glacial_stage': stage,
+                    'elev_bin_mid': elev_mid,
+                    'area_km2': area,
+                    'n_lakes': n_lakes
+                })
+
+    result_df = pd.DataFrame(results)
+
+    if verbose:
+        print(f"  Computed hypsometry for {result_df['glacial_stage'].nunique()} stages")
+        print(f"  {len(result_df)} stage-elevation combinations")
+
+    return result_df
+
+
+def compute_elevation_density_by_stage_normalized(lake_gdf, zone_areas, elev_breaks=None, verbose=True):
+    """
+    Compute properly normalized lake density by elevation for each glacial stage.
+
+    Normalizes by the estimated landscape area at each elevation for each stage,
+    enabling proper comparison of lake density across stages.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with glacial_stage and elevation columns
+    zone_areas : dict
+        Dictionary mapping stage names to total area in km²
+    elev_breaks : list, optional
+        Elevation bin edges
+    verbose : bool
+        Print progress
+
+    Returns
+    -------
+    DataFrame
+        Normalized density with columns:
+        - glacial_stage
+        - elev_bin_mid
+        - n_lakes
+        - area_km2 (estimated landscape area)
+        - density_per_1000km2
+    """
+    if elev_breaks is None:
+        elev_breaks = ELEV_BREAKS
+
+    elev_col = COLS.get('elevation', 'Elevation_')
+
+    if verbose:
+        print("\nComputing elevation-normalized density by stage...")
+
+    # First get per-stage hypsometry
+    hyps_df = compute_per_stage_hypsometry(lake_gdf, zone_areas, elev_breaks, verbose=False)
+
+    # Get lake counts by stage and elevation
+    lake_gdf = lake_gdf.copy()
+    lake_gdf['elev_bin'] = pd.cut(
+        lake_gdf[elev_col],
+        bins=elev_breaks,
+        labels=False,
+        include_lowest=True
+    )
+    lake_gdf['elev_bin_mid'] = lake_gdf['elev_bin'].apply(
+        lambda x: (elev_breaks[int(x)] + elev_breaks[int(x)+1]) / 2
+        if pd.notna(x) and 0 <= int(x) < len(elev_breaks)-1 else np.nan
+    )
+
+    counts = lake_gdf.groupby(['glacial_stage', 'elev_bin_mid']).size().reset_index(name='n_lakes')
+
+    # Merge with hypsometry
+    result = counts.merge(
+        hyps_df[['glacial_stage', 'elev_bin_mid', 'area_km2']],
+        on=['glacial_stage', 'elev_bin_mid'],
+        how='left'
+    )
+
+    # Compute density (lakes per 1000 km²)
+    result['density_per_1000km2'] = np.where(
+        result['area_km2'] > 0,
+        result['n_lakes'] / result['area_km2'] * 1000,
+        0
+    )
+
+    if verbose:
+        for stage in result['glacial_stage'].unique():
+            stage_data = result[result['glacial_stage'] == stage]
+            mean_density = stage_data['density_per_1000km2'].mean()
+            print(f"  {stage}: mean density = {mean_density:.1f} lakes/1000km²")
+
+    return result
+
+
+# ============================================================================
+# ARIDITY INDEX ANALYSIS
+# ============================================================================
+
+def compute_density_by_aridity(lake_gdf, aridity_breaks=None, zone_areas=None, verbose=True):
+    """
+    Compute lake density by aridity index bin.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with aridity index ('AI') column
+    aridity_breaks : list, optional
+        Aridity index bin edges. Default: [0, 0.2, 0.5, 0.65, 1.0, 2.0, 5.0, 10.0]
+        (0-0.2: Hyper-arid, 0.2-0.5: Arid, 0.5-0.65: Semi-arid,
+         0.65-1.0: Dry sub-humid, 1.0-2.0: Humid, >2.0: Hyper-humid)
+    zone_areas : dict, optional
+        Pre-computed landscape areas by aridity bin for normalization
+    verbose : bool
+        Print progress
+
+    Returns
+    -------
+    DataFrame
+        Lake statistics by aridity bin
+    """
+    if aridity_breaks is None:
+        aridity_breaks = AI_BREAKS
+
+    ai_col = COLS.get('aridity', 'AI')
+    area_col = COLS.get('area', 'AREASQKM')
+
+    if ai_col not in lake_gdf.columns:
+        if verbose:
+            print(f"  Warning: Aridity column '{ai_col}' not found")
+        return None
+
+    if verbose:
+        print("\n" + "-" * 60)
+        print("LAKE DENSITY BY ARIDITY INDEX")
+        print("-" * 60)
+
+    # Bin by aridity
+    lake_gdf = lake_gdf.copy()
+    lake_gdf['ai_bin'] = pd.cut(
+        lake_gdf[ai_col],
+        bins=aridity_breaks,
+        labels=False,
+        include_lowest=True
+    )
+
+    # Labels for bins
+    ai_labels = {
+        0: 'Hyper-arid (0-0.2)',
+        1: 'Arid (0.2-0.5)',
+        2: 'Semi-arid (0.5-0.65)',
+        3: 'Dry sub-humid (0.65-1.0)',
+        4: 'Humid (1.0-2.0)',
+        5: 'Wet (2.0-5.0)',
+        6: 'Hyper-humid (>5.0)'
+    }
+
+    results = []
+    for bin_idx in range(len(aridity_breaks) - 1):
+        bin_lakes = lake_gdf[lake_gdf['ai_bin'] == bin_idx]
+        n_lakes = len(bin_lakes)
+
+        if n_lakes > 0:
+            total_lake_area = bin_lakes[area_col].sum()
+            mean_lake_area = bin_lakes[area_col].mean()
+            ai_mid = (aridity_breaks[bin_idx] + aridity_breaks[bin_idx + 1]) / 2
+
+            results.append({
+                'ai_bin': bin_idx,
+                'ai_label': ai_labels.get(bin_idx, f'Bin {bin_idx}'),
+                'ai_lower': aridity_breaks[bin_idx],
+                'ai_upper': aridity_breaks[bin_idx + 1],
+                'ai_mid': ai_mid,
+                'n_lakes': n_lakes,
+                'total_lake_area_km2': total_lake_area,
+                'mean_lake_area_km2': mean_lake_area
+            })
+
+    result_df = pd.DataFrame(results)
+
+    if verbose:
+        print(f"\n  {'Aridity Bin':<25} {'N Lakes':>12} {'Mean Area (km²)':>15}")
+        print("  " + "-" * 55)
+        for _, row in result_df.iterrows():
+            print(f"  {row['ai_label']:<25} {row['n_lakes']:>12,} {row['mean_lake_area_km2']:>15.4f}")
+
+    return result_df
+
+
+def compute_density_by_aridity_and_glacial(lake_gdf, aridity_breaks=None, verbose=True):
+    """
+    Compute lake density stratified by both aridity and glacial stage.
+
+    This allows us to examine whether glacial stage effects persist
+    after controlling for aridity (climate).
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with aridity ('AI') and glacial_stage columns
+    aridity_breaks : list, optional
+        Aridity index bin edges
+    verbose : bool
+        Print progress
+
+    Returns
+    -------
+    DataFrame
+        Cross-tabulation of lake counts by aridity and glacial stage
+    """
+    if aridity_breaks is None:
+        aridity_breaks = AI_BREAKS
+
+    ai_col = COLS.get('aridity', 'AI')
+
+    if ai_col not in lake_gdf.columns or 'glacial_stage' not in lake_gdf.columns:
+        if verbose:
+            print("  Warning: Required columns not found")
+        return None
+
+    if verbose:
+        print("\n" + "-" * 60)
+        print("LAKE DENSITY: ARIDITY × GLACIAL STAGE")
+        print("-" * 60)
+
+    # Bin by aridity
+    lake_gdf = lake_gdf.copy()
+    lake_gdf['ai_bin'] = pd.cut(
+        lake_gdf[ai_col],
+        bins=aridity_breaks,
+        labels=False,
+        include_lowest=True
+    )
+
+    # Cross-tabulation
+    cross_tab = pd.crosstab(
+        lake_gdf['ai_bin'],
+        lake_gdf['glacial_stage'],
+        margins=True
+    )
+
+    if verbose:
+        print("\n  Lake counts by Aridity × Glacial Stage:")
+        print(cross_tab.to_string())
+
+    # Compute proportions within each aridity bin
+    proportions = cross_tab.div(cross_tab['All'], axis=0) * 100
+
+    if verbose:
+        print("\n  Percentage by glacial stage within each aridity bin:")
+        print(proportions.round(1).to_string())
+
+    return {
+        'counts': cross_tab,
+        'proportions': proportions,
+        'lake_gdf': lake_gdf
+    }
+
+
+def run_aridity_glacial_comparison(lake_gdf, zone_areas=None, verbose=True):
+    """
+    Compare aridity vs glacial stage as predictors of lake density.
+
+    Uses multiple approaches:
+    1. Simple correlation analysis
+    2. ANOVA comparing glacial stages within aridity bins
+    3. Partial correlation controlling for aridity
+    4. Multiple regression with both predictors
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with aridity, elevation, and glacial_stage columns
+    zone_areas : dict, optional
+        Glacial zone areas for density normalization
+    verbose : bool
+        Print detailed results
+
+    Returns
+    -------
+    dict
+        Comprehensive comparison results
+    """
+    from scipy import stats
+
+    ai_col = COLS.get('aridity', 'AI')
+    elev_col = COLS.get('elevation', 'Elevation_')
+    area_col = COLS.get('area', 'AREASQKM')
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("COMPARING ARIDITY VS GLACIAL STAGE AS LAKE DENSITY PREDICTORS")
+        print("=" * 70)
+
+    results = {}
+
+    # =========================================================================
+    # 1. Basic statistics by aridity
+    # =========================================================================
+    aridity_stats = compute_density_by_aridity(lake_gdf, verbose=verbose)
+    results['aridity_stats'] = aridity_stats
+
+    # =========================================================================
+    # 2. Cross-tabulation: Aridity × Glacial Stage
+    # =========================================================================
+    cross_results = compute_density_by_aridity_and_glacial(lake_gdf, verbose=verbose)
+    results['cross_tabulation'] = cross_results
+
+    # =========================================================================
+    # 3. Correlation: Aridity vs Lake Size
+    # =========================================================================
+    if verbose:
+        print("\n" + "-" * 60)
+        print("CORRELATION ANALYSIS")
+        print("-" * 60)
+
+    valid_mask = (lake_gdf[ai_col] > 0) & (lake_gdf[ai_col] < 100)
+    valid_lakes = lake_gdf[valid_mask].copy()
+
+    # Aridity vs lake area
+    r_aridity_area, p_aridity_area = stats.pearsonr(
+        valid_lakes[ai_col],
+        np.log10(valid_lakes[area_col])
+    )
+    results['r_aridity_area'] = r_aridity_area
+    results['p_aridity_area'] = p_aridity_area
+
+    # Aridity vs elevation
+    r_aridity_elev, p_aridity_elev = stats.pearsonr(
+        valid_lakes[ai_col],
+        valid_lakes[elev_col]
+    )
+    results['r_aridity_elev'] = r_aridity_elev
+    results['p_aridity_elev'] = p_aridity_elev
+
+    if verbose:
+        print(f"\n  Aridity vs log(Lake Area): r = {r_aridity_area:.3f}, p = {p_aridity_area:.2e}")
+        print(f"  Aridity vs Elevation: r = {r_aridity_elev:.3f}, p = {p_aridity_elev:.2e}")
+
+    # =========================================================================
+    # 4. ANOVA: Do glacial stages differ within aridity bins?
+    # =========================================================================
+    if verbose:
+        print("\n" + "-" * 60)
+        print("ANOVA: GLACIAL STAGE EFFECTS WITHIN ARIDITY BINS")
+        print("-" * 60)
+        print("\n  Testing if glacial stage matters after controlling for aridity...")
+
+    anova_results = []
+    for ai_bin in valid_lakes['ai_bin'].dropna().unique():
+        bin_lakes = valid_lakes[valid_lakes['ai_bin'] == ai_bin]
+
+        # Get lake counts by glacial stage
+        groups = [
+            bin_lakes[bin_lakes['glacial_stage'] == stage][area_col].values
+            for stage in ['Wisconsin', 'Illinoian', 'Driftless', 'unclassified']
+            if len(bin_lakes[bin_lakes['glacial_stage'] == stage]) > 5
+        ]
+
+        if len(groups) >= 2:
+            # Log-transform areas for normality
+            log_groups = [np.log10(g[g > 0]) for g in groups if len(g[g > 0]) > 0]
+
+            if len(log_groups) >= 2:
+                f_stat, p_val = stats.f_oneway(*log_groups)
+                anova_results.append({
+                    'ai_bin': int(ai_bin),
+                    'n_groups': len(log_groups),
+                    'total_lakes': sum(len(g) for g in log_groups),
+                    'f_statistic': f_stat,
+                    'p_value': p_val
+                })
+
+    if anova_results:
+        anova_df = pd.DataFrame(anova_results)
+        results['anova_by_aridity'] = anova_df
+
+        if verbose:
+            print(f"\n  {'AI Bin':>8} {'N Groups':>10} {'N Lakes':>10} {'F-stat':>10} {'p-value':>12}")
+            print("  " + "-" * 55)
+            for _, row in anova_df.iterrows():
+                sig = "***" if row['p_value'] < 0.001 else "**" if row['p_value'] < 0.01 else "*" if row['p_value'] < 0.05 else ""
+                print(f"  {row['ai_bin']:>8} {row['n_groups']:>10} {row['total_lakes']:>10} "
+                      f"{row['f_statistic']:>10.2f} {row['p_value']:>12.2e} {sig}")
+
+    # =========================================================================
+    # 5. Multiple Regression
+    # =========================================================================
+    if verbose:
+        print("\n" + "-" * 60)
+        print("MULTIPLE REGRESSION: log(Lake Area) ~ Aridity + Glacial Stage")
+        print("-" * 60)
+
+    try:
+        import statsmodels.api as sm
+        from statsmodels.formula.api import ols
+
+        # Prepare data
+        reg_data = valid_lakes[[area_col, ai_col, 'glacial_stage', elev_col]].copy()
+        reg_data['log_area'] = np.log10(reg_data[area_col])
+        reg_data = reg_data.dropna()
+
+        # Fit model
+        model = ols('log_area ~ Q("AI") + C(glacial_stage)', data=reg_data).fit()
+
+        results['regression'] = {
+            'r_squared': model.rsquared,
+            'adj_r_squared': model.rsquared_adj,
+            'f_statistic': model.fvalue,
+            'f_pvalue': model.f_pvalue,
+            'params': model.params.to_dict(),
+            'pvalues': model.pvalues.to_dict()
+        }
+
+        if verbose:
+            print(f"\n  R² = {model.rsquared:.4f}, Adj. R² = {model.rsquared_adj:.4f}")
+            print(f"  F-statistic = {model.fvalue:.2f}, p = {model.f_pvalue:.2e}")
+            print("\n  Coefficients:")
+            for param, coef in model.params.items():
+                pval = model.pvalues[param]
+                sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else ""
+                print(f"    {param}: {coef:.4f} (p = {pval:.2e}) {sig}")
+
+        # Model with interaction
+        model_int = ols('log_area ~ Q("AI") * C(glacial_stage)', data=reg_data).fit()
+        results['regression_interaction'] = {
+            'r_squared': model_int.rsquared,
+            'adj_r_squared': model_int.rsquared_adj,
+        }
+
+        if verbose:
+            print(f"\n  With interaction: R² = {model_int.rsquared:.4f}")
+            improvement = model_int.rsquared - model.rsquared
+            print(f"  R² improvement from interaction: {improvement:.4f}")
+
+    except ImportError:
+        if verbose:
+            print("  Note: statsmodels not available for regression analysis")
+        results['regression'] = None
+
+    # =========================================================================
+    # 6. Summary: Which explains more variance?
+    # =========================================================================
+    if verbose:
+        print("\n" + "-" * 60)
+        print("SUMMARY: RELATIVE IMPORTANCE")
+        print("-" * 60)
+
+    # Aridity-only model
+    try:
+        model_ai = ols('log_area ~ Q("AI")', data=reg_data).fit()
+        r2_ai = model_ai.rsquared
+
+        # Glacial-only model
+        model_glacial = ols('log_area ~ C(glacial_stage)', data=reg_data).fit()
+        r2_glacial = model_glacial.rsquared
+
+        results['r2_aridity_only'] = r2_ai
+        results['r2_glacial_only'] = r2_glacial
+
+        if verbose:
+            print(f"\n  R² (Aridity only): {r2_ai:.4f}")
+            print(f"  R² (Glacial stage only): {r2_glacial:.4f}")
+            print(f"  R² (Both): {results['regression']['r_squared']:.4f}")
+
+            if r2_glacial > r2_ai:
+                print(f"\n  → Glacial stage explains {(r2_glacial/r2_ai - 1)*100:.1f}% more variance than aridity alone")
+            else:
+                print(f"\n  → Aridity explains {(r2_ai/r2_glacial - 1)*100:.1f}% more variance than glacial stage alone")
+    except:
+        pass
+
+    return results
+
+
 if __name__ == "__main__":
     print("Glacial Chronosequence Analysis Module")
     print("=" * 40)

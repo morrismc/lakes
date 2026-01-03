@@ -3978,6 +3978,7 @@ def plot_elevation_histogram_by_glacial_stage(elevation_df, figsize=(14, 8), sav
 
 
 def plot_elevation_glacial_multipanel(elevation_df, hypsometry_df=None, dalton_df=None,
+                                       normalized_density_df=None, zone_areas=None,
                                        figsize=(10, 18), save_path=None):
     """
     Create single-column multi-panel figure for elevation analysis by glacial stage.
@@ -3994,10 +3995,15 @@ def plot_elevation_glacial_multipanel(elevation_df, hypsometry_df=None, dalton_d
         Output from compute_elevation_binned_density_by_stage()
         Required columns: elev_bin_mid, glacial_stage, n_lakes, pct_of_stage
     hypsometry_df : DataFrame, optional
-        Landscape hypsometry (area by elevation) for normalization
-        Required columns: elev_bin_mid, area_km2
+        Per-stage hypsometry (area by elevation for each stage)
+        Required columns: elev_bin_mid, glacial_stage, area_km2
     dalton_df : DataFrame, optional
         Dalton 18ka data with same structure as elevation_df for separate plotting
+    normalized_density_df : DataFrame, optional
+        Pre-computed normalized density with columns:
+        glacial_stage, elev_bin_mid, density_per_1000km2
+    zone_areas : dict, optional
+        Glacial zone areas for computing per-stage normalization
     figsize : tuple
         Figure size (width, height)
     save_path : str, optional
@@ -4077,41 +4083,122 @@ def plot_elevation_glacial_multipanel(elevation_df, hypsometry_df=None, dalton_d
     # ====== Panel C: Area-Normalized Lake Density by Elevation ======
     ax3 = axes[2]
 
-    # Calculate area-normalized density if hypsometry is available
-    if hypsometry_df is not None and 'area_km2' in hypsometry_df.columns:
-        # Compute density = n_lakes / landscape_area for each stage at each elevation
+    # Priority 1: Use pre-computed normalized density if provided
+    if normalized_density_df is not None and 'density_per_1000km2' in normalized_density_df.columns:
         for stage in stages:
-            stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+            stage_data = normalized_density_df[
+                normalized_density_df['glacial_stage'] == stage
+            ].sort_values('elev_bin_mid')
             if len(stage_data) > 0:
-                densities = []
-                elevs = []
-                for _, row in stage_data.iterrows():
-                    elev_mid = row['elev_bin_mid']
-                    n_lakes = row['n_lakes']
-                    # Find landscape area at this elevation
-                    hyps_match = hypsometry_df[hypsometry_df['elev_bin_mid'] == elev_mid]
-                    if len(hyps_match) > 0 and hyps_match['area_km2'].values[0] > 0:
-                        density = n_lakes / hyps_match['area_km2'].values[0] * 1000  # per 1000 km²
-                        densities.append(density)
-                        elevs.append(elev_mid)
+                ax3.plot(stage_data['elev_bin_mid'], stage_data['density_per_1000km2'],
+                        'o-', linewidth=2, markersize=4, label=stage, color=stage_colors[stage])
 
-                if len(densities) > 0:
-                    ax3.plot(elevs, densities, 'o-', linewidth=2, markersize=4,
-                            label=stage, color=stage_colors[stage])
-    else:
-        # If no hypsometry, just show normalized counts
+    # Priority 2: Compute normalization using zone_areas (per-stage total area)
+    elif zone_areas is not None:
         for stage in stages:
             stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
             if len(stage_data) > 0:
-                # Normalize by total lakes at each elevation
+                stage_area = zone_areas.get(stage.lower(), 0)
+                if stage_area > 0:
+                    # Total lakes in this stage
+                    total_lakes_in_stage = stage_data['n_lakes'].sum()
+                    # For each elevation bin, compute density as:
+                    # (n_lakes / total_lakes_in_stage) * (total_lakes_in_stage / stage_area) * 1000
+                    # = n_lakes / stage_area * 1000
+                    # But we want to show the elevation distribution, so we use:
+                    # density = n_lakes / (stage_area * pct_of_stage/100) * 1000
+                    # This normalizes by the estimated area at each elevation
+                    densities = []
+                    elevs = []
+                    for _, row in stage_data.iterrows():
+                        n_lakes = row['n_lakes']
+                        pct = row.get('pct_of_stage', 100 * n_lakes / total_lakes_in_stage)
+                        if pct > 0:
+                            # Estimated area at this elevation for this stage
+                            est_area = stage_area * pct / 100
+                            density = n_lakes / est_area * 1000
+                            densities.append(density)
+                            elevs.append(row['elev_bin_mid'])
+
+                    if len(densities) > 0:
+                        ax3.plot(elevs, densities, 'o-', linewidth=2, markersize=4,
+                                label=stage, color=stage_colors[stage])
+
+    # Priority 3: Use per-stage hypsometry if provided
+    elif hypsometry_df is not None and 'area_km2' in hypsometry_df.columns:
+        # Check if hypsometry is per-stage or overall
+        if 'glacial_stage' in hypsometry_df.columns:
+            # Per-stage hypsometry
+            for stage in stages:
+                stage_elev = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+                stage_hyps = hypsometry_df[hypsometry_df['glacial_stage'] == stage]
+                if len(stage_elev) > 0 and len(stage_hyps) > 0:
+                    merged = stage_elev.merge(
+                        stage_hyps[['elev_bin_mid', 'area_km2']],
+                        on='elev_bin_mid', how='inner'
+                    )
+                    merged['density'] = np.where(
+                        merged['area_km2'] > 0,
+                        merged['n_lakes'] / merged['area_km2'] * 1000,
+                        0
+                    )
+                    if len(merged) > 0:
+                        ax3.plot(merged['elev_bin_mid'], merged['density'],
+                                'o-', linewidth=2, markersize=4, label=stage, color=stage_colors[stage])
+        else:
+            # Overall hypsometry (old behavior)
+            for stage in stages:
+                stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+                if len(stage_data) > 0:
+                    densities = []
+                    elevs = []
+                    for _, row in stage_data.iterrows():
+                        elev_mid = row['elev_bin_mid']
+                        n_lakes = row['n_lakes']
+                        hyps_match = hypsometry_df[hypsometry_df['elev_bin_mid'] == elev_mid]
+                        if len(hyps_match) > 0 and hyps_match['area_km2'].values[0] > 0:
+                            density = n_lakes / hyps_match['area_km2'].values[0] * 1000
+                            densities.append(density)
+                            elevs.append(elev_mid)
+
+                    if len(densities) > 0:
+                        ax3.plot(elevs, densities, 'o-', linewidth=2, markersize=4,
+                                label=stage, color=stage_colors[stage])
+    else:
+        # Fallback: Just show raw counts (but note this isn't normalized)
+        ax3.text(0.5, 0.95, '(Raw counts - not area-normalized)', transform=ax3.transAxes,
+                fontsize=10, ha='center', va='top', style='italic', color='red')
+        for stage in stages:
+            stage_data = elevation_df[elevation_df['glacial_stage'] == stage].sort_values('elev_bin_mid')
+            if len(stage_data) > 0:
                 ax3.plot(stage_data['elev_bin_mid'], stage_data['n_lakes'],
                         'o-', linewidth=2, markersize=4, label=stage, color=stage_colors[stage])
 
     # Add Dalton data if provided
     if dalton_df is not None and len(dalton_df) > 0:
         dalton_color = '#9467bd'  # Purple for Dalton
-        if 'pct_of_stage' in dalton_df.columns:
-            dalton_sorted = dalton_df.sort_values('elev_bin_mid')
+        dalton_sorted = dalton_df.sort_values('elev_bin_mid')
+
+        # Try to normalize Dalton data too if we have zone_areas
+        if zone_areas is not None and 'dalton_18ka' in zone_areas:
+            dalton_area = zone_areas['dalton_18ka']
+            if dalton_area > 0:
+                total_dalton = dalton_sorted['n_lakes'].sum()
+                densities = []
+                elevs = []
+                for _, row in dalton_sorted.iterrows():
+                    n_lakes = row['n_lakes']
+                    pct = row.get('pct_of_stage', 100 * n_lakes / total_dalton if total_dalton > 0 else 0)
+                    if pct > 0:
+                        est_area = dalton_area * pct / 100
+                        density = n_lakes / est_area * 1000
+                        densities.append(density)
+                        elevs.append(row['elev_bin_mid'])
+                if len(densities) > 0:
+                    ax3.plot(elevs, densities, 'o-', linewidth=2.5, markersize=6,
+                            label='Dalton 18ka', color=dalton_color, linestyle='--')
+        else:
+            # Fallback: plot raw Dalton counts
             ax3.plot(dalton_sorted['elev_bin_mid'], dalton_sorted['n_lakes'],
                     'o-', linewidth=2.5, markersize=6, label='Dalton 18ka',
                     color=dalton_color, linestyle='--')
@@ -6613,6 +6700,291 @@ def plot_glacial_zone_xmin_sensitivity(xmin_results, figsize=(16, 12), save_path
         print(f"Figure saved to: {save_path}")
 
     return fig, axes
+
+
+# ============================================================================
+# ARIDITY INDEX ANALYSIS VISUALIZATIONS
+# ============================================================================
+
+def plot_aridity_lake_density(aridity_stats, figsize=(12, 8), save_path=None):
+    """
+    Plot lake density by aridity index bin.
+
+    Parameters
+    ----------
+    aridity_stats : DataFrame
+        Output from compute_density_by_aridity()
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, ax)
+    """
+    setup_plot_style()
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if aridity_stats is None or len(aridity_stats) == 0:
+        ax.text(0.5, 0.5, 'No aridity data available',
+               ha='center', va='center', fontsize=14)
+        return fig, ax
+
+    # Color gradient from red (arid) to blue (humid)
+    colors = plt.cm.RdYlBu(np.linspace(0.1, 0.9, len(aridity_stats)))
+
+    bars = ax.bar(range(len(aridity_stats)),
+                  aridity_stats['n_lakes'],
+                  color=colors, edgecolor='black', linewidth=0.5)
+
+    ax.set_xticks(range(len(aridity_stats)))
+    ax.set_xticklabels(aridity_stats['ai_label'], rotation=45, ha='right')
+    ax.set_ylabel('Number of Lakes', fontsize=12)
+    ax.set_xlabel('Aridity Index Category', fontsize=12)
+    ax.set_title('Lake Distribution by Aridity Index', fontsize=14, fontweight='bold')
+
+    # Add value labels
+    for bar, count in zip(bars, aridity_stats['n_lakes']):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+               f'{count:,}', ha='center', va='bottom', fontsize=9)
+
+    ax.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, ax
+
+
+def plot_aridity_glacial_heatmap(cross_results, figsize=(14, 10), save_path=None):
+    """
+    Plot heatmap of lake counts by aridity × glacial stage.
+
+    Parameters
+    ----------
+    cross_results : dict
+        Output from compute_density_by_aridity_and_glacial()
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes)
+    """
+    setup_plot_style()
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    if cross_results is None:
+        for ax in axes:
+            ax.text(0.5, 0.5, 'No data available', ha='center', va='center', fontsize=14)
+        return fig, axes
+
+    counts = cross_results['counts']
+    proportions = cross_results['proportions']
+
+    # Remove margins for heatmap
+    counts_data = counts.drop('All', axis=1).drop('All', axis=0) if 'All' in counts.columns else counts
+    props_data = proportions.drop('All', axis=1).drop('All', axis=0) if 'All' in proportions.columns else proportions
+
+    # AI bin labels
+    ai_labels = {
+        0: 'Hyper-arid',
+        1: 'Arid',
+        2: 'Semi-arid',
+        3: 'Dry sub-humid',
+        4: 'Humid',
+        5: 'Wet',
+        6: 'Hyper-humid'
+    }
+    row_labels = [ai_labels.get(i, f'Bin {i}') for i in counts_data.index]
+
+    # Panel A: Raw counts
+    ax1 = axes[0]
+    im1 = ax1.imshow(counts_data.values, cmap='YlOrRd', aspect='auto')
+    ax1.set_xticks(range(len(counts_data.columns)))
+    ax1.set_xticklabels(counts_data.columns, rotation=45, ha='right')
+    ax1.set_yticks(range(len(row_labels)))
+    ax1.set_yticklabels(row_labels)
+    ax1.set_title('A) Lake Counts', fontsize=12, fontweight='bold')
+    plt.colorbar(im1, ax=ax1, label='Count')
+
+    # Add text annotations
+    for i in range(len(row_labels)):
+        for j in range(len(counts_data.columns)):
+            val = counts_data.values[i, j]
+            color = 'white' if val > counts_data.values.max() * 0.5 else 'black'
+            ax1.text(j, i, f'{val:,.0f}', ha='center', va='center', fontsize=8, color=color)
+
+    # Panel B: Proportions
+    ax2 = axes[1]
+    im2 = ax2.imshow(props_data.values, cmap='Blues', aspect='auto', vmin=0, vmax=100)
+    ax2.set_xticks(range(len(props_data.columns)))
+    ax2.set_xticklabels(props_data.columns, rotation=45, ha='right')
+    ax2.set_yticks(range(len(row_labels)))
+    ax2.set_yticklabels(row_labels)
+    ax2.set_title('B) Percentage by Glacial Stage', fontsize=12, fontweight='bold')
+    plt.colorbar(im2, ax=ax2, label='Percent')
+
+    # Add text annotations
+    for i in range(len(row_labels)):
+        for j in range(len(props_data.columns)):
+            val = props_data.values[i, j]
+            color = 'white' if val > 50 else 'black'
+            ax2.text(j, i, f'{val:.1f}%', ha='center', va='center', fontsize=8, color=color)
+
+    fig.suptitle('Lake Distribution: Aridity × Glacial Stage', fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def plot_aridity_glacial_comparison(comparison_results, figsize=(18, 14), save_path=None):
+    """
+    Create comprehensive multi-panel figure comparing aridity vs glacial stage effects.
+
+    Parameters
+    ----------
+    comparison_results : dict
+        Output from run_aridity_glacial_comparison()
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes)
+    """
+    setup_plot_style()
+    fig = plt.figure(figsize=figsize)
+
+    # Create grid
+    gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
+
+    # Panel A: Lake counts by aridity
+    ax1 = fig.add_subplot(gs[0, 0])
+    aridity_stats = comparison_results.get('aridity_stats')
+    if aridity_stats is not None and len(aridity_stats) > 0:
+        colors = plt.cm.RdYlBu(np.linspace(0.1, 0.9, len(aridity_stats)))
+        bars = ax1.bar(range(len(aridity_stats)), aridity_stats['n_lakes'],
+                      color=colors, edgecolor='black', linewidth=0.5)
+        ax1.set_xticks(range(len(aridity_stats)))
+        ax1.set_xticklabels([s[:10] for s in aridity_stats['ai_label']], rotation=45, ha='right', fontsize=8)
+        ax1.set_ylabel('Lake Count')
+        ax1.set_title('A) Lakes by Aridity Index', fontsize=11, fontweight='bold')
+        ax1.grid(axis='y', alpha=0.3)
+
+    # Panel B: Aridity × Glacial heatmap
+    ax2 = fig.add_subplot(gs[0, 1])
+    cross_results = comparison_results.get('cross_tabulation')
+    if cross_results is not None and cross_results.get('proportions') is not None:
+        props = cross_results['proportions']
+        if 'All' in props.columns:
+            props = props.drop('All', axis=1)
+        if 'All' in props.index:
+            props = props.drop('All', axis=0)
+
+        im = ax2.imshow(props.values, cmap='Blues', aspect='auto', vmin=0, vmax=100)
+        ax2.set_xticks(range(len(props.columns)))
+        ax2.set_xticklabels(props.columns, rotation=45, ha='right', fontsize=9)
+        ax2.set_yticks(range(len(props.index)))
+        ai_labels = ['Hyper-arid', 'Arid', 'Semi-arid', 'Dry sub-humid', 'Humid', 'Wet', 'Hyper-humid']
+        ax2.set_yticklabels([ai_labels[i] if i < len(ai_labels) else f'Bin {i}' for i in props.index], fontsize=8)
+        ax2.set_title('B) % by Glacial Stage per Aridity Bin', fontsize=11, fontweight='bold')
+        plt.colorbar(im, ax=ax2, label='%', shrink=0.8)
+
+    # Panel C: ANOVA results by aridity bin
+    ax3 = fig.add_subplot(gs[1, 0])
+    anova_df = comparison_results.get('anova_by_aridity')
+    if anova_df is not None and len(anova_df) > 0:
+        # Plot F-statistics
+        bars = ax3.bar(range(len(anova_df)), anova_df['f_statistic'], color='steelblue', edgecolor='black')
+        ax3.set_xticks(range(len(anova_df)))
+        ai_labels = ['Hyper-arid', 'Arid', 'Semi-arid', 'Dry sub-humid', 'Humid', 'Wet', 'Hyper-humid']
+        ax3.set_xticklabels([ai_labels[int(i)] if int(i) < len(ai_labels) else f'Bin {i}' for i in anova_df['ai_bin']],
+                          rotation=45, ha='right', fontsize=8)
+        ax3.set_ylabel('F-statistic')
+        ax3.set_title('C) ANOVA: Glacial Stage Effect within Aridity Bins', fontsize=11, fontweight='bold')
+
+        # Add significance markers
+        for i, (bar, pval) in enumerate(zip(bars, anova_df['p_value'])):
+            marker = '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else 'ns'
+            ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                    marker, ha='center', va='bottom', fontsize=9, fontweight='bold')
+        ax3.grid(axis='y', alpha=0.3)
+
+    # Panel D: R² comparison
+    ax4 = fig.add_subplot(gs[1, 1])
+    r2_ai = comparison_results.get('r2_aridity_only', 0)
+    r2_glacial = comparison_results.get('r2_glacial_only', 0)
+    reg = comparison_results.get('regression', {})
+    r2_both = reg.get('r_squared', 0) if reg else 0
+
+    r2_values = [r2_ai, r2_glacial, r2_both]
+    labels = ['Aridity\nOnly', 'Glacial Stage\nOnly', 'Both\nCombined']
+    colors = ['#E74C3C', '#3498DB', '#2ECC71']
+
+    bars = ax4.bar(range(3), r2_values, color=colors, edgecolor='black', linewidth=1)
+    ax4.set_xticks(range(3))
+    ax4.set_xticklabels(labels)
+    ax4.set_ylabel('R² (Variance Explained)')
+    ax4.set_title('D) Predictive Power Comparison', fontsize=11, fontweight='bold')
+    ax4.set_ylim(0, max(r2_values) * 1.3 if max(r2_values) > 0 else 0.1)
+
+    for bar, val in zip(bars, r2_values):
+        ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
+                f'{val:.4f}', ha='center', va='bottom', fontsize=10)
+    ax4.grid(axis='y', alpha=0.3)
+
+    # Panel E: Summary text
+    ax5 = fig.add_subplot(gs[2, :])
+    ax5.axis('off')
+
+    summary_text = "SUMMARY: Aridity vs Glacial Stage as Lake Density Predictors\n"
+    summary_text += "=" * 70 + "\n\n"
+
+    if r2_glacial > r2_ai:
+        winner = "GLACIAL STAGE"
+        ratio = (r2_glacial / r2_ai - 1) * 100 if r2_ai > 0 else float('inf')
+        summary_text += f"→ {winner} explains {ratio:.1f}% more variance than aridity alone\n"
+    else:
+        winner = "ARIDITY"
+        ratio = (r2_ai / r2_glacial - 1) * 100 if r2_glacial > 0 else float('inf')
+        summary_text += f"→ {winner} explains {ratio:.1f}% more variance than glacial stage alone\n"
+
+    summary_text += f"\nR² Aridity only: {r2_ai:.4f}\n"
+    summary_text += f"R² Glacial stage only: {r2_glacial:.4f}\n"
+    summary_text += f"R² Both combined: {r2_both:.4f}\n"
+
+    if anova_df is not None and len(anova_df) > 0:
+        sig_bins = (anova_df['p_value'] < 0.05).sum()
+        summary_text += f"\nANOVA: Glacial stage significant in {sig_bins}/{len(anova_df)} aridity bins\n"
+        summary_text += "This suggests glacial history effects persist after controlling for climate."
+
+    ax5.text(0.5, 0.5, summary_text, transform=ax5.transAxes,
+            fontsize=11, fontfamily='monospace', ha='center', va='center',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    fig.suptitle('Comparing Controls on Lake Density: Climate vs Glacial History',
+                fontsize=14, fontweight='bold', y=0.98)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, None
 
 
 if __name__ == "__main__":
