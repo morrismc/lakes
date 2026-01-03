@@ -2013,13 +2013,47 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
             for stage, count in stage_counts.items():
                 print(f"    {stage}: {count:,}")
 
-    # Step 3: Extract aridity values from raster
+    # Step 3: Check/extract aridity values
     ai_col = COLS.get('aridity', 'AI')
 
-    if ai_col not in lake_gdf.columns:
+    # First check if AI exists in original lakes DataFrame
+    ai_in_original = ai_col in lakes.columns
+    ai_in_gdf = ai_col in lake_gdf.columns
+
+    if verbose:
+        print(f"\n[Step 3/4] Checking aridity data...")
+        print(f"  AI column in original data: {ai_in_original}")
+        print(f"  AI column in GeoDataFrame: {ai_in_gdf}")
+
+    if ai_in_gdf:
+        # AI column already exists - use it
+        valid_ai = lake_gdf[ai_col].notna().sum()
         if verbose:
-            print(f"\n[Step 3/4] Extracting aridity values from raster...")
-            print(f"  ('{ai_col}' column not found in lake data, sampling from raster)")
+            print(f"  Using existing '{ai_col}' column: {valid_ai:,} valid values")
+            # Note: AI values may be scaled (e.g., *10000) in the geodatabase
+            ai_min, ai_max = lake_gdf[ai_col].min(), lake_gdf[ai_col].max()
+            print(f"  AI range: {ai_min:.1f} to {ai_max:.1f}")
+            if ai_max > 100:
+                print(f"  Note: AI values appear scaled (typical range is 0-5)")
+
+    elif ai_in_original and not ai_in_gdf:
+        # AI exists in original but was lost during glacial analysis - copy it over
+        if verbose:
+            print(f"  Copying AI from original lakes DataFrame...")
+        # The GeoDataFrame index should match the original DataFrame
+        lake_gdf[ai_col] = lakes.loc[lake_gdf.index, ai_col].values
+        valid_ai = lake_gdf[ai_col].notna().sum()
+        if verbose:
+            print(f"  Copied {valid_ai:,} AI values")
+
+    else:
+        # AI not in data - need to extract from raster
+        if verbose:
+            print(f"  '{ai_col}' column not found in lake data")
+            print(f"  TIP: Your parquet file may be outdated. To include AI from geodatabase:")
+            print(f"       >>> from lake_analysis.data_loading import recreate_conus_parquet")
+            print(f"       >>> recreate_conus_parquet(force=True)")
+            print(f"  Attempting to sample from aridity raster instead...")
 
         # Get aridity raster path
         aridity_raster = RASTERS.get('aridity')
@@ -2052,11 +2086,6 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
         else:
             print(f"  ERROR: Lat/lon columns not found ({lat_col}, {lon_col})")
             return {'error': 'lat_lon_not_found'}
-    else:
-        if verbose:
-            print(f"\n[Step 3/4] Aridity column '{ai_col}' already exists")
-            valid_ai = lake_gdf[ai_col].notna().sum()
-            print(f"  Valid aridity values: {valid_ai:,}")
 
     results['lake_gdf'] = lake_gdf
 

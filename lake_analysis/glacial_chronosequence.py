@@ -2660,10 +2660,45 @@ def compute_density_by_aridity(lake_gdf, aridity_breaks=None, zone_areas=None, v
         print("LAKE DENSITY BY ARIDITY INDEX")
         print("-" * 60)
 
-    # Bin by aridity
+    # Check if AI values appear to be scaled (common in geodatabases)
+    # AI should typically range 0-5, values > 100 suggest scaling by 10000
     lake_gdf = lake_gdf.copy()
+    ai_values = lake_gdf[ai_col].dropna()
+
+    if len(ai_values) == 0:
+        if verbose:
+            print(f"  Warning: No valid AI values found")
+        return None
+
+    ai_max = ai_values.max()
+    ai_scale = 1.0
+
+    if ai_max > 100:
+        # Values appear to be scaled - detect scale factor
+        if ai_max > 10000:
+            ai_scale = 10000.0
+        elif ai_max > 1000:
+            ai_scale = 1000.0
+        else:
+            ai_scale = 100.0
+
+        if verbose:
+            print(f"  Detected scaled AI values (max={ai_max:.0f})")
+            print(f"  Applying scale factor: 1/{ai_scale:.0f}")
+
+        # Normalize AI values
+        lake_gdf['AI_normalized'] = lake_gdf[ai_col] / ai_scale
+        ai_col_use = 'AI_normalized'
+    else:
+        ai_col_use = ai_col
+
+    if verbose:
+        ai_norm_vals = lake_gdf[ai_col_use].dropna()
+        print(f"  AI range (normalized): {ai_norm_vals.min():.3f} to {ai_norm_vals.max():.3f}")
+
+    # Bin by aridity
     lake_gdf['ai_bin'] = pd.cut(
-        lake_gdf[ai_col],
+        lake_gdf[ai_col_use],
         bins=aridity_breaks,
         labels=False,
         include_lowest=True
@@ -2748,10 +2783,38 @@ def compute_density_by_aridity_and_glacial(lake_gdf, aridity_breaks=None, verbos
         print("LAKE DENSITY: ARIDITY × GLACIAL STAGE")
         print("-" * 60)
 
-    # Bin by aridity
+    # Check if AI values appear to be scaled
     lake_gdf = lake_gdf.copy()
+    ai_values = lake_gdf[ai_col].dropna()
+
+    if len(ai_values) == 0:
+        if verbose:
+            print(f"  Warning: No valid AI values found")
+        return None
+
+    ai_max = ai_values.max()
+
+    if ai_max > 100:
+        # Values appear to be scaled - detect scale factor
+        if ai_max > 10000:
+            ai_scale = 10000.0
+        elif ai_max > 1000:
+            ai_scale = 1000.0
+        else:
+            ai_scale = 100.0
+
+        if verbose:
+            print(f"  Normalizing scaled AI values (scale: 1/{ai_scale:.0f})")
+
+        # Normalize AI values
+        lake_gdf['AI_normalized'] = lake_gdf[ai_col] / ai_scale
+        ai_col_use = 'AI_normalized'
+    else:
+        ai_col_use = ai_col
+
+    # Bin by aridity
     lake_gdf['ai_bin'] = pd.cut(
-        lake_gdf[ai_col],
+        lake_gdf[ai_col_use],
         bins=aridity_breaks,
         labels=False,
         include_lowest=True
@@ -2820,6 +2883,37 @@ def run_aridity_glacial_comparison(lake_gdf, zone_areas=None, verbose=True):
     results = {}
 
     # =========================================================================
+    # 0. Check for scaled AI values and normalize if needed
+    # =========================================================================
+    lake_gdf = lake_gdf.copy()
+    ai_values = lake_gdf[ai_col].dropna()
+    ai_scale = 1.0
+
+    if len(ai_values) > 0:
+        ai_max = ai_values.max()
+        if ai_max > 100:
+            # Values appear to be scaled
+            if ai_max > 10000:
+                ai_scale = 10000.0
+            elif ai_max > 1000:
+                ai_scale = 1000.0
+            else:
+                ai_scale = 100.0
+
+            if verbose:
+                print(f"\n  Detected scaled AI values (max={ai_max:.0f})")
+                print(f"  Normalizing with scale factor: 1/{ai_scale:.0f}")
+
+            lake_gdf['AI_normalized'] = lake_gdf[ai_col] / ai_scale
+            ai_col_use = 'AI_normalized'
+        else:
+            ai_col_use = ai_col
+    else:
+        ai_col_use = ai_col
+
+    results['ai_scale_factor'] = ai_scale
+
+    # =========================================================================
     # 1. Basic statistics by aridity
     # =========================================================================
     aridity_stats = compute_density_by_aridity(lake_gdf, verbose=verbose)
@@ -2839,12 +2933,26 @@ def run_aridity_glacial_comparison(lake_gdf, zone_areas=None, verbose=True):
         print("CORRELATION ANALYSIS")
         print("-" * 60)
 
-    valid_mask = (lake_gdf[ai_col] > 0) & (lake_gdf[ai_col] < 100)
+    # Use normalized AI values for correlation
+    valid_mask = (lake_gdf[ai_col_use] > 0) & (lake_gdf[ai_col_use] < 100)
     valid_lakes = lake_gdf[valid_mask].copy()
 
-    # Aridity vs lake area
+    if len(valid_lakes) == 0:
+        if verbose:
+            print(f"  Warning: No valid lakes after filtering (AI range: 0-100)")
+        return results
+
+    # Add AI binning to valid_lakes for ANOVA
+    valid_lakes['ai_bin'] = pd.cut(
+        valid_lakes[ai_col_use],
+        bins=AI_BREAKS,
+        labels=False,
+        include_lowest=True
+    )
+
+    # Aridity vs lake area (use normalized values)
     r_aridity_area, p_aridity_area = stats.pearsonr(
-        valid_lakes[ai_col],
+        valid_lakes[ai_col_use],
         np.log10(valid_lakes[area_col])
     )
     results['r_aridity_area'] = r_aridity_area
@@ -2852,14 +2960,15 @@ def run_aridity_glacial_comparison(lake_gdf, zone_areas=None, verbose=True):
 
     # Aridity vs elevation
     r_aridity_elev, p_aridity_elev = stats.pearsonr(
-        valid_lakes[ai_col],
+        valid_lakes[ai_col_use],
         valid_lakes[elev_col]
     )
     results['r_aridity_elev'] = r_aridity_elev
     results['p_aridity_elev'] = p_aridity_elev
 
     if verbose:
-        print(f"\n  Aridity vs log(Lake Area): r = {r_aridity_area:.3f}, p = {p_aridity_area:.2e}")
+        print(f"\n  Valid lakes for correlation: {len(valid_lakes):,}")
+        print(f"  Aridity vs log(Lake Area): r = {r_aridity_area:.3f}, p = {p_aridity_area:.2e}")
         print(f"  Aridity vs Elevation: r = {r_aridity_elev:.3f}, p = {p_aridity_elev:.2e}")
 
     # =========================================================================
@@ -2920,43 +3029,49 @@ def run_aridity_glacial_comparison(lake_gdf, zone_areas=None, verbose=True):
         import statsmodels.api as sm
         from statsmodels.formula.api import ols
 
-        # Prepare data
-        reg_data = valid_lakes[[area_col, ai_col, 'glacial_stage', elev_col]].copy()
+        # Prepare data - use normalized AI values
+        reg_data = valid_lakes[[area_col, 'glacial_stage', elev_col]].copy()
+        reg_data['AI_norm'] = valid_lakes[ai_col_use]
         reg_data['log_area'] = np.log10(reg_data[area_col])
         reg_data = reg_data.dropna()
 
-        # Fit model
-        model = ols('log_area ~ Q("AI") + C(glacial_stage)', data=reg_data).fit()
+        if len(reg_data) < 10:
+            if verbose:
+                print(f"  Warning: Not enough data for regression ({len(reg_data)} rows)")
+            results['regression'] = None
+        else:
+            # Fit model
+            model = ols('log_area ~ AI_norm + C(glacial_stage)', data=reg_data).fit()
 
-        results['regression'] = {
-            'r_squared': model.rsquared,
-            'adj_r_squared': model.rsquared_adj,
-            'f_statistic': model.fvalue,
-            'f_pvalue': model.f_pvalue,
-            'params': model.params.to_dict(),
-            'pvalues': model.pvalues.to_dict()
-        }
+            results['regression'] = {
+                'r_squared': model.rsquared,
+                'adj_r_squared': model.rsquared_adj,
+                'f_statistic': model.fvalue,
+                'f_pvalue': model.f_pvalue,
+                'params': model.params.to_dict(),
+                'pvalues': model.pvalues.to_dict()
+            }
 
-        if verbose:
-            print(f"\n  R² = {model.rsquared:.4f}, Adj. R² = {model.rsquared_adj:.4f}")
-            print(f"  F-statistic = {model.fvalue:.2f}, p = {model.f_pvalue:.2e}")
-            print("\n  Coefficients:")
-            for param, coef in model.params.items():
-                pval = model.pvalues[param]
-                sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else ""
-                print(f"    {param}: {coef:.4f} (p = {pval:.2e}) {sig}")
+            if verbose:
+                print(f"\n  R² = {model.rsquared:.4f}, Adj. R² = {model.rsquared_adj:.4f}")
+                print(f"  F-statistic = {model.fvalue:.2f}, p = {model.f_pvalue:.2e}")
+                print("\n  Coefficients:")
+                for param, coef in model.params.items():
+                    pval = model.pvalues[param]
+                    sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else ""
+                    print(f"    {param}: {coef:.4f} (p = {pval:.2e}) {sig}")
 
-        # Model with interaction
-        model_int = ols('log_area ~ Q("AI") * C(glacial_stage)', data=reg_data).fit()
-        results['regression_interaction'] = {
-            'r_squared': model_int.rsquared,
-            'adj_r_squared': model_int.rsquared_adj,
-        }
+            # Model with interaction
+            model_int = ols('log_area ~ AI_norm * C(glacial_stage)', data=reg_data).fit()
+            results['regression_interaction'] = {
+                'r_squared': model_int.rsquared,
+                'adj_r_squared': model_int.rsquared_adj,
+            }
 
-        if verbose:
-            print(f"\n  With interaction: R² = {model_int.rsquared:.4f}")
-            improvement = model_int.rsquared - model.rsquared
-            print(f"  R² improvement from interaction: {improvement:.4f}")
+            if verbose:
+                print(f"\n  With interaction: R² = {model_int.rsquared:.4f}")
+                improvement = model_int.rsquared - model.rsquared
+                print(f"  R² improvement from interaction: {improvement:.4f}")
 
     except ImportError:
         if verbose:
@@ -2973,27 +3088,30 @@ def run_aridity_glacial_comparison(lake_gdf, zone_areas=None, verbose=True):
 
     # Aridity-only model
     try:
-        model_ai = ols('log_area ~ Q("AI")', data=reg_data).fit()
-        r2_ai = model_ai.rsquared
+        if len(reg_data) >= 10:
+            model_ai = ols('log_area ~ AI_norm', data=reg_data).fit()
+            r2_ai = model_ai.rsquared
 
-        # Glacial-only model
-        model_glacial = ols('log_area ~ C(glacial_stage)', data=reg_data).fit()
-        r2_glacial = model_glacial.rsquared
+            # Glacial-only model
+            model_glacial = ols('log_area ~ C(glacial_stage)', data=reg_data).fit()
+            r2_glacial = model_glacial.rsquared
 
-        results['r2_aridity_only'] = r2_ai
-        results['r2_glacial_only'] = r2_glacial
+            results['r2_aridity_only'] = r2_ai
+            results['r2_glacial_only'] = r2_glacial
 
+            if verbose:
+                print(f"\n  R² (Aridity only): {r2_ai:.4f}")
+                print(f"  R² (Glacial stage only): {r2_glacial:.4f}")
+                if results.get('regression') and results['regression'].get('r_squared'):
+                    print(f"  R² (Both): {results['regression']['r_squared']:.4f}")
+
+                if r2_glacial > r2_ai:
+                    print(f"\n  → Glacial stage explains {(r2_glacial/r2_ai - 1)*100:.1f}% more variance than aridity alone")
+                else:
+                    print(f"\n  → Aridity explains {(r2_ai/r2_glacial - 1)*100:.1f}% more variance than glacial stage alone")
+    except Exception as e:
         if verbose:
-            print(f"\n  R² (Aridity only): {r2_ai:.4f}")
-            print(f"  R² (Glacial stage only): {r2_glacial:.4f}")
-            print(f"  R² (Both): {results['regression']['r_squared']:.4f}")
-
-            if r2_glacial > r2_ai:
-                print(f"\n  → Glacial stage explains {(r2_glacial/r2_ai - 1)*100:.1f}% more variance than aridity alone")
-            else:
-                print(f"\n  → Aridity explains {(r2_ai/r2_glacial - 1)*100:.1f}% more variance than glacial stage alone")
-    except:
-        pass
+            print(f"  Warning: Could not complete R² comparison: {e}")
 
     return results
 
