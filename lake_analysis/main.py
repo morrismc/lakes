@@ -1910,6 +1910,127 @@ def analyze_aridity_effects(lake_gdf, zone_areas=None, save_figures=True, verbos
     return results
 
 
+def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
+                    save_figures=True, verbose=True):
+    """
+    Run standalone aridity analysis comparing aridity vs glacial stage.
+
+    This is a convenience wrapper that:
+    1. Loads lake data (if not provided)
+    2. Runs glacial classification to get glacial_stage labels
+    3. Runs aridity vs glacial comparison analysis
+
+    Use this to run just the aridity analysis without re-running the full pipeline.
+
+    Parameters
+    ----------
+    lakes : DataFrame, optional
+        Lake data. If None, will be loaded from data_source.
+    data_source : str
+        Data source if loading: 'conus' (recommended), 'gdb', or 'parquet'
+    min_lake_area : float, optional
+        Minimum lake area filter in km². Default: None (use configured value)
+    save_figures : bool
+        If True (default), save figures to aridity_analysis subfolder
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    dict
+        Results including:
+        - lake_gdf: Lakes with aridity and glacial classification
+        - aridity_stats: Lake density by aridity bin
+        - glacial_results: Glacial chronosequence results
+        - comparison: Aridity vs glacial comparison statistics
+
+    Example
+    -------
+    >>> # Run just the aridity analysis
+    >>> results = analyze_aridity()
+
+    >>> # With pre-loaded data
+    >>> lakes = load_data()
+    >>> results = analyze_aridity(lakes)
+
+    >>> # With custom minimum area
+    >>> results = analyze_aridity(min_lake_area=0.01)
+    """
+    print("\n" + "=" * 70)
+    print("STANDALONE ARIDITY ANALYSIS")
+    print("=" * 70)
+
+    results = {}
+
+    # Step 1: Load data if not provided
+    if lakes is None:
+        if verbose:
+            print("\n[Step 1/3] Loading lake data...")
+        lakes = load_data(data_source)
+        if lakes is None:
+            print("  ERROR: Could not load lake data")
+            return {'error': 'data_load_failed'}
+
+    # Apply area filter if specified
+    if min_lake_area is not None:
+        area_col = COLS.get('area', 'AREASQKM')
+        n_before = len(lakes)
+        lakes = lakes[lakes[area_col] >= min_lake_area].copy()
+        if verbose:
+            print(f"  Applied min_lake_area filter: {min_lake_area} km²")
+            print(f"  Lakes: {n_before:,} -> {len(lakes):,}")
+
+    # Step 2: Run glacial analysis to get classifications
+    if verbose:
+        print("\n[Step 2/3] Running glacial classification...")
+        print("  (Required to get glacial_stage labels for comparison)")
+
+    glacial_results = analyze_glacial_chronosequence(lakes, save_figures=False, verbose=False)
+
+    if glacial_results is None or 'error' in glacial_results:
+        print("  WARNING: Glacial classification failed")
+        return {'error': 'glacial_classification_failed', 'glacial_error': glacial_results}
+
+    results['glacial_results'] = glacial_results
+    lake_gdf = glacial_results.get('lake_gdf')
+    zone_areas = glacial_results.get('zone_areas')
+
+    if lake_gdf is None:
+        print("  ERROR: No lake GeoDataFrame from glacial analysis")
+        return {'error': 'no_lake_gdf'}
+
+    results['lake_gdf'] = lake_gdf
+
+    if verbose:
+        print(f"  Classified {len(lake_gdf):,} lakes by glacial stage")
+        if 'glacial_stage' in lake_gdf.columns:
+            stage_counts = lake_gdf['glacial_stage'].value_counts()
+            for stage, count in stage_counts.items():
+                print(f"    {stage}: {count:,}")
+
+    # Step 3: Run aridity analysis
+    if verbose:
+        print("\n[Step 3/3] Running aridity vs glacial comparison...")
+
+    aridity_results = analyze_aridity_effects(
+        lake_gdf,
+        zone_areas=zone_areas,
+        save_figures=save_figures,
+        verbose=verbose
+    )
+
+    results['comparison'] = aridity_results
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("ARIDITY ANALYSIS COMPLETE")
+        print("=" * 70)
+        if save_figures:
+            print(f"  Figures saved to: {OUTPUT_DIR}/aridity_analysis/")
+
+    return results
+
+
 # ============================================================================
 # FULL ANALYSIS PIPELINE
 # ============================================================================
@@ -2701,7 +2822,12 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    >>> results = analyze_spatial_scaling(lakes)
    # Analyzes lat/lon/elevation patterns, glacial vs non-glacial
 
-7. Run full pipeline (with progress tracking):
+7. Aridity analysis (standalone - skips other analyses):
+   >>> results = analyze_aridity()
+   # Compares aridity vs glacial stage as lake density predictors
+   # Runs glacial classification first, then aridity comparison
+
+8. Run full pipeline (with progress tracking):
    >>> all_results = run_full_analysis()
 
    Options:
@@ -2710,7 +2836,7 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    >>> run_full_analysis(include_glacial_analysis=True)    # Include Davis hypothesis
    >>> run_full_analysis(include_spatial_scaling=True)     # Include spatial patterns
 
-8. Classify domains:
+9. Classify domains:
    >>> lakes_classified = analyze_domains(lakes)
 
 Key Outputs:
@@ -2765,6 +2891,8 @@ if __name__ == "__main__":
                        help='Run only spatial scaling analysis')
     parser.add_argument('--include-spatial', action='store_true',
                        help='Include spatial scaling analysis in full pipeline')
+    parser.add_argument('--aridity', action='store_true',
+                       help='Run only aridity vs glacial analysis')
 
     args = parser.parse_args()
 
@@ -2776,6 +2904,8 @@ if __name__ == "__main__":
     elif args.spatial:
         lakes = load_data(source=args.source)
         analyze_spatial_scaling(lakes)
+    elif args.aridity:
+        analyze_aridity(data_source=args.source)
     elif args.full:
         run_full_analysis(
             data_source=args.source,
