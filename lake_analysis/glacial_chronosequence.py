@@ -3116,6 +3116,299 @@ def run_aridity_glacial_comparison(lake_gdf, zone_areas=None, verbose=True):
     return results
 
 
+# ============================================================================
+# ARIDITY AND LAKE HALF-LIFE ANALYSIS
+# ============================================================================
+
+def analyze_aridity_lake_halflife(lake_gdf, verbose=True):
+    """
+    Analyze whether aridity affects lake persistence (half-life).
+
+    Tests if the rate of lake density decline with landscape age varies
+    by aridity class. If aridity affects lake half-life, we'd expect:
+    - Different density decay rates in arid vs humid regions
+    - Interaction between aridity and glacial stage in predicting density
+
+    Limitations:
+    - Only 2-3 glacial stages with known ages (poor temporal resolution)
+    - Cannot directly measure lake half-life, only infer from density patterns
+    - Confounded by other factors (elevation, lithology, etc.)
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with 'AI', 'glacial_stage', and area columns
+
+    Returns
+    -------
+    dict
+        Results including:
+        - density_by_aridity_stage: Lake density for each aridity-stage combination
+        - decay_rates: Estimated density decay rates by aridity class
+        - interaction_test: Statistical test for aridity × age interaction
+        - half_life_estimates: Rough half-life estimates by aridity (if computable)
+    """
+    from scipy import stats
+
+    ai_col = COLS.get('aridity', 'AI')
+    area_col = COLS.get('area', 'AREASQKM')
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("ARIDITY AND LAKE HALF-LIFE ANALYSIS")
+        print("=" * 70)
+        print("\nQuestion: Does aridity affect how quickly lakes disappear?")
+        print("Approach: Compare density decay rates across aridity classes")
+
+    results = {}
+
+    # Check required columns
+    if ai_col not in lake_gdf.columns:
+        print(f"  ERROR: Aridity column '{ai_col}' not found")
+        return {'error': 'aridity_column_not_found'}
+
+    if 'glacial_stage' not in lake_gdf.columns:
+        print(f"  ERROR: glacial_stage column not found")
+        return {'error': 'glacial_stage_not_found'}
+
+    # =========================================================================
+    # 1. Normalize AI values if scaled
+    # =========================================================================
+    lake_gdf = lake_gdf.copy()
+    ai_values = lake_gdf[ai_col].dropna()
+    ai_max = ai_values.max()
+
+    if ai_max > 100:
+        if ai_max > 10000:
+            ai_scale = 10000.0
+        elif ai_max > 1000:
+            ai_scale = 1000.0
+        else:
+            ai_scale = 100.0
+        lake_gdf['AI_norm'] = lake_gdf[ai_col] / ai_scale
+        if verbose:
+            print(f"\n  Normalized AI values (scale: 1/{ai_scale:.0f})")
+    else:
+        lake_gdf['AI_norm'] = lake_gdf[ai_col]
+        ai_scale = 1.0
+
+    results['ai_scale'] = ai_scale
+
+    # =========================================================================
+    # 2. Create aridity classes (simplified: arid vs humid)
+    # =========================================================================
+    # Using AI = 0.65 as threshold (dry sub-humid boundary)
+    lake_gdf['aridity_class'] = pd.cut(
+        lake_gdf['AI_norm'],
+        bins=[0, 0.5, 0.65, 1.0, 100],
+        labels=['Arid (<0.5)', 'Semi-arid (0.5-0.65)', 'Sub-humid (0.65-1.0)', 'Humid (>1.0)']
+    )
+
+    if verbose:
+        print("\n  Aridity class distribution:")
+        for cls, count in lake_gdf['aridity_class'].value_counts().items():
+            print(f"    {cls}: {count:,} lakes")
+
+    # =========================================================================
+    # 3. Compute density by aridity × glacial stage
+    # =========================================================================
+    if verbose:
+        print("\n" + "-" * 60)
+        print("LAKE DENSITY BY ARIDITY × GLACIAL STAGE")
+        print("-" * 60)
+
+    # Get glacial stage ages (ka)
+    stage_ages = {
+        'Wisconsin': 20,
+        'Illinoian': 160,
+        'Driftless': None,  # Never glaciated
+        'unclassified': None
+    }
+
+    # Cross-tabulation
+    density_data = []
+
+    for aridity_cls in lake_gdf['aridity_class'].dropna().unique():
+        for stage in ['Wisconsin', 'Illinoian']:
+            mask = (lake_gdf['aridity_class'] == aridity_cls) & (lake_gdf['glacial_stage'] == stage)
+            n_lakes = mask.sum()
+
+            if n_lakes > 0:
+                mean_area = lake_gdf.loc[mask, area_col].mean()
+                total_area = lake_gdf.loc[mask, area_col].sum()
+                age = stage_ages.get(stage)
+
+                density_data.append({
+                    'aridity_class': str(aridity_cls),
+                    'glacial_stage': stage,
+                    'age_ka': age,
+                    'n_lakes': n_lakes,
+                    'mean_area_km2': mean_area,
+                    'total_area_km2': total_area,
+                })
+
+    density_df = pd.DataFrame(density_data)
+    results['density_by_aridity_stage'] = density_df
+
+    if verbose and len(density_df) > 0:
+        print("\n  Aridity Class          Stage        Age(ka)  N Lakes   Mean Area")
+        print("  " + "-" * 65)
+        for _, row in density_df.iterrows():
+            print(f"  {row['aridity_class']:<22} {row['glacial_stage']:<12} "
+                  f"{row['age_ka']:>6}  {row['n_lakes']:>8,}  {row['mean_area_km2']:>10.4f}")
+
+    # =========================================================================
+    # 4. Estimate "decay rates" by aridity class
+    # =========================================================================
+    if verbose:
+        print("\n" + "-" * 60)
+        print("DENSITY DECAY RATES BY ARIDITY CLASS")
+        print("-" * 60)
+        print("\n  Comparing Wisconsin (20 ka) to Illinoian (160 ka) density ratios")
+
+    decay_rates = []
+
+    for aridity_cls in density_df['aridity_class'].unique():
+        cls_data = density_df[density_df['aridity_class'] == aridity_cls]
+
+        wisc = cls_data[cls_data['glacial_stage'] == 'Wisconsin']
+        illin = cls_data[cls_data['glacial_stage'] == 'Illinoian']
+
+        if len(wisc) > 0 and len(illin) > 0:
+            n_wisc = wisc['n_lakes'].values[0]
+            n_illin = illin['n_lakes'].values[0]
+
+            # Density ratio (Wisconsin / Illinoian)
+            # Higher ratio = more lakes lost over time = shorter half-life
+            density_ratio = n_wisc / n_illin if n_illin > 0 else np.nan
+
+            # Rough decay rate estimate
+            # Assuming exponential decay: N(t) = N0 * exp(-λt)
+            # λ = ln(N1/N2) / (t2 - t1)
+            if n_illin > 0 and n_wisc > 0:
+                # Note: We expect more lakes in younger terrain, so this might be negative
+                # which would indicate "growth" rather than decay
+                time_diff = 160 - 20  # ka
+                lambda_est = np.log(n_wisc / n_illin) / time_diff
+                half_life = np.log(2) / abs(lambda_est) if lambda_est != 0 else np.nan
+            else:
+                lambda_est = np.nan
+                half_life = np.nan
+
+            decay_rates.append({
+                'aridity_class': aridity_cls,
+                'n_wisconsin': n_wisc,
+                'n_illinoian': n_illin,
+                'density_ratio': density_ratio,
+                'decay_rate_per_ka': lambda_est,
+                'implied_half_life_ka': half_life
+            })
+
+    decay_df = pd.DataFrame(decay_rates)
+    results['decay_rates'] = decay_df
+
+    if verbose and len(decay_df) > 0:
+        print("\n  Aridity Class           N(Wisc)  N(Illin)  Ratio    λ(/ka)   Half-life(ka)")
+        print("  " + "-" * 75)
+        for _, row in decay_df.iterrows():
+            hl_str = f"{row['implied_half_life_ka']:.0f}" if pd.notna(row['implied_half_life_ka']) else "N/A"
+            print(f"  {row['aridity_class']:<22} {row['n_wisconsin']:>8,} {row['n_illinoian']:>8,}  "
+                  f"{row['density_ratio']:>6.2f}  {row['decay_rate_per_ka']:>8.4f}   {hl_str:>10}")
+
+    # =========================================================================
+    # 5. Statistical test: Does aridity modify the age-density relationship?
+    # =========================================================================
+    if verbose:
+        print("\n" + "-" * 60)
+        print("STATISTICAL TEST: ARIDITY × AGE INTERACTION")
+        print("-" * 60)
+
+    # Test using 2-way ANOVA or regression with interaction
+    try:
+        from statsmodels.formula.api import ols
+        import statsmodels.api as sm
+        from statsmodels.stats.anova import anova_lm
+
+        # Prepare data - only glacial stages with known ages
+        test_data = lake_gdf[
+            (lake_gdf['glacial_stage'].isin(['Wisconsin', 'Illinoian'])) &
+            (lake_gdf['aridity_class'].notna())
+        ].copy()
+
+        test_data['age'] = test_data['glacial_stage'].map(stage_ages)
+        test_data['log_area'] = np.log10(test_data[area_col])
+
+        if len(test_data) > 100:
+            # Model without interaction
+            model_add = ols('log_area ~ AI_norm + C(glacial_stage)', data=test_data).fit()
+
+            # Model with interaction
+            model_int = ols('log_area ~ AI_norm * C(glacial_stage)', data=test_data).fit()
+
+            # Compare models
+            r2_add = model_add.rsquared
+            r2_int = model_int.rsquared
+
+            # F-test for interaction term significance
+            anova_result = anova_lm(model_add, model_int)
+
+            results['interaction_test'] = {
+                'r2_additive': r2_add,
+                'r2_interaction': r2_int,
+                'r2_improvement': r2_int - r2_add,
+                'f_statistic': anova_result['F'].iloc[1],
+                'p_value': anova_result['Pr(>F)'].iloc[1]
+            }
+
+            if verbose:
+                print(f"\n  Testing if aridity modifies the glacial stage effect on lake size...")
+                print(f"\n  Model comparison:")
+                print(f"    Additive model (AI + Stage):      R² = {r2_add:.4f}")
+                print(f"    Interaction model (AI × Stage):   R² = {r2_int:.4f}")
+                print(f"    R² improvement from interaction:  {r2_int - r2_add:.4f}")
+                print(f"\n  F-test for interaction:")
+                print(f"    F = {anova_result['F'].iloc[1]:.2f}, p = {anova_result['Pr(>F)'].iloc[1]:.2e}")
+
+                if anova_result['Pr(>F)'].iloc[1] < 0.05:
+                    print("\n  → SIGNIFICANT: Aridity DOES modify the glacial stage effect")
+                    print("    This suggests aridity may affect lake persistence rates")
+                else:
+                    print("\n  → NOT SIGNIFICANT: No evidence that aridity modifies the glacial effect")
+                    print("    Lake persistence appears similar across aridity classes")
+
+    except ImportError:
+        if verbose:
+            print("  Note: statsmodels not available for interaction test")
+        results['interaction_test'] = None
+    except Exception as e:
+        if verbose:
+            print(f"  Warning: Could not complete interaction test: {e}")
+        results['interaction_test'] = None
+
+    # =========================================================================
+    # 6. Summary and caveats
+    # =========================================================================
+    if verbose:
+        print("\n" + "-" * 60)
+        print("SUMMARY AND CAVEATS")
+        print("-" * 60)
+
+        print("\n  Key limitations:")
+        print("    • Only 2 glacial stages with known ages (140 ka time span)")
+        print("    • Cannot measure actual lake half-life directly")
+        print("    • Density ≠ persistence (new lakes can form)")
+        print("    • Confounded by elevation, lithology, regional climate")
+        print("    • Sample sizes vary greatly by aridity × stage cell")
+
+        if len(decay_df) > 0:
+            mean_hl = decay_df['implied_half_life_ka'].mean()
+            if pd.notna(mean_hl):
+                print(f"\n  Rough estimate: Mean implied half-life ≈ {mean_hl:.0f} ka")
+                print("    (Interpret with extreme caution given limitations)")
+
+    return results
+
+
 if __name__ == "__main__":
     print("Glacial Chronosequence Analysis Module")
     print("=" * 40)

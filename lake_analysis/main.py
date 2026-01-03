@@ -1972,7 +1972,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
     # Step 1: Load data if not provided
     if lakes is None:
         if verbose:
-            print("\n[Step 1/4] Loading lake data...")
+            print("\n[Step 1/5] Loading lake data...")
         lakes = load_data(data_source)
         if lakes is None:
             print("  ERROR: Could not load lake data")
@@ -1989,7 +1989,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
 
     # Step 2: Run glacial analysis to get classifications
     if verbose:
-        print("\n[Step 2/4] Running glacial classification...")
+        print("\n[Step 2/5] Running glacial classification...")
         print("  (Required to get glacial_stage labels for comparison)")
 
     glacial_results = analyze_glacial_chronosequence(lakes, save_figures=False, verbose=False)
@@ -2021,7 +2021,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
     ai_in_gdf = ai_col in lake_gdf.columns
 
     if verbose:
-        print(f"\n[Step 3/4] Checking aridity data...")
+        print(f"\n[Step 3/5] Checking aridity data...")
         print(f"  AI column in original data: {ai_in_original}")
         print(f"  AI column in GeoDataFrame: {ai_in_gdf}")
 
@@ -2091,7 +2091,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
 
     # Step 4: Run aridity analysis
     if verbose:
-        print("\n[Step 4/4] Running aridity vs glacial comparison...")
+        print("\n[Step 4/5] Running aridity vs glacial comparison...")
 
     aridity_results = analyze_aridity_effects(
         lake_gdf,
@@ -2102,6 +2102,18 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
 
     results['comparison'] = aridity_results
 
+    # Step 5: Lake half-life analysis (optional but informative)
+    if verbose:
+        print("\n[Step 5/5] Analyzing aridity effect on lake half-life...")
+
+    try:
+        from .glacial_chronosequence import analyze_aridity_lake_halflife
+    except ImportError:
+        from glacial_chronosequence import analyze_aridity_lake_halflife
+
+    halflife_results = analyze_aridity_lake_halflife(lake_gdf, verbose=verbose)
+    results['halflife_analysis'] = halflife_results
+
     if verbose:
         print("\n" + "=" * 70)
         print("ARIDITY ANALYSIS COMPLETE")
@@ -2110,6 +2122,53 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
             print(f"  Figures saved to: {OUTPUT_DIR}/aridity_analysis/")
 
     return results
+
+
+def analyze_lake_halflife(lakes=None, data_source='conus', min_lake_area=None, verbose=True):
+    """
+    Analyze whether aridity affects lake persistence (half-life).
+
+    This is a focused analysis testing if lakes in arid regions persist
+    longer or shorter than lakes in humid regions.
+
+    Parameters
+    ----------
+    lakes : DataFrame, optional
+        Lake data. If None, will be loaded from data_source.
+    data_source : str
+        Data source if loading: 'conus' (recommended), 'gdb', or 'parquet'
+    min_lake_area : float, optional
+        Minimum lake area filter in km²
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    dict
+        Results including decay rates by aridity class and interaction test
+
+    Notes
+    -----
+    This analysis has significant limitations:
+    - Only 2 glacial stages with known ages (140 ka time span)
+    - Cannot directly measure lake half-life
+    - Confounded by elevation, lithology, etc.
+    """
+    # First run the aridity analysis to get the classified lake_gdf
+    aridity_results = analyze_aridity(
+        lakes=lakes,
+        data_source=data_source,
+        min_lake_area=min_lake_area,
+        save_figures=False,
+        verbose=False
+    )
+
+    if 'error' in aridity_results:
+        print(f"  ERROR: Could not complete prerequisite aridity analysis")
+        return aridity_results
+
+    # The halflife analysis is already included in analyze_aridity results
+    return aridity_results.get('halflife_analysis', {})
 
 
 # ============================================================================
