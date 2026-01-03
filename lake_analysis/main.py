@@ -1600,9 +1600,17 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                     if results.get('elevation_by_stage') is not None:
                         try:
                             dalton_elev = dalton_results.get('elevation_by_dalton')
+                            # Get zone areas for proper normalization in Panel C
+                            zone_areas = results.get('zone_areas', {})
+                            # Add Dalton area if available
+                            if boundaries.get('dalton_18ka') is not None:
+                                dalton_area = boundaries['dalton_18ka'].geometry.area.sum() / 1e6
+                                zone_areas['dalton_18ka'] = dalton_area
+
                             fig, axes = plot_elevation_glacial_multipanel(
                                 results['elevation_by_stage'],
                                 dalton_df=dalton_elev,
+                                zone_areas=zone_areas,
                                 save_path=str(glacial_output / 'elevation_glacial_multipanel.png')
                             )
                             if fig:
@@ -1768,11 +1776,147 @@ def analyze_spatial_scaling(lakes, lake_gdf=None, save_figures=True, verbose=Tru
 
 
 # ============================================================================
+# ARIDITY VS GLACIAL STAGE ANALYSIS
+# ============================================================================
+
+def analyze_aridity_effects(lake_gdf, zone_areas=None, save_figures=True, verbose=True):
+    """
+    Analyze aridity index as a predictor of lake density.
+
+    Compares aridity vs glacial stage as explanatory variables for lake density
+    using multiple statistical approaches.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes with aridity ('AI') and glacial_stage columns
+    zone_areas : dict, optional
+        Glacial zone areas for normalization
+    save_figures : bool
+        If True, save figures to output directory
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    dict
+        Analysis results including aridity stats, cross-tabulation, and regression
+    """
+    try:
+        from .glacial_chronosequence import (
+            run_aridity_glacial_comparison,
+            compute_density_by_aridity,
+            compute_density_by_aridity_and_glacial
+        )
+        from .visualization import (
+            plot_aridity_lake_density,
+            plot_aridity_glacial_heatmap,
+            plot_aridity_glacial_comparison
+        )
+    except ImportError:
+        from glacial_chronosequence import (
+            run_aridity_glacial_comparison,
+            compute_density_by_aridity,
+            compute_density_by_aridity_and_glacial
+        )
+        from visualization import (
+            plot_aridity_lake_density,
+            plot_aridity_glacial_heatmap,
+            plot_aridity_glacial_comparison
+        )
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("ARIDITY INDEX ANALYSIS")
+        print("=" * 70)
+
+    results = {}
+
+    # Check for required columns
+    ai_col = COLS.get('aridity', 'AI')
+    if ai_col not in lake_gdf.columns:
+        if verbose:
+            print(f"  Warning: Aridity column '{ai_col}' not found. Skipping analysis.")
+        return {'error': 'aridity_column_not_found'}
+
+    if 'glacial_stage' not in lake_gdf.columns:
+        if verbose:
+            print("  Warning: glacial_stage column not found. Skipping comparison.")
+        return {'error': 'glacial_stage_column_not_found'}
+
+    # Run comprehensive comparison
+    try:
+        comparison_results = run_aridity_glacial_comparison(
+            lake_gdf, zone_areas=zone_areas, verbose=verbose
+        )
+        results['comparison'] = comparison_results
+    except Exception as e:
+        if verbose:
+            print(f"  Warning: Aridity analysis failed: {e}")
+        return {'error': str(e)}
+
+    # Save figures
+    if save_figures:
+        ensure_output_dir()
+        aridity_output = Path(OUTPUT_DIR) / 'aridity_analysis'
+        aridity_output.mkdir(exist_ok=True)
+
+        try:
+            # Figure 1: Lake counts by aridity
+            aridity_stats = comparison_results.get('aridity_stats')
+            if aridity_stats is not None:
+                fig, ax = plot_aridity_lake_density(
+                    aridity_stats,
+                    save_path=str(aridity_output / 'lake_counts_by_aridity.png')
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Lake counts by aridity figure saved!")
+
+            # Figure 2: Aridity × Glacial heatmap
+            cross_results = comparison_results.get('cross_tabulation')
+            if cross_results is not None:
+                fig, axes = plot_aridity_glacial_heatmap(
+                    cross_results,
+                    save_path=str(aridity_output / 'aridity_glacial_heatmap.png')
+                )
+                if fig:
+                    plt.close(fig)
+                    print("    Aridity × Glacial heatmap saved!")
+
+            # Figure 3: Comprehensive comparison
+            fig, _ = plot_aridity_glacial_comparison(
+                comparison_results,
+                save_path=str(aridity_output / 'aridity_glacial_comparison.png')
+            )
+            if fig:
+                plt.close(fig)
+                print("    Aridity vs Glacial comparison figure saved!")
+
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not save aridity figures: {e}")
+
+    # Print summary
+    if verbose:
+        print("\n[SUCCESS] Aridity analysis complete!")
+        r2_ai = comparison_results.get('r2_aridity_only', 0)
+        r2_glacial = comparison_results.get('r2_glacial_only', 0)
+        if r2_glacial > r2_ai:
+            print(f"  CONCLUSION: Glacial stage is a stronger predictor than aridity")
+        else:
+            print(f"  CONCLUSION: Aridity is a stronger predictor than glacial stage")
+
+    return results
+
+
+# ============================================================================
 # FULL ANALYSIS PIPELINE
 # ============================================================================
 
 def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                        include_glacial_analysis=True, include_spatial_scaling=True,
+                       include_aridity_analysis=True,
                        min_lake_area=None, prompt_for_threshold=False):
     """
     Run complete analysis pipeline for all hypotheses.
@@ -1791,6 +1935,9 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
         Requires glacial boundary shapefiles configured in config.py.
     include_spatial_scaling : bool
         If True (default), run spatial scaling analysis (lat/lon/elevation patterns)
+    include_aridity_analysis : bool
+        If True (default), run aridity vs glacial stage comparison analysis.
+        Requires lakes to have aridity ('AI') and glacial_stage columns.
     min_lake_area : float, optional
         Minimum lake area (km²) for power law analyses. If None, uses config default.
         Lower values include more lakes but may violate power law assumptions.
@@ -1806,6 +1953,7 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
         - H1-H6: Hypothesis test results
         - glacial_chronosequence: Davis's hypothesis results
         - spatial_scaling: Geographic pattern analysis
+        - aridity_analysis: Aridity vs glacial stage comparison
     """
     # Handle minimum lake area threshold
     if prompt_for_threshold:
@@ -1850,6 +1998,8 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
     if include_glacial_analysis:
         total_steps += 1
     if include_spatial_scaling:
+        total_steps += 1
+    if include_aridity_analysis:
         total_steps += 1
 
     print("\n" + "=" * 70)
@@ -1970,7 +2120,27 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                 lake_gdf = results['glacial_chronosequence']['lake_gdf']
             results['spatial_scaling'] = analyze_spatial_scaling(lakes, lake_gdf=lake_gdf)
 
-    # Step 14: Generate additional figures
+    # Step 14: Aridity vs glacial stage comparison (if enabled)
+    if include_aridity_analysis:
+        step += 1
+        print_step_header(step, total_steps, "Aridity vs Glacial Stage Analysis")
+        with timed_step(timer, "Aridity analysis"):
+            # Use glacial GeoDataFrame if available (has glacial_stage column)
+            lake_gdf = None
+            zone_areas = None
+            if results.get('glacial_chronosequence'):
+                lake_gdf = results['glacial_chronosequence'].get('lake_gdf')
+                zone_areas = results['glacial_chronosequence'].get('zone_areas')
+
+            if lake_gdf is not None:
+                results['aridity_analysis'] = analyze_aridity_effects(
+                    lake_gdf, zone_areas=zone_areas
+                )
+            else:
+                print("  Warning: Glacial analysis required for aridity comparison. Skipping.")
+                results['aridity_analysis'] = {'error': 'glacial_analysis_required'}
+
+    # Step 15: Generate additional figures
     step += 1
     print_step_header(step, total_steps, "Generating Summary Figures")
     with timed_step(timer, "Summary figures"):
