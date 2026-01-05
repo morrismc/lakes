@@ -86,9 +86,13 @@ from .main import (
     analyze_powerlaw,
     analyze_glacial_chronosequence,
     analyze_aridity,
+    analyze_nadi1_chronosequence,
     run_full_analysis,
     quick_start
 )
+
+# NADI-1 configuration
+from .config import NADI1_CONFIG, get_nadi1_ages
 
 # Glacial chronosequence analysis
 from .glacial_chronosequence import (
@@ -108,6 +112,14 @@ from .glacial_chronosequence import (
     run_dalton_18ka_analysis,
     compare_wisconsin_vs_dalton_18ka,
     xmin_sensitivity_by_glacial_zone,
+    # NADI-1 time slice analysis
+    discover_nadi1_time_slices,
+    load_nadi1_time_slice,
+    assign_deglaciation_age,
+    compute_density_by_deglaciation_age,
+    run_nadi1_chronosequence_analysis,
+    # Bayesian decay model
+    fit_bayesian_decay_model,
 )
 
 # Glacial visualization functions
@@ -148,4 +160,18 @@ from .visualization import (
     plot_glacial_vs_nonglacial_comparison,
     plot_colorful_hypothesis_table,
     plot_spatial_scaling_summary
+)
+
+# NADI-1 chronosequence visualization functions
+from .visualization import (
+    plot_nadi1_chronosequence,
+    plot_deglaciation_age_histogram
+)
+
+# Bayesian visualization functions
+from .visualization import (
+    plot_bayesian_posteriors,
+    plot_bayesian_decay_curves,
+    plot_bayesian_covariance,
+    plot_bayesian_summary
 )

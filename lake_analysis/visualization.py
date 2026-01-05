@@ -6987,6 +6987,624 @@ def plot_aridity_glacial_comparison(comparison_results, figsize=(18, 14), save_p
     return fig, None
 
 
+# ============================================================================
+# NADI-1 CHRONOSEQUENCE VISUALIZATION
+# ============================================================================
+
+def plot_nadi1_chronosequence(results, save_path=None, show_uncertainty=True):
+    """
+    Plot lake density vs deglaciation age from NADI-1 analysis.
+
+    Creates a multi-panel figure showing:
+    - Lake count by deglaciation age with decay model fit
+    - Uncertainty bounds from MIN/MAX extents
+    - Comparison with Illinoian and Driftless reference points
+
+    Parameters
+    ----------
+    results : dict
+        Output from run_nadi1_chronosequence_analysis()
+    save_path : str, optional
+        Path to save the figure.
+    show_uncertainty : bool, optional
+        If True, show MIN/MAX uncertainty bands.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    setup_plot_style()
+
+    density_by_age = results.get('density_by_age')
+    decay_model = results.get('decay_model')
+    uncertainty = results.get('uncertainty', {})
+
+    if density_by_age is None or len(density_by_age) == 0:
+        print("No density data available for plotting")
+        return None
+
+    fig = plt.figure(figsize=(14, 10))
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
+
+    # Panel A: Lake count by deglaciation age
+    ax1 = fig.add_subplot(gs[0, 0])
+
+    x = density_by_age['age_midpoint_ka'].values
+    y = density_by_age['n_lakes'].values
+
+    # Scatter plot of actual data
+    ax1.scatter(x, y, s=100, c='steelblue', alpha=0.8, edgecolors='black',
+                linewidths=1.5, zorder=5, label='Observed')
+
+    # Fit line if decay model available
+    if decay_model and decay_model.get('n0') is not None:
+        x_fit = np.linspace(0, max(x) * 1.1, 100)
+        n0 = decay_model['n0']
+        lam = decay_model['lambda']
+        y_fit = n0 * np.exp(-lam * x_fit)
+        ax1.plot(x_fit, y_fit, 'r-', linewidth=2, label='Exponential fit', zorder=3)
+
+        # Add half-life annotation
+        half_life = decay_model.get('half_life_ka', np.inf)
+        if np.isfinite(half_life):
+            ax1.axhline(n0/2, color='gray', linestyle='--', alpha=0.5, zorder=1)
+            ax1.axvline(half_life, color='gray', linestyle='--', alpha=0.5, zorder=1)
+            ax1.annotate(f't₁/₂ = {half_life:.1f} ka',
+                        xy=(half_life, n0/2),
+                        xytext=(half_life + 2, n0/2 + y.max()*0.1),
+                        fontsize=10, color='red',
+                        arrowprops=dict(arrowstyle='->', color='gray', alpha=0.5))
+
+    ax1.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax1.set_ylabel('Number of Lakes', fontsize=12)
+    ax1.set_title('A) Lake Count vs Deglaciation Age', fontsize=12, fontweight='bold')
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(0, max(x) * 1.1)
+
+    # Panel B: Total lake area by age
+    ax2 = fig.add_subplot(gs[0, 1])
+
+    y_area = density_by_age['total_area_km2'].values
+    ax2.scatter(x, y_area, s=100, c='forestgreen', alpha=0.8, edgecolors='black',
+                linewidths=1.5, zorder=5)
+
+    ax2.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax2.set_ylabel('Total Lake Area (km²)', fontsize=12)
+    ax2.set_title('B) Total Lake Area vs Deglaciation Age', fontsize=12, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+
+    # Panel C: Mean lake size by age
+    ax3 = fig.add_subplot(gs[1, 0])
+
+    y_mean = density_by_age['mean_area_km2'].values
+    ax3.scatter(x, y_mean, s=100, c='darkorange', alpha=0.8, edgecolors='black',
+                linewidths=1.5, zorder=5)
+
+    ax3.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax3.set_ylabel('Mean Lake Area (km²)', fontsize=12)
+    ax3.set_title('C) Mean Lake Size vs Deglaciation Age', fontsize=12, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+
+    # Add trend line if significant
+    if len(x) >= 3:
+        try:
+            from scipy import stats
+            slope, intercept, r_value, p_value, _ = stats.linregress(x, y_mean)
+            if p_value < 0.05:
+                x_trend = np.array([min(x), max(x)])
+                y_trend = slope * x_trend + intercept
+                ax3.plot(x_trend, y_trend, 'r--', linewidth=2, alpha=0.7,
+                        label=f'Trend (p={p_value:.3f})')
+                ax3.legend()
+        except Exception:
+            pass
+
+    # Panel D: Summary statistics
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.axis('off')
+
+    # Build summary text
+    lake_gdf = results.get('lake_gdf')
+    summary_lines = ["NADI-1 CHRONOSEQUENCE SUMMARY", "=" * 40, ""]
+
+    if lake_gdf is not None:
+        n_total = len(lake_gdf)
+        n_glaciated = lake_gdf['was_glaciated'].sum()
+        n_assigned = lake_gdf['deglaciation_age'].notna().sum()
+
+        summary_lines.extend([
+            f"Total lakes analyzed: {n_total:,}",
+            f"Were glaciated (Wisconsin): {n_glaciated:,} ({100*n_glaciated/n_total:.1f}%)",
+            f"With deglaciation ages: {n_assigned:,}",
+            ""
+        ])
+
+    if decay_model:
+        summary_lines.extend([
+            "Exponential Decay Model:",
+            f"  N(t) = {decay_model.get('n0', 0):.0f} × e^(-{decay_model.get('lambda', 0):.4f} × t)",
+            f"  Half-life: {decay_model.get('half_life_ka', np.inf):.1f} ka",
+            f"  R²: {decay_model.get('r2', 0):.3f}",
+            ""
+        ])
+
+    if uncertainty:
+        summary_lines.extend([
+            "Uncertainty from MIN/MAX extents:",
+        ])
+        for ext, data in uncertainty.items():
+            summary_lines.append(f"  {ext}: mean age = {data.get('mean_age_ka', 0):.1f} ± {data.get('std_age_ka', 0):.1f} ka")
+
+    summary_lines.extend([
+        "",
+        "Note: LGM ≈ 20 ka, not 25 ka",
+        "Continental ice only (east of -110°)"
+    ])
+
+    summary_text = "\n".join(summary_lines)
+
+    ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes,
+             fontsize=10, fontfamily='monospace', verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+
+    fig.suptitle('Lake Density Decay with Deglaciation Age (NADI-1 Analysis)',
+                 fontsize=14, fontweight='bold', y=0.98)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+def plot_deglaciation_age_histogram(lake_gdf, save_path=None):
+    """
+    Plot histogram of deglaciation ages.
+
+    Parameters
+    ----------
+    lake_gdf : gpd.GeoDataFrame
+        Lakes with deglaciation_age column.
+    save_path : str, optional
+        Path to save the figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    setup_plot_style()
+
+    ages = lake_gdf['deglaciation_age'].dropna()
+
+    if len(ages) == 0:
+        print("No deglaciation ages to plot")
+        return None
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Histogram
+    ax1.hist(ages, bins=25, color='steelblue', edgecolor='black', alpha=0.7)
+    ax1.axvline(ages.median(), color='red', linestyle='--', linewidth=2,
+                label=f'Median = {ages.median():.1f} ka')
+    ax1.axvline(20, color='orange', linestyle=':', linewidth=2,
+                label='LGM (~20 ka)')
+    ax1.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax1.set_ylabel('Number of Lakes', fontsize=12)
+    ax1.set_title('Distribution of Deglaciation Ages', fontsize=12, fontweight='bold')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Cumulative distribution
+    sorted_ages = np.sort(ages)
+    cumulative = np.arange(1, len(sorted_ages) + 1) / len(sorted_ages)
+    ax2.plot(sorted_ages, cumulative, 'b-', linewidth=2)
+    ax2.axhline(0.5, color='gray', linestyle='--', alpha=0.5)
+    ax2.axvline(ages.median(), color='red', linestyle='--', alpha=0.5)
+    ax2.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax2.set_ylabel('Cumulative Fraction of Lakes', fontsize=12)
+    ax2.set_title('Cumulative Distribution', fontsize=12, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+
+    fig.suptitle('Deglaciation Timing of Continental US Lakes',
+                 fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+def plot_bayesian_posteriors(bayesian_results, save_path=None):
+    """
+    Plot Bayesian posterior distributions for decay model parameters.
+
+    Parameters
+    ----------
+    bayesian_results : dict
+        Output from fit_bayesian_decay_model()
+    save_path : str, optional
+        Path to save the figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    setup_plot_style()
+
+    if bayesian_results is None:
+        print("No Bayesian results to plot")
+        return None
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    # D0 posterior
+    ax = axes[0, 0]
+    D0_samples = bayesian_results['D0']['samples']
+    ax.hist(D0_samples, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='white')
+    ax.axvline(bayesian_results['D0']['mean'], color='red', linestyle='-', linewidth=2,
+               label=f"Mean: {bayesian_results['D0']['mean']:.1f}")
+    ax.axvline(bayesian_results['D0']['ci_lower'], color='red', linestyle='--', alpha=0.7)
+    ax.axvline(bayesian_results['D0']['ci_upper'], color='red', linestyle='--', alpha=0.7)
+    ax.set_xlabel('D₀ (initial lake count)', fontsize=11)
+    ax.set_ylabel('Density', fontsize=11)
+    ax.set_title('Posterior: Initial Lake Density', fontsize=12, fontweight='bold')
+    ax.legend()
+
+    # Half-life posterior
+    ax = axes[0, 1]
+    hl_samples = bayesian_results['half_life']['samples']
+    ax.hist(hl_samples, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='white')
+    ax.axvline(bayesian_results['half_life']['mean'], color='red', linestyle='-', linewidth=2,
+               label=f"Mean: {bayesian_results['half_life']['mean']:.0f} ka")
+    ax.axvline(bayesian_results['half_life']['ci_lower'], color='red', linestyle='--', alpha=0.7)
+    ax.axvline(bayesian_results['half_life']['ci_upper'], color='red', linestyle='--', alpha=0.7)
+    ax.set_xlabel('Half-life (ka)', fontsize=11)
+    ax.set_ylabel('Density', fontsize=11)
+    ax.set_title('Posterior: Lake Density Half-life', fontsize=12, fontweight='bold')
+    ax.legend()
+
+    # k posterior
+    ax = axes[1, 0]
+    k_samples = bayesian_results['k']['samples']
+    ax.hist(k_samples, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='white')
+    ax.axvline(bayesian_results['k']['mean'], color='red', linestyle='-', linewidth=2,
+               label=f"Mean: {bayesian_results['k']['mean']:.6f}")
+    ax.set_xlabel('Decay rate k (per ka)', fontsize=11)
+    ax.set_ylabel('Density', fontsize=11)
+    ax.set_title('Posterior: Decay Rate', fontsize=12, fontweight='bold')
+    ax.legend()
+
+    # k vs half-life correlation
+    ax = axes[1, 1]
+    ax.scatter(k_samples[::10], hl_samples[::10], alpha=0.3, s=5, color='steelblue')
+    ax.set_xlabel('Decay rate k (per ka)', fontsize=11)
+    ax.set_ylabel('Half-life (ka)', fontsize=11)
+    ax.set_title('Posterior: k vs Half-life\n(inherent inverse relationship)', fontsize=12, fontweight='bold')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+def plot_bayesian_decay_curves(bayesian_results, save_path=None):
+    """
+    Plot Bayesian posterior predictive decay curves with credible intervals.
+
+    Parameters
+    ----------
+    bayesian_results : dict
+        Output from fit_bayesian_decay_model()
+    save_path : str, optional
+        Path to save the figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    setup_plot_style()
+
+    if bayesian_results is None or 'curves' not in bayesian_results:
+        print("No Bayesian curves to plot")
+        return None
+
+    curves = bayesian_results['curves']
+    data = bayesian_results['data']
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Linear scale
+    ax = axes[0]
+    age_grid = curves['age_grid']
+
+    # Credible intervals
+    ax.fill_between(age_grid, curves['ci_lower_95'], curves['ci_upper_95'],
+                    color='steelblue', alpha=0.2, label='95% CI')
+    ax.fill_between(age_grid, curves['ci_lower_50'], curves['ci_upper_50'],
+                    color='steelblue', alpha=0.4, label='50% CI')
+    ax.plot(age_grid, curves['median'], '-', color='darkblue', linewidth=2, label='Median')
+
+    # Plot data points with error bars
+    stages = data['stages']
+    densities = data['densities']
+    ages_point = data['ages_point']
+    ages_lower = data['ages_lower']
+    ages_upper = data['ages_upper']
+    density_sigma = data['density_sigma']
+
+    for i, stage in enumerate(stages):
+        xerr_low = ages_point[i] - ages_lower[i]
+        xerr_high = ages_upper[i] - ages_point[i]
+        color = '#B2182B' if 'driftless' in stage.lower() else '#2166AC'
+        ax.errorbar(ages_point[i], densities[i],
+                    xerr=[[xerr_low], [xerr_high]],
+                    yerr=density_sigma[i],
+                    fmt='o', markersize=10,
+                    color=color, capsize=5,
+                    markeredgecolor='black', markeredgewidth=1.5,
+                    elinewidth=1.5, zorder=10)
+
+    ax.set_xlabel('Landscape Age (ka)', fontsize=12)
+    ax.set_ylabel('Lake Density', fontsize=12)
+    ax.set_title('Bayesian Posterior: Exponential Decay Model\n(Linear Scale)', fontsize=13, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=10)
+    ax.set_xlim(0, max(ages_point) * 1.2)
+    ax.grid(True, alpha=0.3)
+
+    # Log scale
+    ax = axes[1]
+    mask = age_grid > 5
+
+    ax.fill_between(age_grid[mask], curves['ci_lower_95'][mask], curves['ci_upper_95'][mask],
+                    color='steelblue', alpha=0.2, label='95% CI')
+    ax.fill_between(age_grid[mask], curves['ci_lower_50'][mask], curves['ci_upper_50'][mask],
+                    color='steelblue', alpha=0.4, label='50% CI')
+    ax.plot(age_grid[mask], curves['median'][mask], '-', color='darkblue', linewidth=2, label='Median')
+
+    for i, stage in enumerate(stages):
+        xerr_low = ages_point[i] - ages_lower[i]
+        xerr_high = ages_upper[i] - ages_point[i]
+        color = '#B2182B' if 'driftless' in stage.lower() else '#2166AC'
+        ax.errorbar(ages_point[i], densities[i],
+                    xerr=[[xerr_low], [xerr_high]],
+                    yerr=density_sigma[i],
+                    fmt='o', markersize=10,
+                    color=color, capsize=5,
+                    markeredgecolor='black', markeredgewidth=1.5,
+                    elinewidth=1.5, zorder=10)
+
+    ax.set_xscale('log')
+    ax.set_xlabel('Landscape Age (ka, log scale)', fontsize=12)
+    ax.set_ylabel('Lake Density', fontsize=12)
+    ax.set_title('Bayesian Posterior: Exponential Decay Model\n(Log Scale)', fontsize=13, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(True, alpha=0.3, which='both')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+def plot_bayesian_covariance(bayesian_results, save_path=None):
+    """
+    Plot covariance between Driftless age and half-life posteriors.
+
+    Parameters
+    ----------
+    bayesian_results : dict
+        Output from fit_bayesian_decay_model()
+    save_path : str, optional
+        Path to save the figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    setup_plot_style()
+
+    if bayesian_results is None:
+        print("No Bayesian results to plot")
+        return None
+
+    # Check if we have Driftless age
+    driftless_key = None
+    for key in bayesian_results['age_posteriors'].keys():
+        if 'driftless' in key.lower():
+            driftless_key = key
+            break
+
+    if driftless_key is None:
+        print("No Driftless age in results")
+        return None
+
+    driftless_samples = bayesian_results['age_posteriors'][driftless_key]['samples']
+    hl_samples = bayesian_results['half_life']['samples']
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Scatter with density coloring
+    try:
+        from scipy.stats import gaussian_kde
+        xy = np.vstack([driftless_samples, hl_samples])
+        z = gaussian_kde(xy)(xy)
+
+        idx_sort = z.argsort()
+        x_sorted = driftless_samples[idx_sort]
+        y_sorted = hl_samples[idx_sort]
+        z_sorted = z[idx_sort]
+
+        scatter = ax.scatter(x_sorted[::10], y_sorted[::10], c=z_sorted[::10],
+                            s=15, alpha=0.5, cmap='viridis')
+        plt.colorbar(scatter, ax=ax, label='Density')
+    except ImportError:
+        ax.scatter(driftless_samples[::5], hl_samples[::5], alpha=0.2, s=10, color='steelblue')
+
+    ax.set_xlabel('Inferred Driftless Age (ka)', fontsize=12)
+    ax.set_ylabel('Inferred Half-life (ka)', fontsize=12)
+    ax.set_title('Posterior Covariance: Driftless Age vs Half-life\n(Older Driftless → Longer Half-life)',
+                 fontsize=12, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+
+    # Add correlation coefficient
+    corr = bayesian_results.get('driftless_halflife_correlation',
+                                np.corrcoef(driftless_samples, hl_samples)[0, 1])
+    ax.annotate(f'Correlation: r = {corr:.3f}', xy=(0.05, 0.95), xycoords='axes fraction',
+                fontsize=11, fontweight='bold', va='top')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+def plot_bayesian_summary(bayesian_results, save_path=None):
+    """
+    Plot comprehensive Bayesian analysis summary (4-panel figure).
+
+    Parameters
+    ----------
+    bayesian_results : dict
+        Output from fit_bayesian_decay_model()
+    save_path : str, optional
+        Path to save the figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    setup_plot_style()
+
+    if bayesian_results is None:
+        print("No Bayesian results to plot")
+        return None
+
+    fig = plt.figure(figsize=(14, 12))
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
+
+    curves = bayesian_results['curves']
+    data = bayesian_results['data']
+
+    # Panel A: Decay curves with credible intervals
+    ax = fig.add_subplot(gs[0, 0])
+    age_grid = curves['age_grid']
+
+    ax.fill_between(age_grid, curves['ci_lower_95'], curves['ci_upper_95'],
+                    color='steelblue', alpha=0.2, label='95% CI')
+    ax.fill_between(age_grid, curves['ci_lower_50'], curves['ci_upper_50'],
+                    color='steelblue', alpha=0.4, label='50% CI')
+    ax.plot(age_grid, curves['median'], '-', color='darkblue', linewidth=2, label='Median')
+
+    for i, stage in enumerate(data['stages']):
+        xerr_low = data['ages_point'][i] - data['ages_lower'][i]
+        xerr_high = data['ages_upper'][i] - data['ages_point'][i]
+        ax.errorbar(data['ages_point'][i], data['densities'][i],
+                    xerr=[[xerr_low], [xerr_high]],
+                    yerr=data['density_sigma'][i],
+                    fmt='o', markersize=8, color='#2166AC', capsize=4,
+                    markeredgecolor='black', markeredgewidth=1, elinewidth=1.5, zorder=10)
+
+    ax.set_xlabel('Landscape Age (ka)', fontsize=11)
+    ax.set_ylabel('Lake Density', fontsize=11)
+    ax.set_title('A) Bayesian Decay Model', fontsize=12, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # Panel B: Half-life posterior
+    ax = fig.add_subplot(gs[0, 1])
+    hl_samples = bayesian_results['half_life']['samples']
+    ax.hist(hl_samples, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='white')
+    ax.axvline(bayesian_results['half_life']['mean'], color='red', linestyle='-', linewidth=2,
+               label=f"Mean: {bayesian_results['half_life']['mean']:.0f} ka")
+    ax.axvline(bayesian_results['half_life']['ci_lower'], color='red', linestyle='--', alpha=0.7)
+    ax.axvline(bayesian_results['half_life']['ci_upper'], color='red', linestyle='--', alpha=0.7,
+               label=f"95% CI: [{bayesian_results['half_life']['ci_lower']:.0f}, {bayesian_results['half_life']['ci_upper']:.0f}]")
+    ax.set_xlabel('Half-life (ka)', fontsize=11)
+    ax.set_ylabel('Posterior Density', fontsize=11)
+    ax.set_title('B) Half-life Posterior', fontsize=12, fontweight='bold')
+    ax.legend(fontsize=9)
+
+    # Panel C: D0 posterior
+    ax = fig.add_subplot(gs[1, 0])
+    D0_samples = bayesian_results['D0']['samples']
+    ax.hist(D0_samples, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='white')
+    ax.axvline(bayesian_results['D0']['mean'], color='red', linestyle='-', linewidth=2,
+               label=f"Mean: {bayesian_results['D0']['mean']:.1f}")
+    ax.set_xlabel('D₀ (initial density)', fontsize=11)
+    ax.set_ylabel('Posterior Density', fontsize=11)
+    ax.set_title('C) Initial Density Posterior', fontsize=12, fontweight='bold')
+    ax.legend(fontsize=9)
+
+    # Panel D: Summary text
+    ax = fig.add_subplot(gs[1, 1])
+    ax.axis('off')
+
+    summary_lines = [
+        "BAYESIAN DECAY MODEL SUMMARY",
+        "=" * 40,
+        "",
+        "Posterior Estimates (mean [95% CI]):",
+        f"  D₀: {bayesian_results['D0']['mean']:.1f} [{bayesian_results['D0']['ci_lower']:.1f}, {bayesian_results['D0']['ci_upper']:.1f}]",
+        f"  k:  {bayesian_results['k']['mean']:.6f} [{bayesian_results['k']['ci_lower']:.6f}, {bayesian_results['k']['ci_upper']:.6f}] /ka",
+        f"  Half-life: {bayesian_results['half_life']['mean']:.0f} [{bayesian_results['half_life']['ci_lower']:.0f}, {bayesian_results['half_life']['ci_upper']:.0f}] ka",
+        "",
+        "Model:",
+        "  D(t) = D₀ × exp(-k × t)",
+        "",
+        "Interpretation:",
+        f"  Lake density decays by 50% every",
+        f"  ~{bayesian_results['half_life']['mean']:.0f} thousand years.",
+    ]
+
+    if 'driftless_halflife_correlation' in bayesian_results:
+        corr = bayesian_results['driftless_halflife_correlation']
+        summary_lines.extend([
+            "",
+            f"Age-Halflife Correlation: r = {corr:.3f}",
+            "  (Older assumed ages → longer half-life)"
+        ])
+
+    summary_text = "\n".join(summary_lines)
+    ax.text(0.05, 0.95, summary_text, transform=ax.transAxes,
+            fontsize=10, fontfamily='monospace', verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+
+    fig.suptitle('Bayesian Analysis of Lake Density Decay',
+                 fontsize=14, fontweight='bold', y=0.98)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")

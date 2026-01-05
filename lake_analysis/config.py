@@ -180,6 +180,67 @@ GLACIAL_BOUNDARIES = {
     },
 }
 
+# ============================================================================
+# NADI-1 TIME SLICE DATASET (Dalton et al. QSR)
+# ============================================================================
+# Comprehensive glacial reconstructions from 1 ka to 25 ka at 0.5 ka intervals
+# Each time slice has MIN, MAX, and OPTIMAL ice extent estimates
+# Note: LGM is closer to 20 ka (not 25 ka) - the 25 ka slice is pre-LGM buildup
+
+NADI1_CONFIG = {
+    # Directory containing all NADI-1 shapefiles
+    'directory': r"F:\Lakes\GIS\shapefiles\NADI-1 shapefiles Dalton et al. QSR",
+
+    # File naming pattern: {age}ka_cal_{type}_NADI-1_Dalton_etal_QSR.shp
+    # Ages: 1, 1.5, 2, 2.5, ... 25 (0.5 ka intervals)
+    # Types: MIN, MAX, OPTIMAL
+    'file_pattern': "{age}ka_cal_{extent_type}_NADI-1_Dalton_etal_QSR.shp",
+
+    # Age range and interval (in ka)
+    'age_start': 1.0,      # 1 ka (youngest)
+    'age_end': 25.0,       # 25 ka (oldest, pre-LGM)
+    'age_interval': 0.5,   # 0.5 ka steps
+
+    # Note: LGM is approximately 20 ka, not 25 ka
+    'lgm_age': 20.0,
+
+    # Extent types available
+    'extent_types': ['MIN', 'MAX', 'OPTIMAL'],
+
+    # CRS of the NADI-1 shapefiles (NAD 1983 Canada Atlas Lambert)
+    'crs': 'EPSG:3978',
+
+    # Longitude threshold for continental vs alpine glaciation
+    # Focus on continental ice east of -110° to exclude western alpine glaciation
+    'continental_lon_threshold': -110.0,
+
+    # Reference ages for comparison (from existing datasets)
+    'reference_ages': {
+        'wisconsin': 20.0,    # ka - use LGM age for comparison
+        'illinoian': 160.0,   # ka - mid-point of Illinoian
+        'driftless': None,    # Never glaciated
+    },
+
+    # Description
+    'description': (
+        'NADI-1 (North American Deglaciation Ice-sheet) reconstruction '
+        'from Dalton et al. (Quaternary Science Reviews). Provides ice sheet '
+        'extent at 0.5 ka intervals from 1 ka to 25 ka BP, with MIN, MAX, '
+        'and OPTIMAL estimates for uncertainty quantification.'
+    ),
+}
+
+# Generate list of all NADI-1 ages
+def get_nadi1_ages():
+    """Generate list of all NADI-1 time slice ages (in ka)."""
+    import numpy as np
+    ages = np.arange(
+        NADI1_CONFIG['age_start'],
+        NADI1_CONFIG['age_end'] + NADI1_CONFIG['age_interval'],
+        NADI1_CONFIG['age_interval']
+    )
+    return ages.tolist()
+
 # Glacial stage classification order (youngest to oldest)
 GLACIAL_CHRONOLOGY = {
     'wisconsin': {

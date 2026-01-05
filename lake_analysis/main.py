@@ -1972,7 +1972,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
     # Step 1: Load data if not provided
     if lakes is None:
         if verbose:
-            print("\n[Step 1/4] Loading lake data...")
+            print("\n[Step 1/5] Loading lake data...")
         lakes = load_data(data_source)
         if lakes is None:
             print("  ERROR: Could not load lake data")
@@ -1989,7 +1989,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
 
     # Step 2: Run glacial analysis to get classifications
     if verbose:
-        print("\n[Step 2/4] Running glacial classification...")
+        print("\n[Step 2/5] Running glacial classification...")
         print("  (Required to get glacial_stage labels for comparison)")
 
     glacial_results = analyze_glacial_chronosequence(lakes, save_figures=False, verbose=False)
@@ -2021,7 +2021,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
     ai_in_gdf = ai_col in lake_gdf.columns
 
     if verbose:
-        print(f"\n[Step 3/4] Checking aridity data...")
+        print(f"\n[Step 3/5] Checking aridity data...")
         print(f"  AI column in original data: {ai_in_original}")
         print(f"  AI column in GeoDataFrame: {ai_in_gdf}")
 
@@ -2091,7 +2091,7 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
 
     # Step 4: Run aridity analysis
     if verbose:
-        print("\n[Step 4/4] Running aridity vs glacial comparison...")
+        print("\n[Step 4/5] Running aridity vs glacial comparison...")
 
     aridity_results = analyze_aridity_effects(
         lake_gdf,
@@ -2102,12 +2102,246 @@ def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
 
     results['comparison'] = aridity_results
 
+    # Step 5: Lake half-life analysis (optional but informative)
+    if verbose:
+        print("\n[Step 5/5] Analyzing aridity effect on lake half-life...")
+
+    try:
+        from .glacial_chronosequence import analyze_aridity_lake_halflife
+    except ImportError:
+        from glacial_chronosequence import analyze_aridity_lake_halflife
+
+    halflife_results = analyze_aridity_lake_halflife(lake_gdf, verbose=verbose)
+    results['halflife_analysis'] = halflife_results
+
     if verbose:
         print("\n" + "=" * 70)
         print("ARIDITY ANALYSIS COMPLETE")
         print("=" * 70)
         if save_figures:
             print(f"  Figures saved to: {OUTPUT_DIR}/aridity_analysis/")
+
+    return results
+
+
+def analyze_lake_halflife(lakes=None, data_source='conus', min_lake_area=None, verbose=True):
+    """
+    Analyze whether aridity affects lake persistence (half-life).
+
+    This is a focused analysis testing if lakes in arid regions persist
+    longer or shorter than lakes in humid regions.
+
+    Parameters
+    ----------
+    lakes : DataFrame, optional
+        Lake data. If None, will be loaded from data_source.
+    data_source : str
+        Data source if loading: 'conus' (recommended), 'gdb', or 'parquet'
+    min_lake_area : float, optional
+        Minimum lake area filter in km²
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    dict
+        Results including decay rates by aridity class and interaction test
+
+    Notes
+    -----
+    This analysis has significant limitations:
+    - Only 2 glacial stages with known ages (140 ka time span)
+    - Cannot directly measure lake half-life
+    - Confounded by elevation, lithology, etc.
+    """
+    # First run the aridity analysis to get the classified lake_gdf
+    aridity_results = analyze_aridity(
+        lakes=lakes,
+        data_source=data_source,
+        min_lake_area=min_lake_area,
+        save_figures=False,
+        verbose=False
+    )
+
+    if 'error' in aridity_results:
+        print(f"  ERROR: Could not complete prerequisite aridity analysis")
+        return aridity_results
+
+    # The halflife analysis is already included in analyze_aridity results
+    return aridity_results.get('halflife_analysis', {})
+
+
+def analyze_nadi1_chronosequence(lakes=None, data_source='conus', min_lake_area=0.01,
+                                  extent_type='OPTIMAL', include_uncertainty=True,
+                                  save_figures=True, verbose=True):
+    """
+    Run comprehensive glacial chronosequence analysis using NADI-1 time slices.
+
+    Uses Dalton et al. NADI-1 ice sheet reconstructions (1 ka to 25 ka at 0.5 ka
+    intervals) to assign deglaciation ages to lakes and analyze lake density
+    decay with time since deglaciation.
+
+    Parameters
+    ----------
+    lakes : DataFrame, optional
+        Lake data. If None, will be loaded from data_source.
+    data_source : str
+        Data source if loading: 'conus' (recommended), 'gdb', or 'parquet'
+    min_lake_area : float
+        Minimum lake area filter in km². Default 0.01.
+    extent_type : str
+        Primary extent type: 'OPTIMAL' (default), 'MIN', or 'MAX'
+    include_uncertainty : bool
+        If True (default), compute ages using all extent types for uncertainty.
+    save_figures : bool
+        If True (default), save visualization figures.
+    verbose : bool
+        Print progress information.
+
+    Returns
+    -------
+    dict
+        Results including:
+        - lake_gdf: GeoDataFrame with deglaciation ages
+        - time_slices: DataFrame of discovered time slices
+        - density_by_age: Lake density statistics by age bin
+        - decay_model: Fitted exponential decay parameters
+        - uncertainty: Uncertainty estimates from MIN/MAX extents
+
+    Notes
+    -----
+    This analysis:
+    1. Discovers available NADI-1 time slices (1-25 ka at 0.5 ka intervals)
+    2. Assigns deglaciation ages to lakes based on ice sheet retreat
+    3. Filters to continental ice (east of -110°) to exclude alpine glaciation
+    4. Computes lake density as a function of time since deglaciation
+    5. Fits exponential decay model to estimate lake half-life
+    6. Uses MIN/MAX extents to bracket uncertainty
+
+    The LGM is approximately 20 ka, not 25 ka (25 ka is pre-LGM buildup).
+
+    Example
+    -------
+    >>> results = analyze_nadi1_chronosequence()
+    >>> print(f"Lake half-life: {results['decay_model']['half_life_ka']:.0f} ka")
+    """
+    if verbose:
+        print("\n" + "=" * 70)
+        print("NADI-1 GLACIAL CHRONOSEQUENCE ANALYSIS")
+        print("=" * 70)
+        print("\n  Using Dalton et al. NADI-1 ice sheet reconstructions")
+        print("  Time slices: 1 ka to 25 ka at 0.5 ka intervals")
+        print("  Focus: Continental ice east of -110° (excludes alpine)")
+        print("=" * 70)
+
+    # Load lake data if not provided
+    if lakes is None:
+        if verbose:
+            print("\n[Step 1] Loading lake data...")
+        lakes = load_data(source=data_source)
+
+    if lakes is None or len(lakes) == 0:
+        print("  ERROR: Could not load lake data")
+        return {'error': 'No lake data loaded'}
+
+    if verbose:
+        print(f"  Loaded {len(lakes):,} lakes")
+
+    # Apply minimum area filter if specified
+    area_col = COLS['area']
+    if min_lake_area is not None and min_lake_area > 0:
+        original_count = len(lakes)
+        lakes = lakes[lakes[area_col] >= min_lake_area]
+        if verbose:
+            print(f"  Applied minimum area filter ({min_lake_area} km²): "
+                  f"{original_count:,} → {len(lakes):,} lakes")
+
+    # Convert to GeoDataFrame
+    if verbose:
+        print("\n[Step 2] Converting to GeoDataFrame...")
+
+    try:
+        import geopandas as gpd
+        from shapely.geometry import Point
+
+        lon_col = COLS.get('lon', 'Longitude')
+        lat_col = COLS.get('lat', 'Latitude')
+
+        if isinstance(lakes, gpd.GeoDataFrame):
+            lake_gdf = lakes
+        else:
+            geometry = [Point(lon, lat) for lon, lat in
+                        zip(lakes[lon_col], lakes[lat_col])]
+            lake_gdf = gpd.GeoDataFrame(lakes, geometry=geometry, crs="EPSG:4326")
+
+        if verbose:
+            print(f"  GeoDataFrame created with {len(lake_gdf):,} lakes")
+
+    except Exception as e:
+        print(f"  ERROR: Could not create GeoDataFrame: {e}")
+        return {'error': str(e)}
+
+    # Run NADI-1 analysis
+    if verbose:
+        print("\n[Step 3] Running NADI-1 chronosequence analysis...")
+
+    try:
+        from .glacial_chronosequence import run_nadi1_chronosequence_analysis
+    except ImportError:
+        from glacial_chronosequence import run_nadi1_chronosequence_analysis
+
+    results = run_nadi1_chronosequence_analysis(
+        lake_gdf,
+        extent_type=extent_type,
+        include_uncertainty=include_uncertainty,
+        area_col=area_col,
+        min_lake_area=min_lake_area,
+        verbose=verbose
+    )
+
+    # Generate visualizations
+    if save_figures and results.get('density_by_age') is not None:
+        if verbose:
+            print("\n[Step 4] Generating visualizations...")
+
+        try:
+            from .visualization import plot_nadi1_chronosequence, plot_deglaciation_age_histogram
+        except ImportError:
+            from visualization import plot_nadi1_chronosequence, plot_deglaciation_age_histogram
+
+        output_subdir = os.path.join(OUTPUT_DIR, 'nadi1_chronosequence')
+        os.makedirs(output_subdir, exist_ok=True)
+
+        # Main chronosequence plot
+        fig = plot_nadi1_chronosequence(
+            results,
+            save_path=os.path.join(output_subdir, 'nadi1_chronosequence_summary.png')
+        )
+        if fig:
+            plt.close(fig)
+
+        # Deglaciation age histogram
+        if results.get('lake_gdf') is not None:
+            fig = plot_deglaciation_age_histogram(
+                results['lake_gdf'],
+                save_path=os.path.join(output_subdir, 'deglaciation_age_histogram.png')
+            )
+            if fig:
+                plt.close(fig)
+
+        if verbose:
+            print(f"  Figures saved to: {output_subdir}/")
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("NADI-1 CHRONOSEQUENCE ANALYSIS COMPLETE")
+        print("=" * 70)
+
+        if results.get('decay_model'):
+            decay = results['decay_model']
+            print(f"\n  Key finding:")
+            print(f"    Estimated lake half-life: {decay.get('half_life_ka', float('inf')):.0f} ka")
+            print(f"    (Time for lake density to decrease by 50%)")
 
     return results
 
@@ -2938,7 +3172,15 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    # Compares aridity vs glacial stage as lake density predictors
    # Runs glacial classification first, then aridity comparison
 
-8. Run full pipeline (with progress tracking):
+8. NADI-1 comprehensive chronosequence (1-25 ka time slices):
+   >>> results = analyze_nadi1_chronosequence()
+   # Uses Dalton et al. NADI-1 ice sheet reconstructions
+   # Assigns continuous deglaciation ages to lakes
+   # Estimates lake half-life from density decay curve
+   # Uses MIN/MAX/OPTIMAL extents for uncertainty quantification
+   # Filters to continental ice (east of -110°) to exclude alpine
+
+9. Run full pipeline (with progress tracking):
    >>> all_results = run_full_analysis()
 
    Options:
@@ -2947,7 +3189,7 @@ LAKE DISTRIBUTION ANALYSIS - Quick Start Guide
    >>> run_full_analysis(include_glacial_analysis=True)    # Include Davis hypothesis
    >>> run_full_analysis(include_spatial_scaling=True)     # Include spatial patterns
 
-9. Classify domains:
+10. Classify domains:
    >>> lakes_classified = analyze_domains(lakes)
 
 Key Outputs:
@@ -2958,6 +3200,7 @@ Key Outputs:
 - x_min sensitivity BY ELEVATION (does optimal x_min vary?)
 - Comparison to Cael & Seekell (2016) global result
 - Glacial chronosequence analysis (Davis's hypothesis test)
+- NADI-1 deglaciation chronosequence (lake half-life estimation)
 - Spatial scaling analysis (lat/lon/elevation patterns)
 - Colorful hypothesis testing summary tables
 
@@ -3004,6 +3247,8 @@ if __name__ == "__main__":
                        help='Include spatial scaling analysis in full pipeline')
     parser.add_argument('--aridity', action='store_true',
                        help='Run only aridity vs glacial analysis')
+    parser.add_argument('--nadi1', action='store_true',
+                       help='Run NADI-1 comprehensive chronosequence analysis (1-25 ka)')
 
     args = parser.parse_args()
 
@@ -3017,6 +3262,8 @@ if __name__ == "__main__":
         analyze_spatial_scaling(lakes)
     elif args.aridity:
         analyze_aridity(data_source=args.source)
+    elif args.nadi1:
+        analyze_nadi1_chronosequence(data_source=args.source)
     elif args.full:
         run_full_analysis(
             data_source=args.source,
