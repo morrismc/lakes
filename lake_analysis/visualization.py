@@ -6987,6 +6987,242 @@ def plot_aridity_glacial_comparison(comparison_results, figsize=(18, 14), save_p
     return fig, None
 
 
+# ============================================================================
+# NADI-1 CHRONOSEQUENCE VISUALIZATION
+# ============================================================================
+
+def plot_nadi1_chronosequence(results, save_path=None, show_uncertainty=True):
+    """
+    Plot lake density vs deglaciation age from NADI-1 analysis.
+
+    Creates a multi-panel figure showing:
+    - Lake count by deglaciation age with decay model fit
+    - Uncertainty bounds from MIN/MAX extents
+    - Comparison with Illinoian and Driftless reference points
+
+    Parameters
+    ----------
+    results : dict
+        Output from run_nadi1_chronosequence_analysis()
+    save_path : str, optional
+        Path to save the figure.
+    show_uncertainty : bool, optional
+        If True, show MIN/MAX uncertainty bands.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    setup_plot_style()
+
+    density_by_age = results.get('density_by_age')
+    decay_model = results.get('decay_model')
+    uncertainty = results.get('uncertainty', {})
+
+    if density_by_age is None or len(density_by_age) == 0:
+        print("No density data available for plotting")
+        return None
+
+    fig = plt.figure(figsize=(14, 10))
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
+
+    # Panel A: Lake count by deglaciation age
+    ax1 = fig.add_subplot(gs[0, 0])
+
+    x = density_by_age['age_midpoint_ka'].values
+    y = density_by_age['n_lakes'].values
+
+    # Scatter plot of actual data
+    ax1.scatter(x, y, s=100, c='steelblue', alpha=0.8, edgecolors='black',
+                linewidths=1.5, zorder=5, label='Observed')
+
+    # Fit line if decay model available
+    if decay_model and decay_model.get('n0') is not None:
+        x_fit = np.linspace(0, max(x) * 1.1, 100)
+        n0 = decay_model['n0']
+        lam = decay_model['lambda']
+        y_fit = n0 * np.exp(-lam * x_fit)
+        ax1.plot(x_fit, y_fit, 'r-', linewidth=2, label='Exponential fit', zorder=3)
+
+        # Add half-life annotation
+        half_life = decay_model.get('half_life_ka', np.inf)
+        if np.isfinite(half_life):
+            ax1.axhline(n0/2, color='gray', linestyle='--', alpha=0.5, zorder=1)
+            ax1.axvline(half_life, color='gray', linestyle='--', alpha=0.5, zorder=1)
+            ax1.annotate(f't₁/₂ = {half_life:.1f} ka',
+                        xy=(half_life, n0/2),
+                        xytext=(half_life + 2, n0/2 + y.max()*0.1),
+                        fontsize=10, color='red',
+                        arrowprops=dict(arrowstyle='->', color='gray', alpha=0.5))
+
+    ax1.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax1.set_ylabel('Number of Lakes', fontsize=12)
+    ax1.set_title('A) Lake Count vs Deglaciation Age', fontsize=12, fontweight='bold')
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(0, max(x) * 1.1)
+
+    # Panel B: Total lake area by age
+    ax2 = fig.add_subplot(gs[0, 1])
+
+    y_area = density_by_age['total_area_km2'].values
+    ax2.scatter(x, y_area, s=100, c='forestgreen', alpha=0.8, edgecolors='black',
+                linewidths=1.5, zorder=5)
+
+    ax2.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax2.set_ylabel('Total Lake Area (km²)', fontsize=12)
+    ax2.set_title('B) Total Lake Area vs Deglaciation Age', fontsize=12, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+
+    # Panel C: Mean lake size by age
+    ax3 = fig.add_subplot(gs[1, 0])
+
+    y_mean = density_by_age['mean_area_km2'].values
+    ax3.scatter(x, y_mean, s=100, c='darkorange', alpha=0.8, edgecolors='black',
+                linewidths=1.5, zorder=5)
+
+    ax3.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax3.set_ylabel('Mean Lake Area (km²)', fontsize=12)
+    ax3.set_title('C) Mean Lake Size vs Deglaciation Age', fontsize=12, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+
+    # Add trend line if significant
+    if len(x) >= 3:
+        try:
+            from scipy import stats
+            slope, intercept, r_value, p_value, _ = stats.linregress(x, y_mean)
+            if p_value < 0.05:
+                x_trend = np.array([min(x), max(x)])
+                y_trend = slope * x_trend + intercept
+                ax3.plot(x_trend, y_trend, 'r--', linewidth=2, alpha=0.7,
+                        label=f'Trend (p={p_value:.3f})')
+                ax3.legend()
+        except Exception:
+            pass
+
+    # Panel D: Summary statistics
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.axis('off')
+
+    # Build summary text
+    lake_gdf = results.get('lake_gdf')
+    summary_lines = ["NADI-1 CHRONOSEQUENCE SUMMARY", "=" * 40, ""]
+
+    if lake_gdf is not None:
+        n_total = len(lake_gdf)
+        n_glaciated = lake_gdf['was_glaciated'].sum()
+        n_assigned = lake_gdf['deglaciation_age'].notna().sum()
+
+        summary_lines.extend([
+            f"Total lakes analyzed: {n_total:,}",
+            f"Were glaciated (Wisconsin): {n_glaciated:,} ({100*n_glaciated/n_total:.1f}%)",
+            f"With deglaciation ages: {n_assigned:,}",
+            ""
+        ])
+
+    if decay_model:
+        summary_lines.extend([
+            "Exponential Decay Model:",
+            f"  N(t) = {decay_model.get('n0', 0):.0f} × e^(-{decay_model.get('lambda', 0):.4f} × t)",
+            f"  Half-life: {decay_model.get('half_life_ka', np.inf):.1f} ka",
+            f"  R²: {decay_model.get('r2', 0):.3f}",
+            ""
+        ])
+
+    if uncertainty:
+        summary_lines.extend([
+            "Uncertainty from MIN/MAX extents:",
+        ])
+        for ext, data in uncertainty.items():
+            summary_lines.append(f"  {ext}: mean age = {data.get('mean_age_ka', 0):.1f} ± {data.get('std_age_ka', 0):.1f} ka")
+
+    summary_lines.extend([
+        "",
+        "Note: LGM ≈ 20 ka, not 25 ka",
+        "Continental ice only (east of -110°)"
+    ])
+
+    summary_text = "\n".join(summary_lines)
+
+    ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes,
+             fontsize=10, fontfamily='monospace', verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+
+    fig.suptitle('Lake Density Decay with Deglaciation Age (NADI-1 Analysis)',
+                 fontsize=14, fontweight='bold', y=0.98)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+def plot_deglaciation_age_histogram(lake_gdf, save_path=None):
+    """
+    Plot histogram of deglaciation ages.
+
+    Parameters
+    ----------
+    lake_gdf : gpd.GeoDataFrame
+        Lakes with deglaciation_age column.
+    save_path : str, optional
+        Path to save the figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    setup_plot_style()
+
+    ages = lake_gdf['deglaciation_age'].dropna()
+
+    if len(ages) == 0:
+        print("No deglaciation ages to plot")
+        return None
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Histogram
+    ax1.hist(ages, bins=25, color='steelblue', edgecolor='black', alpha=0.7)
+    ax1.axvline(ages.median(), color='red', linestyle='--', linewidth=2,
+                label=f'Median = {ages.median():.1f} ka')
+    ax1.axvline(20, color='orange', linestyle=':', linewidth=2,
+                label='LGM (~20 ka)')
+    ax1.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax1.set_ylabel('Number of Lakes', fontsize=12)
+    ax1.set_title('Distribution of Deglaciation Ages', fontsize=12, fontweight='bold')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Cumulative distribution
+    sorted_ages = np.sort(ages)
+    cumulative = np.arange(1, len(sorted_ages) + 1) / len(sorted_ages)
+    ax2.plot(sorted_ages, cumulative, 'b-', linewidth=2)
+    ax2.axhline(0.5, color='gray', linestyle='--', alpha=0.5)
+    ax2.axvline(ages.median(), color='red', linestyle='--', alpha=0.5)
+    ax2.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax2.set_ylabel('Cumulative Fraction of Lakes', fontsize=12)
+    ax2.set_title('Cumulative Distribution', fontsize=12, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+
+    fig.suptitle('Deglaciation Timing of Continental US Lakes',
+                 fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")

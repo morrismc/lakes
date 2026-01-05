@@ -45,7 +45,8 @@ try:
         COLS, ELEV_BREAKS, OUTPUT_DIR, ensure_output_dir,
         GLACIAL_BOUNDARIES, GLACIAL_CHRONOLOGY,
         GLACIAL_TARGET_CRS, GLACIAL_TARGET_CRS_PROJ4,
-        SHAPEFILES, AI_BREAKS
+        SHAPEFILES, AI_BREAKS,
+        NADI1_CONFIG, get_nadi1_ages
     )
     from .data_loading import get_raster_info, calculate_landscape_area_by_bin
 except ImportError:
@@ -53,7 +54,8 @@ except ImportError:
         COLS, ELEV_BREAKS, OUTPUT_DIR, ensure_output_dir,
         GLACIAL_BOUNDARIES, GLACIAL_CHRONOLOGY,
         GLACIAL_TARGET_CRS, GLACIAL_TARGET_CRS_PROJ4,
-        SHAPEFILES, AI_BREAKS
+        SHAPEFILES, AI_BREAKS,
+        NADI1_CONFIG, get_nadi1_ages
     )
     from data_loading import get_raster_info, calculate_landscape_area_by_bin
 
@@ -3409,6 +3411,713 @@ def analyze_aridity_lake_halflife(lake_gdf, verbose=True):
     return results
 
 
+# ============================================================================
+# NADI-1 TIME SLICE CHRONOSEQUENCE ANALYSIS
+# ============================================================================
+# Uses Dalton et al. NADI-1 ice sheet reconstructions (1 ka to 25 ka at 0.5 ka
+# intervals) for comprehensive deglaciation chronosequence analysis.
+
+def discover_nadi1_time_slices(verbose=True):
+    """
+    Discover all available NADI-1 time slice shapefiles.
+
+    Searches the NADI-1 directory for shapefiles matching the expected naming
+    pattern and returns a DataFrame with file paths and metadata.
+
+    Parameters
+    ----------
+    verbose : bool, optional
+        If True, print discovery summary.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns: age_ka, extent_type, filepath, exists
+    """
+    from pathlib import Path
+
+    nadi_dir = Path(NADI1_CONFIG['directory'])
+    pattern = NADI1_CONFIG['file_pattern']
+    ages = get_nadi1_ages()
+    extent_types = NADI1_CONFIG['extent_types']
+
+    results = []
+
+    for age in ages:
+        # Handle age formatting (1.0 -> "1", 1.5 -> "1.5")
+        if age == int(age):
+            age_str = str(int(age))
+        else:
+            age_str = str(age)
+
+        for extent_type in extent_types:
+            filename = pattern.format(age=age_str, extent_type=extent_type)
+            filepath = nadi_dir / filename
+
+            results.append({
+                'age_ka': age,
+                'extent_type': extent_type,
+                'filename': filename,
+                'filepath': str(filepath),
+                'exists': filepath.exists()
+            })
+
+    df = pd.DataFrame(results)
+
+    if verbose:
+        n_found = df['exists'].sum()
+        n_expected = len(df)
+        n_ages = len(ages)
+        print(f"\nNADI-1 Time Slice Discovery")
+        print("=" * 50)
+        print(f"  Directory: {nadi_dir}")
+        print(f"  Ages: {ages[0]} ka to {ages[-1]} ka ({n_ages} time slices)")
+        print(f"  Extent types: {extent_types}")
+        print(f"  Files found: {n_found}/{n_expected}")
+
+        if n_found < n_expected:
+            missing = df[~df['exists']].head(5)
+            print(f"\n  First missing files:")
+            for _, row in missing.iterrows():
+                print(f"    - {row['filename']}")
+
+    return df
+
+
+def load_nadi1_time_slice(age_ka, extent_type='OPTIMAL', clip_to_conus=True,
+                          continental_only=True, verbose=True):
+    """
+    Load a specific NADI-1 time slice shapefile.
+
+    Parameters
+    ----------
+    age_ka : float
+        Age in thousand years before present (e.g., 20.0 for LGM)
+    extent_type : str, optional
+        One of 'MIN', 'MAX', 'OPTIMAL'. Default 'OPTIMAL'.
+    clip_to_conus : bool, optional
+        If True, clip to CONUS boundary. Default True.
+    continental_only : bool, optional
+        If True, filter to east of continental_lon_threshold (-110°)
+        to exclude alpine glaciation. Default True.
+    verbose : bool, optional
+        Print status messages.
+
+    Returns
+    -------
+    gpd.GeoDataFrame or None
+        Ice sheet extent geometry, or None if file not found.
+    """
+    from pathlib import Path
+
+    nadi_dir = Path(NADI1_CONFIG['directory'])
+    pattern = NADI1_CONFIG['file_pattern']
+
+    # Format age string
+    if age_ka == int(age_ka):
+        age_str = str(int(age_ka))
+    else:
+        age_str = str(age_ka)
+
+    filename = pattern.format(age=age_str, extent_type=extent_type)
+    filepath = nadi_dir / filename
+
+    if not filepath.exists():
+        if verbose:
+            print(f"  Warning: File not found: {filepath}")
+        return None
+
+    # Load and reproject
+    target_crs = get_target_crs()
+
+    try:
+        gdf = gpd.read_file(filepath)
+
+        # Reproject to target CRS
+        gdf = gdf.to_crs(target_crs)
+
+        # Filter to continental ice (east of threshold)
+        if continental_only:
+            lon_threshold = NADI1_CONFIG['continental_lon_threshold']
+            # Create bounding box for continental region
+            # Need to convert threshold to projected coordinates
+            from pyproj import Transformer
+            try:
+                transformer = Transformer.from_crs("EPSG:4326", target_crs, always_xy=True)
+                x_threshold, _ = transformer.transform(lon_threshold, 45.0)  # ~center of CONUS
+
+                # Clip to east of threshold
+                minx, miny, maxx, maxy = gdf.total_bounds
+                continental_box = box(x_threshold, miny, maxx, maxy)
+                gdf = gdf.clip(continental_box)
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Could not filter to continental region: {e}")
+
+        # Clip to CONUS
+        if clip_to_conus and SHAPEFILES.get('conus_boundary'):
+            try:
+                conus = gpd.read_file(SHAPEFILES['conus_boundary'])
+                conus = conus.to_crs(target_crs)
+                conus_geom = conus.geometry.unary_union
+                gdf = gdf.clip(conus_geom)
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Could not clip to CONUS: {e}")
+
+        # Add metadata
+        gdf['age_ka'] = age_ka
+        gdf['extent_type'] = extent_type
+
+        if verbose:
+            area_km2 = gdf.geometry.area.sum() / 1e6  # m² to km²
+            print(f"  Loaded {age_ka} ka ({extent_type}): {area_km2:,.0f} km²")
+
+        return gdf
+
+    except Exception as e:
+        if verbose:
+            print(f"  Error loading {filepath}: {e}")
+        return None
+
+
+def assign_deglaciation_age(lake_gdf, extent_type='OPTIMAL',
+                            include_uncertainty=True, verbose=True):
+    """
+    Assign deglaciation ages to lakes based on NADI-1 time slices.
+
+    For each lake, determines when it was deglaciated by finding the youngest
+    time slice where the lake is NOT covered by ice.
+
+    Parameters
+    ----------
+    lake_gdf : gpd.GeoDataFrame
+        Lakes with Point geometry.
+    extent_type : str, optional
+        Primary extent type ('OPTIMAL', 'MIN', or 'MAX'). Default 'OPTIMAL'.
+    include_uncertainty : bool, optional
+        If True, also compute ages using MIN and MAX extents.
+    verbose : bool, optional
+        Print progress messages.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Input GeoDataFrame with new columns:
+        - deglaciation_age: Age in ka when lake was deglaciated
+        - deglac_age_min: Minimum age estimate (from MAX ice extent)
+        - deglac_age_max: Maximum age estimate (from MIN ice extent)
+        - was_glaciated: Whether lake was ever under Wisconsin ice
+    """
+    if verbose:
+        print("\n" + "=" * 60)
+        print("ASSIGNING DEGLACIATION AGES (NADI-1)")
+        print("=" * 60)
+
+    # Get list of ages (from oldest to youngest for proper assignment)
+    ages = sorted(get_nadi1_ages(), reverse=True)  # 25 ka down to 1 ka
+
+    # Ensure lakes are in the target CRS
+    target_crs = get_target_crs()
+    if lake_gdf.crs is None or lake_gdf.crs.to_string() != target_crs:
+        lake_gdf = lake_gdf.to_crs(target_crs)
+
+    # Initialize columns
+    lake_gdf = lake_gdf.copy()
+    lake_gdf['deglaciation_age'] = np.nan
+    lake_gdf['was_glaciated'] = False
+
+    if include_uncertainty:
+        lake_gdf['deglac_age_min'] = np.nan  # From MAX extent
+        lake_gdf['deglac_age_max'] = np.nan  # From MIN extent
+
+    # Track which lakes have been assigned
+    assigned_mask = pd.Series(False, index=lake_gdf.index)
+
+    extent_types_to_process = [extent_type]
+    if include_uncertainty:
+        extent_types_to_process = ['OPTIMAL', 'MIN', 'MAX']
+
+    # Process each extent type
+    for ext_type in extent_types_to_process:
+        if verbose:
+            print(f"\n  Processing {ext_type} extent...")
+
+        age_col = 'deglaciation_age' if ext_type == extent_type else \
+                  ('deglac_age_min' if ext_type == 'MAX' else 'deglac_age_max')
+
+        # Reset assignment for this extent type
+        if ext_type != extent_type:
+            lake_gdf[age_col] = np.nan
+
+        current_assigned = pd.Series(False, index=lake_gdf.index)
+
+        # Process from oldest to youngest
+        for i, age in enumerate(ages):
+            # Load this time slice
+            ice_gdf = load_nadi1_time_slice(
+                age, extent_type=ext_type,
+                clip_to_conus=True, continental_only=True,
+                verbose=False
+            )
+
+            if ice_gdf is None or ice_gdf.empty:
+                continue
+
+            # Get ice extent geometry
+            ice_geom = ice_gdf.geometry.unary_union
+
+            # Find lakes covered by ice at this time
+            try:
+                covered = lake_gdf.geometry.within(ice_geom)
+            except Exception:
+                # Try with buffered points for robustness
+                covered = lake_gdf.geometry.buffer(100).intersects(ice_geom)
+
+            # Lakes covered now but not yet assigned get this age
+            # (they were deglaciated sometime AFTER this age)
+            newly_assigned = covered & ~current_assigned
+
+            if ext_type == extent_type:
+                lake_gdf.loc[covered, 'was_glaciated'] = True
+
+            # For primary extent, assign deglaciation age
+            # Deglaciation age = the first time slice when lake is NOT covered
+            # So we track coverage at each time step
+
+            current_assigned = current_assigned | covered
+
+            if verbose and (i + 1) % 10 == 0:
+                n_covered = covered.sum()
+                print(f"    {age:4.1f} ka: {n_covered:,} lakes under ice")
+
+        # Now assign ages - lakes get the youngest age at which they were still covered
+        # Actually, we need a different approach: find when ice retreated FROM each lake
+
+        if verbose:
+            print(f"    Computing deglaciation timing...")
+
+        # Reprocess to find exact deglaciation age
+        lake_ages = pd.Series(np.nan, index=lake_gdf.index)
+        prev_covered = pd.Series(False, index=lake_gdf.index)
+
+        # Process from oldest to youngest
+        for age in ages:
+            ice_gdf = load_nadi1_time_slice(
+                age, extent_type=ext_type,
+                clip_to_conus=True, continental_only=True,
+                verbose=False
+            )
+
+            if ice_gdf is None or ice_gdf.empty:
+                covered = pd.Series(False, index=lake_gdf.index)
+            else:
+                ice_geom = ice_gdf.geometry.unary_union
+                try:
+                    covered = lake_gdf.geometry.within(ice_geom)
+                except Exception:
+                    covered = pd.Series(False, index=lake_gdf.index)
+
+            # Lakes that were covered previously but not now were deglaciated at this age
+            # (Or more precisely, between prev_age and this age)
+            deglaciated_now = prev_covered & ~covered
+            lake_ages.loc[deglaciated_now & lake_ages.isna()] = age
+
+            prev_covered = covered
+
+        # Lakes still covered at youngest time slice (1 ka)
+        # These were deglaciated more recently than 1 ka
+        still_covered = prev_covered
+        lake_ages.loc[still_covered & lake_ages.isna()] = 0.5  # Assign 0.5 ka
+
+        lake_gdf[age_col] = lake_ages
+
+    # Lakes never glaciated get NaN age and was_glaciated=False
+    never_glaciated = ~lake_gdf['was_glaciated']
+
+    if verbose:
+        n_total = len(lake_gdf)
+        n_glaciated = lake_gdf['was_glaciated'].sum()
+        n_assigned = lake_gdf['deglaciation_age'].notna().sum()
+
+        print(f"\n  Results:")
+        print(f"    Total lakes: {n_total:,}")
+        print(f"    Were glaciated (Wisconsin): {n_glaciated:,} ({100*n_glaciated/n_total:.1f}%)")
+        print(f"    With assigned deglaciation age: {n_assigned:,}")
+        print(f"    Never glaciated: {never_glaciated.sum():,}")
+
+        if n_assigned > 0:
+            ages_assigned = lake_gdf['deglaciation_age'].dropna()
+            print(f"\n  Deglaciation age distribution:")
+            print(f"    Mean: {ages_assigned.mean():.1f} ka")
+            print(f"    Median: {ages_assigned.median():.1f} ka")
+            print(f"    Range: {ages_assigned.min():.1f} - {ages_assigned.max():.1f} ka")
+
+    return lake_gdf
+
+
+def compute_density_by_deglaciation_age(lake_gdf, age_bins=None,
+                                        area_col=None, min_lake_area=0.01,
+                                        verbose=True):
+    """
+    Compute lake density as a function of deglaciation age.
+
+    Parameters
+    ----------
+    lake_gdf : gpd.GeoDataFrame
+        Lakes with deglaciation_age column (from assign_deglaciation_age).
+    age_bins : list, optional
+        Bin edges for age categories. Default uses NADI-1 time slices.
+    area_col : str, optional
+        Column containing lake area. Default uses COLS['area'].
+    min_lake_area : float, optional
+        Minimum lake area in km². Default 0.01.
+    verbose : bool, optional
+        Print summary statistics.
+
+    Returns
+    -------
+    pd.DataFrame
+        Lake density statistics by age bin.
+    """
+    if area_col is None:
+        area_col = COLS['area']
+
+    # Default age bins: 2 ka intervals
+    if age_bins is None:
+        age_bins = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25]
+
+    # Filter to glaciated lakes with assigned ages
+    glaciated = lake_gdf[
+        (lake_gdf['was_glaciated']) &
+        (lake_gdf['deglaciation_age'].notna()) &
+        (lake_gdf[area_col] >= min_lake_area)
+    ].copy()
+
+    if verbose:
+        print(f"\n  Computing density by deglaciation age...")
+        print(f"    Lakes with ages: {len(glaciated):,}")
+
+    # Bin lakes by age
+    glaciated['age_bin'] = pd.cut(
+        glaciated['deglaciation_age'],
+        bins=age_bins,
+        labels=[f"{age_bins[i]}-{age_bins[i+1]} ka" for i in range(len(age_bins)-1)]
+    )
+
+    # Compute statistics by bin
+    results = []
+    for age_label in glaciated['age_bin'].cat.categories:
+        bin_lakes = glaciated[glaciated['age_bin'] == age_label]
+
+        if len(bin_lakes) == 0:
+            continue
+
+        # Get bin midpoint
+        parts = age_label.replace(' ka', '').split('-')
+        age_mid = (float(parts[0]) + float(parts[1])) / 2
+
+        results.append({
+            'age_bin': age_label,
+            'age_midpoint_ka': age_mid,
+            'n_lakes': len(bin_lakes),
+            'total_area_km2': bin_lakes[area_col].sum(),
+            'mean_area_km2': bin_lakes[area_col].mean(),
+            'median_area_km2': bin_lakes[area_col].median(),
+        })
+
+    df = pd.DataFrame(results)
+
+    if verbose and len(df) > 0:
+        print(f"\n  Age Bin              N lakes    Total Area (km²)   Mean Area")
+        print("  " + "-" * 65)
+        for _, row in df.iterrows():
+            print(f"  {row['age_bin']:<18} {row['n_lakes']:>10,}    {row['total_area_km2']:>14,.1f}   {row['mean_area_km2']:>10.3f}")
+
+    return df
+
+
+def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
+                                      include_uncertainty=True,
+                                      compare_with_illinoian=True,
+                                      area_col=None, min_lake_area=0.01,
+                                      output_dir=None, verbose=True):
+    """
+    Run comprehensive glacial chronosequence analysis using NADI-1 time slices.
+
+    This analysis:
+    1. Discovers available NADI-1 time slices
+    2. Assigns deglaciation ages to lakes based on ice sheet retreat
+    3. Computes lake density as a function of time since deglaciation
+    4. Uses MIN/MAX extents to bracket uncertainty
+    5. Compares with Illinoian and Driftless as end members
+
+    Parameters
+    ----------
+    lake_gdf : gpd.GeoDataFrame
+        Lakes with geometry (Point or Polygon).
+    extent_type : str, optional
+        Primary extent type ('OPTIMAL', 'MIN', or 'MAX'). Default 'OPTIMAL'.
+    include_uncertainty : bool, optional
+        If True, compute ages using all extent types. Default True.
+    compare_with_illinoian : bool, optional
+        If True, add Illinoian (160 ka) and Driftless as reference points.
+    area_col : str, optional
+        Column containing lake area. Default uses COLS['area'].
+    min_lake_area : float, optional
+        Minimum lake area in km². Default 0.01.
+    output_dir : str, optional
+        Directory for output files. Default uses OUTPUT_DIR.
+    verbose : bool, optional
+        Print detailed progress messages.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - lake_gdf: GeoDataFrame with deglaciation ages
+        - time_slices: DataFrame of discovered time slices
+        - density_by_age: Lake density statistics by age bin
+        - decay_model: Fitted exponential decay parameters
+        - uncertainty: Uncertainty estimates from MIN/MAX extents
+    """
+    if verbose:
+        print("\n" + "=" * 70)
+        print("NADI-1 GLACIAL CHRONOSEQUENCE ANALYSIS")
+        print("=" * 70)
+        print("\n  Using Dalton et al. NADI-1 ice sheet reconstructions")
+        print("  to build continuous lake density vs. deglaciation age curve")
+        print("=" * 70)
+
+    if area_col is None:
+        area_col = COLS['area']
+
+    if output_dir is None:
+        output_dir = ensure_output_dir()
+
+    results = {
+        'parameters': {
+            'extent_type': extent_type,
+            'include_uncertainty': include_uncertainty,
+            'min_lake_area': min_lake_area,
+        }
+    }
+
+    # Step 1: Discover available time slices
+    if verbose:
+        print("\n" + "-" * 60)
+        print("STEP 1: DISCOVERING NADI-1 TIME SLICES")
+        print("-" * 60)
+
+    time_slices = discover_nadi1_time_slices(verbose=verbose)
+    results['time_slices'] = time_slices
+
+    n_found = time_slices['exists'].sum()
+    if n_found == 0:
+        print("\n  ERROR: No NADI-1 time slices found!")
+        print(f"  Check directory: {NADI1_CONFIG['directory']}")
+        return results
+
+    # Step 2: Prepare lake data
+    if verbose:
+        print("\n" + "-" * 60)
+        print("STEP 2: PREPARING LAKE DATA")
+        print("-" * 60)
+
+    # Convert to GeoDataFrame if needed
+    if not isinstance(lake_gdf, gpd.GeoDataFrame):
+        print("  Converting to GeoDataFrame...")
+        lon_col = COLS.get('lon', 'Longitude')
+        lat_col = COLS.get('lat', 'Latitude')
+        geometry = [Point(lon, lat) for lon, lat in
+                    zip(lake_gdf[lon_col], lake_gdf[lat_col])]
+        lake_gdf = gpd.GeoDataFrame(lake_gdf, geometry=geometry, crs="EPSG:4326")
+
+    # Filter to minimum area and CONUS (east of -110° to exclude alpine regions)
+    lon_col = COLS.get('lon', 'Longitude')
+    if lon_col in lake_gdf.columns:
+        continental_mask = lake_gdf[lon_col] > NADI1_CONFIG['continental_lon_threshold']
+        lake_gdf_continental = lake_gdf[continental_mask].copy()
+        if verbose:
+            n_orig = len(lake_gdf)
+            n_cont = len(lake_gdf_continental)
+            print(f"  Filtered to continental region (east of {NADI1_CONFIG['continental_lon_threshold']}°):")
+            print(f"    {n_orig:,} → {n_cont:,} lakes")
+    else:
+        lake_gdf_continental = lake_gdf.copy()
+
+    # Apply minimum area filter
+    area_mask = lake_gdf_continental[area_col] >= min_lake_area
+    lake_gdf_filtered = lake_gdf_continental[area_mask].copy()
+
+    if verbose:
+        print(f"  After area filter (≥{min_lake_area} km²): {len(lake_gdf_filtered):,} lakes")
+
+    # Step 3: Assign deglaciation ages
+    if verbose:
+        print("\n" + "-" * 60)
+        print("STEP 3: ASSIGNING DEGLACIATION AGES")
+        print("-" * 60)
+
+    lake_gdf_with_ages = assign_deglaciation_age(
+        lake_gdf_filtered,
+        extent_type=extent_type,
+        include_uncertainty=include_uncertainty,
+        verbose=verbose
+    )
+    results['lake_gdf'] = lake_gdf_with_ages
+
+    # Step 4: Compute density by age
+    if verbose:
+        print("\n" + "-" * 60)
+        print("STEP 4: COMPUTING LAKE DENSITY BY DEGLACIATION AGE")
+        print("-" * 60)
+
+    density_by_age = compute_density_by_deglaciation_age(
+        lake_gdf_with_ages,
+        area_col=area_col,
+        min_lake_area=min_lake_area,
+        verbose=verbose
+    )
+    results['density_by_age'] = density_by_age
+
+    # Step 5: Fit exponential decay model
+    if verbose:
+        print("\n" + "-" * 60)
+        print("STEP 5: FITTING EXPONENTIAL DECAY MODEL")
+        print("-" * 60)
+
+    if len(density_by_age) >= 3:
+        try:
+            from scipy.optimize import curve_fit
+
+            # Model: N(t) = N0 * exp(-λt) where t is time since deglaciation
+            # But we have age (time before present), so younger ages = more time since deglaciation
+            # Actually, deglaciation_age is when ice left, so
+            # time since deglaciation = deglaciation_age (in ka from present)
+            # Younger deglaciation age = more recently deglaciated = less time for decay
+
+            x = density_by_age['age_midpoint_ka'].values
+            y = density_by_age['n_lakes'].values
+
+            # Exponential decay: n = A * exp(-λ * time_since_deglaciation)
+            # time_since_deglaciation ≈ deglaciation_age (ka)
+            # So for Davis hypothesis: n should DECREASE as age DECREASES
+            # (older deglaciation = more time for lake loss)
+
+            # Actually, let's think about this more carefully:
+            # deglaciation_age = 20 ka means ice left 20,000 years ago
+            # deglaciation_age = 2 ka means ice left 2,000 years ago
+            # So time_since_deglaciation = deglaciation_age
+
+            # Davis predicts: lake density decreases with time since deglaciation
+            # So: n decreases as deglaciation_age INCREASES
+            # Model: n = N0 * exp(-λ * deglaciation_age)
+
+            def decay_model(age, n0, lam):
+                return n0 * np.exp(-lam * age)
+
+            # Initial guess
+            p0 = [y.max(), 0.05]
+
+            popt, pcov = curve_fit(decay_model, x, y, p0=p0, maxfev=5000)
+            n0_fit, lambda_fit = popt
+            n0_err, lambda_err = np.sqrt(np.diag(pcov))
+
+            # Half-life = ln(2) / λ
+            half_life = np.log(2) / lambda_fit if lambda_fit > 0 else np.inf
+
+            results['decay_model'] = {
+                'n0': n0_fit,
+                'n0_err': n0_err,
+                'lambda': lambda_fit,
+                'lambda_err': lambda_err,
+                'half_life_ka': half_life,
+                'model_type': 'exponential',
+            }
+
+            if verbose:
+                print(f"\n  Exponential decay fit: N(t) = N0 * exp(-λ * t)")
+                print(f"    N0 = {n0_fit:.0f} ± {n0_err:.0f} lakes")
+                print(f"    λ  = {lambda_fit:.4f} ± {lambda_err:.4f} /ka")
+                print(f"    Half-life = {half_life:.1f} ka")
+
+                # R-squared
+                y_pred = decay_model(x, *popt)
+                ss_res = np.sum((y - y_pred) ** 2)
+                ss_tot = np.sum((y - np.mean(y)) ** 2)
+                r2 = 1 - ss_res / ss_tot
+                results['decay_model']['r2'] = r2
+                print(f"    R² = {r2:.3f}")
+
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not fit decay model: {e}")
+            results['decay_model'] = None
+    else:
+        results['decay_model'] = None
+
+    # Step 6: Add Illinoian and Driftless comparison
+    if compare_with_illinoian and verbose:
+        print("\n" + "-" * 60)
+        print("STEP 6: COMPARISON WITH ILLINOIAN AND DRIFTLESS")
+        print("-" * 60)
+        print("\n  Note: This requires classification from run_glacial_chronosequence_analysis()")
+        print("  Run that analysis first to get Wisconsin/Illinoian/Driftless comparison.")
+
+    # Step 7: Uncertainty analysis
+    if include_uncertainty:
+        if verbose:
+            print("\n" + "-" * 60)
+            print("STEP 7: UNCERTAINTY ANALYSIS (MIN/MAX EXTENTS)")
+            print("-" * 60)
+
+        uncertainty_data = {}
+
+        for ext in ['MIN', 'MAX']:
+            if f'deglac_age_{ext.lower()}' in lake_gdf_with_ages.columns:
+                ages = lake_gdf_with_ages[f'deglac_age_{ext.lower()}'].dropna()
+                uncertainty_data[ext] = {
+                    'n_assigned': len(ages),
+                    'mean_age_ka': ages.mean(),
+                    'median_age_ka': ages.median(),
+                    'std_age_ka': ages.std(),
+                }
+
+        results['uncertainty'] = uncertainty_data
+
+        if verbose and uncertainty_data:
+            print("\n  Extent Type    N assigned    Mean Age    Std Dev")
+            print("  " + "-" * 50)
+            print(f"  {'OPTIMAL':<12} {len(lake_gdf_with_ages['deglaciation_age'].dropna()):>10,}    "
+                  f"{lake_gdf_with_ages['deglaciation_age'].mean():>8.1f}    "
+                  f"{lake_gdf_with_ages['deglaciation_age'].std():>8.1f}")
+            for ext, data in uncertainty_data.items():
+                print(f"  {ext:<12} {data['n_assigned']:>10,}    "
+                      f"{data['mean_age_ka']:>8.1f}    {data['std_age_ka']:>8.1f}")
+
+    # Summary
+    if verbose:
+        print("\n" + "=" * 70)
+        print("NADI-1 CHRONOSEQUENCE ANALYSIS COMPLETE")
+        print("=" * 70)
+
+        n_glaciated = lake_gdf_with_ages['was_glaciated'].sum()
+        n_with_age = lake_gdf_with_ages['deglaciation_age'].notna().sum()
+
+        print(f"\n  Summary:")
+        print(f"    Lakes analyzed: {len(lake_gdf_with_ages):,}")
+        print(f"    Were glaciated (Wisconsin): {n_glaciated:,}")
+        print(f"    With deglaciation ages: {n_with_age:,}")
+
+        if results.get('decay_model'):
+            print(f"\n  Key finding:")
+            print(f"    Estimated lake half-life: {results['decay_model']['half_life_ka']:.0f} ka")
+            print(f"    (Time for lake density to decrease by 50%)")
+
+    return results
+
+
 if __name__ == "__main__":
     print("Glacial Chronosequence Analysis Module")
     print("=" * 40)
@@ -3418,5 +4127,8 @@ if __name__ == "__main__":
     print("\nFor Dalton 18ka specific analysis:")
     print("  from glacial_chronosequence import run_dalton_18ka_analysis")
     print("  results = run_dalton_18ka_analysis(lake_df)")
+    print("\nFor NADI-1 comprehensive chronosequence (1-25 ka):")
+    print("  from glacial_chronosequence import run_nadi1_chronosequence_analysis")
+    print("  results = run_nadi1_chronosequence_analysis(lake_gdf)")
     print("\nThis module tests Davis's hypothesis that lake density")
     print("decreases with time since glaciation.")
