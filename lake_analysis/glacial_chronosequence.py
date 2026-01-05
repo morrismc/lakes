@@ -3837,9 +3837,300 @@ def compute_density_by_deglaciation_age(lake_gdf, age_bins=None,
     return df
 
 
+def fit_bayesian_decay_model(stages, densities, n_lakes, ages_point,
+                              ages_lower=None, ages_upper=None,
+                              density_cv=0.10, n_samples=4000, n_tune=2000,
+                              output_dir=None, verbose=True):
+    """
+    Fit Bayesian exponential decay model to lake density data.
+
+    Uses PyMC to properly handle uncertainty in glacial stage ages,
+    particularly the highly uncertain Driftless age.
+
+    Parameters
+    ----------
+    stages : list
+        Names of glacial stages (e.g., ['Wisconsin', 'Illinoian', 'Driftless'])
+    densities : array-like
+        Lake densities for each stage (lakes per 1000 km²)
+    n_lakes : array-like
+        Number of lakes in each stage
+    ages_point : array-like
+        Point estimates of ages in ka (e.g., [20, 160, 1500])
+    ages_lower : array-like, optional
+        Lower bounds on ages in ka. If None, uses ages_point * 0.9
+    ages_upper : array-like, optional
+        Upper bounds on ages in ka. If None, uses ages_point * 1.2 except
+        Driftless which gets ages_point * 2
+    density_cv : float
+        Coefficient of variation for density uncertainty. Default 0.10 (10%)
+    n_samples : int
+        Number of posterior samples per chain. Default 4000.
+    n_tune : int
+        Number of tuning samples per chain. Default 2000.
+    output_dir : str, optional
+        Directory for saving trace and figures.
+    verbose : bool
+        Print progress messages.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - trace: PyMC InferenceData object
+        - summary: DataFrame with posterior summaries
+        - D0: Initial density posterior (mean, CI)
+        - k: Decay rate posterior (mean, CI)
+        - half_life: Half-life posterior (mean, CI)
+        - age_posteriors: Dict of age posteriors for each stage
+        - curves: Posterior predictive decay curves
+        - model_type: 'bayesian'
+
+    Notes
+    -----
+    The model assumes exponential decay: D(t) = D0 * exp(-k * t)
+
+    Priors:
+    - D0 ~ Normal(max_density, 30) - informed by Wisconsin density
+    - k ~ HalfNormal(0.002) - weakly informative
+    - Wisconsin/Illinoian ages ~ TruncatedNormal within bounds
+    - Driftless age ~ 1500 + Exponential(1/500) - allows for older ages
+
+    Example
+    -------
+    >>> stages = ['Wisconsin', 'Illinoian', 'Driftless']
+    >>> densities = [228.2, 202.8, 69.4]
+    >>> n_lakes = [279582, 29404, 1766]
+    >>> ages_point = [20, 160, 1500]
+    >>> results = fit_bayesian_decay_model(stages, densities, n_lakes, ages_point)
+    >>> print(f"Half-life: {results['half_life']['mean']:.0f} ka")
+    """
+    try:
+        import pymc as pm
+        import arviz as az
+    except ImportError:
+        if verbose:
+            print("  Warning: PyMC not installed. Cannot fit Bayesian model.")
+            print("  Install with: pip install pymc arviz")
+        return None
+
+    densities = np.array(densities)
+    n_lakes = np.array(n_lakes)
+    ages_point = np.array(ages_point)
+    n_stages = len(stages)
+
+    # Set default bounds if not provided
+    if ages_lower is None:
+        ages_lower = ages_point * 0.9
+    else:
+        ages_lower = np.array(ages_lower)
+
+    if ages_upper is None:
+        ages_upper = ages_point.copy()
+        ages_upper[:-1] *= 1.2  # 20% upper bound for well-constrained ages
+        ages_upper[-1] *= 2.0   # Driftless could be much older
+    else:
+        ages_upper = np.array(ages_upper)
+
+    # Density uncertainty
+    density_sigma = densities * density_cv
+
+    if verbose:
+        print("\n" + "=" * 60)
+        print("BAYESIAN DECAY MODEL")
+        print("=" * 60)
+        print("\n  Data:")
+        for i, stage in enumerate(stages):
+            print(f"    {stage:12s}: density={densities[i]:.1f} ± {density_sigma[i]:.1f}, "
+                  f"age={ages_point[i]} [{ages_lower[i]:.0f}-{ages_upper[i]:.0f}] ka")
+
+    # Build PyMC model
+    if verbose:
+        print("\n  Building Bayesian model...")
+
+    with pm.Model() as decay_model:
+
+        # --- PRIORS ---
+
+        # Initial lake density D0
+        # Informative prior centered on max observed density
+        D0 = pm.Normal('D0', mu=densities.max() + 10, sigma=30)
+
+        # Decay rate k (per ka)
+        # Weakly informative: expect half-life between ~100 ka and ~5000 ka
+        k = pm.HalfNormal('k', sigma=0.002)
+
+        # Age priors - handle Driftless specially
+        age_vars = []
+        for i, stage in enumerate(stages):
+            if 'driftless' in stage.lower():
+                # Driftless age: must be >1500 ka, could be much older
+                # Use shifted exponential: age = min_age + Exp(lambda)
+                min_age = ages_lower[i]
+                excess = pm.Exponential(f'{stage}_age_excess', lam=1/500)
+                age_var = pm.Deterministic(f'{stage}_age', min_age + excess)
+            else:
+                # Well-constrained ages: truncated normal
+                age_var = pm.TruncatedNormal(
+                    f'{stage}_age',
+                    mu=ages_point[i],
+                    sigma=(ages_upper[i] - ages_lower[i]) / 4,  # ~95% within bounds
+                    lower=ages_lower[i],
+                    upper=ages_upper[i]
+                )
+            age_vars.append(age_var)
+
+        # Combine ages into array
+        ages = pm.math.stack(age_vars)
+
+        # --- LIKELIHOOD ---
+
+        # Exponential decay model: D(t) = D0 * exp(-k * t)
+        mu = D0 * pm.math.exp(-k * ages)
+
+        # Observation model - normal likelihood
+        obs = pm.Normal('obs', mu=mu, sigma=density_sigma, observed=densities)
+
+        # --- DERIVED QUANTITIES ---
+
+        # Half-life = ln(2) / k
+        half_life = pm.Deterministic('half_life', pm.math.log(2) / k)
+
+        # Density at very long times (equilibrium check)
+        density_at_5Ma = pm.Deterministic('density_at_5Ma', D0 * pm.math.exp(-k * 5000))
+
+    # Sample posterior
+    if verbose:
+        print("  Sampling posterior (this may take a few minutes)...")
+
+    with decay_model:
+        trace = pm.sample(
+            draws=n_samples,
+            tune=n_tune,
+            chains=4,
+            cores=1,  # Use 1 core for compatibility
+            random_seed=42,
+            return_inferencedata=True,
+            progressbar=verbose
+        )
+
+    # Extract posterior summaries
+    if verbose:
+        print("\n  Computing posterior summaries...")
+
+    # Get summary statistics
+    summary = az.summary(trace, var_names=['D0', 'k', 'half_life'] +
+                         [f'{s}_age' for s in stages])
+
+    # Extract key posteriors
+    D0_post = trace.posterior['D0'].values.flatten()
+    k_post = trace.posterior['k'].values.flatten()
+    half_life_post = trace.posterior['half_life'].values.flatten()
+
+    results = {
+        'trace': trace,
+        'summary': summary,
+        'model_type': 'bayesian',
+        'D0': {
+            'mean': float(np.mean(D0_post)),
+            'std': float(np.std(D0_post)),
+            'ci_lower': float(np.percentile(D0_post, 2.5)),
+            'ci_upper': float(np.percentile(D0_post, 97.5)),
+            'samples': D0_post
+        },
+        'k': {
+            'mean': float(np.mean(k_post)),
+            'std': float(np.std(k_post)),
+            'ci_lower': float(np.percentile(k_post, 2.5)),
+            'ci_upper': float(np.percentile(k_post, 97.5)),
+            'samples': k_post
+        },
+        'half_life': {
+            'mean': float(np.mean(half_life_post)),
+            'std': float(np.std(half_life_post)),
+            'ci_lower': float(np.percentile(half_life_post, 2.5)),
+            'ci_upper': float(np.percentile(half_life_post, 97.5)),
+            'samples': half_life_post
+        },
+        'age_posteriors': {},
+        'data': {
+            'stages': stages,
+            'densities': densities.tolist(),
+            'n_lakes': n_lakes.tolist(),
+            'ages_point': ages_point.tolist(),
+            'ages_lower': ages_lower.tolist(),
+            'ages_upper': ages_upper.tolist(),
+            'density_sigma': density_sigma.tolist()
+        }
+    }
+
+    # Extract age posteriors
+    for stage in stages:
+        age_post = trace.posterior[f'{stage}_age'].values.flatten()
+        results['age_posteriors'][stage] = {
+            'mean': float(np.mean(age_post)),
+            'std': float(np.std(age_post)),
+            'ci_lower': float(np.percentile(age_post, 2.5)),
+            'ci_upper': float(np.percentile(age_post, 97.5)),
+            'samples': age_post
+        }
+
+    # Generate posterior predictive curves
+    age_grid = np.linspace(0, 3000, 300)
+    n_curves = min(500, len(D0_post))
+    idx = np.random.choice(len(D0_post), n_curves, replace=False)
+
+    curves = np.zeros((n_curves, len(age_grid)))
+    for i, j in enumerate(idx):
+        curves[i, :] = D0_post[j] * np.exp(-k_post[j] * age_grid)
+
+    results['curves'] = {
+        'age_grid': age_grid,
+        'median': np.median(curves, axis=0),
+        'ci_lower_95': np.percentile(curves, 2.5, axis=0),
+        'ci_upper_95': np.percentile(curves, 97.5, axis=0),
+        'ci_lower_50': np.percentile(curves, 25, axis=0),
+        'ci_upper_50': np.percentile(curves, 75, axis=0),
+    }
+
+    # Compute correlation between Driftless age and half-life
+    if 'Driftless' in stages:
+        driftless_post = trace.posterior['Driftless_age'].values.flatten()
+        corr = np.corrcoef(driftless_post, half_life_post)[0, 1]
+        results['driftless_halflife_correlation'] = float(corr)
+
+    # Save trace if output directory provided
+    if output_dir:
+        trace_path = os.path.join(output_dir, 'bayesian_trace.nc')
+        trace.to_netcdf(trace_path)
+        if verbose:
+            print(f"  Trace saved to: {trace_path}")
+
+    if verbose:
+        print("\n  POSTERIOR ESTIMATES (mean [95% CI]):")
+        print(f"    D₀ (initial density):  {results['D0']['mean']:.1f} "
+              f"[{results['D0']['ci_lower']:.1f}, {results['D0']['ci_upper']:.1f}] lakes/1000 km²")
+        print(f"    k (decay rate):        {results['k']['mean']:.6f} "
+              f"[{results['k']['ci_lower']:.6f}, {results['k']['ci_upper']:.6f}] per ka")
+        print(f"    Half-life:             {results['half_life']['mean']:.0f} "
+              f"[{results['half_life']['ci_lower']:.0f}, {results['half_life']['ci_upper']:.0f}] ka")
+
+        for stage in stages:
+            ap = results['age_posteriors'][stage]
+            print(f"    {stage} age:         {ap['mean']:.0f} "
+                  f"[{ap['ci_lower']:.0f}, {ap['ci_upper']:.0f}] ka")
+
+        if 'driftless_halflife_correlation' in results:
+            print(f"\n  Driftless age vs half-life correlation: r = {results['driftless_halflife_correlation']:.3f}")
+
+    return results
+
+
 def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                                       include_uncertainty=True,
                                       compare_with_illinoian=True,
+                                      use_bayesian=True,
+                                      bayesian_samples=4000, bayesian_tune=2000,
                                       area_col=None, min_lake_area=0.01,
                                       output_dir=None, verbose=True):
     """
@@ -3849,8 +4140,9 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
     1. Discovers available NADI-1 time slices
     2. Assigns deglaciation ages to lakes based on ice sheet retreat
     3. Computes lake density as a function of time since deglaciation
-    4. Uses MIN/MAX extents to bracket uncertainty
-    5. Compares with Illinoian and Driftless as end members
+    4. Fits decay model (Bayesian with PyMC or frequentist curve_fit)
+    5. Uses MIN/MAX extents to bracket uncertainty
+    6. Compares with Illinoian and Driftless as end members
 
     Parameters
     ----------
@@ -3862,6 +4154,13 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
         If True, compute ages using all extent types. Default True.
     compare_with_illinoian : bool, optional
         If True, add Illinoian (160 ka) and Driftless as reference points.
+    use_bayesian : bool, optional
+        If True (default), use Bayesian model with PyMC for proper uncertainty
+        quantification. Falls back to frequentist curve_fit if PyMC not available.
+    bayesian_samples : int, optional
+        Number of posterior samples per chain for Bayesian model. Default 4000.
+    bayesian_tune : int, optional
+        Number of tuning samples per chain for Bayesian model. Default 2000.
     area_col : str, optional
         Column containing lake area. Default uses COLS['area'].
     min_lake_area : float, optional
@@ -3878,7 +4177,8 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
         - lake_gdf: GeoDataFrame with deglaciation ages
         - time_slices: DataFrame of discovered time slices
         - density_by_age: Lake density statistics by age bin
-        - decay_model: Fitted exponential decay parameters
+        - decay_model: Fitted decay parameters (Bayesian or frequentist)
+        - bayesian_model: Full Bayesian results (if use_bayesian=True)
         - uncertainty: Uncertainty estimates from MIN/MAX extents
     """
     if verbose:
@@ -3981,79 +4281,122 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
     )
     results['density_by_age'] = density_by_age
 
-    # Step 5: Fit exponential decay model
+    # Step 5: Fit decay model (Bayesian or frequentist)
     if verbose:
         print("\n" + "-" * 60)
-        print("STEP 5: FITTING EXPONENTIAL DECAY MODEL")
+        model_type = "BAYESIAN" if use_bayesian else "FREQUENTIST"
+        print(f"STEP 5: FITTING {model_type} DECAY MODEL")
         print("-" * 60)
 
     if len(density_by_age) >= 3:
-        try:
-            from scipy.optimize import curve_fit
+        x = density_by_age['age_midpoint_ka'].values
+        y = density_by_age['n_lakes'].values
 
-            # Model: N(t) = N0 * exp(-λt) where t is time since deglaciation
-            # But we have age (time before present), so younger ages = more time since deglaciation
-            # Actually, deglaciation_age is when ice left, so
-            # time since deglaciation = deglaciation_age (in ka from present)
-            # Younger deglaciation age = more recently deglaciated = less time for decay
+        if use_bayesian:
+            # Try Bayesian model first
+            try:
+                # For Bayesian model, we need stage-level data
+                # Use the density_by_age bins as "stages"
+                stages = [f"Age_{int(age)}ka" for age in x]
+                densities = y.astype(float)
+                n_lakes_arr = y.copy()
 
-            x = density_by_age['age_midpoint_ka'].values
-            y = density_by_age['n_lakes'].values
+                # Calculate densities per 1000 km² if we have area information
+                # For now, use raw counts normalized
+                total_area_km2 = density_by_age.get('total_area_km2', pd.Series([1]*len(y)))
+                if 'total_area_km2' in density_by_age.columns:
+                    # Estimate zone area from lake density pattern
+                    # This is approximate - would need actual zone areas
+                    densities = y  # Use raw counts for now
 
-            # Exponential decay: n = A * exp(-λ * time_since_deglaciation)
-            # time_since_deglaciation ≈ deglaciation_age (ka)
-            # So for Davis hypothesis: n should DECREASE as age DECREASES
-            # (older deglaciation = more time for lake loss)
+                bayesian_results = fit_bayesian_decay_model(
+                    stages=stages,
+                    densities=densities,
+                    n_lakes=n_lakes_arr,
+                    ages_point=x,
+                    ages_lower=x * 0.9,
+                    ages_upper=x * 1.1,
+                    density_cv=0.10,
+                    n_samples=bayesian_samples,
+                    n_tune=bayesian_tune,
+                    output_dir=output_dir,
+                    verbose=verbose
+                )
 
-            # Actually, let's think about this more carefully:
-            # deglaciation_age = 20 ka means ice left 20,000 years ago
-            # deglaciation_age = 2 ka means ice left 2,000 years ago
-            # So time_since_deglaciation = deglaciation_age
+                if bayesian_results is not None:
+                    results['bayesian_model'] = bayesian_results
+                    # Extract summary for backward compatibility
+                    results['decay_model'] = {
+                        'n0': bayesian_results['D0']['mean'],
+                        'n0_err': bayesian_results['D0']['std'],
+                        'n0_ci': (bayesian_results['D0']['ci_lower'],
+                                  bayesian_results['D0']['ci_upper']),
+                        'lambda': bayesian_results['k']['mean'],
+                        'lambda_err': bayesian_results['k']['std'],
+                        'lambda_ci': (bayesian_results['k']['ci_lower'],
+                                      bayesian_results['k']['ci_upper']),
+                        'half_life_ka': bayesian_results['half_life']['mean'],
+                        'half_life_ci': (bayesian_results['half_life']['ci_lower'],
+                                         bayesian_results['half_life']['ci_upper']),
+                        'model_type': 'bayesian',
+                    }
+                else:
+                    # Fall back to frequentist
+                    if verbose:
+                        print("  Falling back to frequentist curve_fit...")
+                    use_bayesian = False
 
-            # Davis predicts: lake density decreases with time since deglaciation
-            # So: n decreases as deglaciation_age INCREASES
-            # Model: n = N0 * exp(-λ * deglaciation_age)
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Bayesian model failed: {e}")
+                    print("  Falling back to frequentist curve_fit...")
+                use_bayesian = False
 
-            def decay_model(age, n0, lam):
-                return n0 * np.exp(-lam * age)
+        if not use_bayesian or results.get('decay_model') is None:
+            # Frequentist approach using scipy curve_fit
+            try:
+                from scipy.optimize import curve_fit
 
-            # Initial guess
-            p0 = [y.max(), 0.05]
+                def decay_func(age, n0, lam):
+                    return n0 * np.exp(-lam * age)
 
-            popt, pcov = curve_fit(decay_model, x, y, p0=p0, maxfev=5000)
-            n0_fit, lambda_fit = popt
-            n0_err, lambda_err = np.sqrt(np.diag(pcov))
+                # Initial guess
+                p0 = [y.max(), 0.05]
 
-            # Half-life = ln(2) / λ
-            half_life = np.log(2) / lambda_fit if lambda_fit > 0 else np.inf
+                popt, pcov = curve_fit(decay_func, x, y, p0=p0, maxfev=5000)
+                n0_fit, lambda_fit = popt
+                n0_err, lambda_err = np.sqrt(np.diag(pcov))
 
-            results['decay_model'] = {
-                'n0': n0_fit,
-                'n0_err': n0_err,
-                'lambda': lambda_fit,
-                'lambda_err': lambda_err,
-                'half_life_ka': half_life,
-                'model_type': 'exponential',
-            }
+                # Half-life = ln(2) / λ
+                half_life = np.log(2) / lambda_fit if lambda_fit > 0 else np.inf
 
-            if verbose:
-                print(f"\n  Exponential decay fit: N(t) = N0 * exp(-λ * t)")
-                print(f"    N0 = {n0_fit:.0f} ± {n0_err:.0f} lakes")
-                print(f"    λ  = {lambda_fit:.4f} ± {lambda_err:.4f} /ka")
-                print(f"    Half-life = {half_life:.1f} ka")
+                results['decay_model'] = {
+                    'n0': n0_fit,
+                    'n0_err': n0_err,
+                    'lambda': lambda_fit,
+                    'lambda_err': lambda_err,
+                    'half_life_ka': half_life,
+                    'model_type': 'frequentist',
+                }
 
-                # R-squared
-                y_pred = decay_model(x, *popt)
-                ss_res = np.sum((y - y_pred) ** 2)
-                ss_tot = np.sum((y - np.mean(y)) ** 2)
-                r2 = 1 - ss_res / ss_tot
-                results['decay_model']['r2'] = r2
-                print(f"    R² = {r2:.3f}")
+                if verbose:
+                    print(f"\n  Frequentist fit: N(t) = N0 * exp(-λ * t)")
+                    print(f"    N0 = {n0_fit:.0f} ± {n0_err:.0f} lakes")
+                    print(f"    λ  = {lambda_fit:.4f} ± {lambda_err:.4f} /ka")
+                    print(f"    Half-life = {half_life:.1f} ka")
 
-        except Exception as e:
-            if verbose:
-                print(f"  Warning: Could not fit decay model: {e}")
-            results['decay_model'] = None
+                    # R-squared
+                    y_pred = decay_func(x, *popt)
+                    ss_res = np.sum((y - y_pred) ** 2)
+                    ss_tot = np.sum((y - np.mean(y)) ** 2)
+                    r2 = 1 - ss_res / ss_tot
+                    results['decay_model']['r2'] = r2
+                    print(f"    R² = {r2:.3f}")
+
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Could not fit decay model: {e}")
+                results['decay_model'] = None
     else:
         results['decay_model'] = None
 
