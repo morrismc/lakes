@@ -3883,12 +3883,39 @@ def compute_glaciated_area_timeseries(config=None, verbose=True):
     # Setup projection for area calculation (Albers Equal Area for North America)
     wgs84 = pyproj.CRS('EPSG:4326')
     albers = pyproj.CRS('EPSG:5070')  # NAD83 / Conus Albers
-    transformer = pyproj.Transformer.from_crs(wgs84, albers, always_xy=True)
+    transformer_to_albers = pyproj.Transformer.from_crs(wgs84, albers, always_xy=True)
 
     def project_and_area(geom):
         """Project geometry and calculate area in km²."""
-        projected = transform(transformer.transform, geom)
+        projected = transform(transformer_to_albers.transform, geom)
         return projected.area / 1e6  # m² to km²
+
+    def filter_continental(gdf, lon_threshold):
+        """Filter to continental ice east of threshold longitude."""
+        if gdf is None or len(gdf) == 0:
+            return gpd.GeoDataFrame()
+
+        try:
+            # Ensure we have a valid CRS
+            if gdf.crs is None:
+                if verbose:
+                    print(f"  Warning: No CRS defined, assuming WGS84")
+                gdf = gdf.set_crs('EPSG:4326')
+
+            # Reproject to WGS84 to get longitude values
+            gdf_wgs84 = gdf.to_crs('EPSG:4326')
+
+            # Get centroid longitude
+            centroids = gdf_wgs84.geometry.centroid
+            lons = centroids.x
+
+            # Filter by longitude (continental = east of threshold)
+            mask = lons > lon_threshold
+            return gdf[mask].copy()
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not filter to continental region: {e}")
+            return gdf  # Return unfiltered if error
 
     results = []
     for age in ages:
@@ -3901,14 +3928,24 @@ def compute_glaciated_area_timeseries(config=None, verbose=True):
 
             # Filter to continental ice (east of threshold longitude)
             lon_threshold = config.get('continental_lon_threshold', -110.0)
-            continental = gdf[gdf.geometry.centroid.x > lon_threshold].copy()
+            continental = filter_continental(gdf, lon_threshold)
 
             if len(continental) == 0:
                 continue
 
-            # Calculate total area
-            total_area = continental.geometry.apply(project_and_area).sum()
+            # Calculate total area - reproject to WGS84 first for area calculation
+            try:
+                continental_wgs84 = continental.to_crs('EPSG:4326')
+                total_area = continental_wgs84.geometry.apply(project_and_area).sum()
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Area calculation failed for {age} ka {extent_type}: {e}")
+                total_area = 0
+
             areas[extent_type] = total_area
+
+            if verbose:
+                print(f"  Loaded {age} ka ({extent_type}): {total_area:,.0f} km²")
 
         if areas:
             area_min = areas.get('MIN', areas.get('OPTIMAL', 0))
@@ -4006,11 +4043,42 @@ def compute_density_by_deglaciation_age_with_area(lake_gdf, age_bins=None,
     # Setup projection for area calculation
     wgs84 = pyproj.CRS('EPSG:4326')
     albers = pyproj.CRS('EPSG:5070')
-    transformer = pyproj.Transformer.from_crs(wgs84, albers, always_xy=True)
+    transformer_to_albers = pyproj.Transformer.from_crs(wgs84, albers, always_xy=True)
 
     def project_and_area(geom):
-        projected = transform(transformer.transform, geom)
+        """Project geometry from WGS84 to Albers and calculate area in km²."""
+        projected = transform(transformer_to_albers.transform, geom)
         return projected.area / 1e6
+
+    def filter_continental_and_area(gdf, lon_threshold):
+        """Filter to continental ice and calculate area."""
+        if gdf is None or len(gdf) == 0:
+            return 0
+
+        try:
+            # Ensure we have a valid CRS
+            if gdf.crs is None:
+                gdf = gdf.set_crs('EPSG:4326')
+
+            # Reproject to WGS84 to get longitude values
+            gdf_wgs84 = gdf.to_crs('EPSG:4326')
+
+            # Filter by centroid longitude (continental = east of threshold)
+            centroids = gdf_wgs84.geometry.centroid
+            lons = centroids.x
+            mask = lons > lon_threshold
+
+            if mask.sum() == 0:
+                return 0
+
+            # Calculate area for continental features
+            continental_wgs84 = gdf_wgs84[mask]
+            total_area = continental_wgs84.geometry.apply(project_and_area).sum()
+            return total_area
+        except Exception as e:
+            if verbose:
+                print(f"    Warning: Area calculation failed: {e}")
+            return 0
 
     # Bin lakes by age
     glaciated['age_bin'] = pd.cut(
@@ -4037,6 +4105,7 @@ def compute_density_by_deglaciation_age_with_area(lake_gdf, age_bins=None,
         # Compute landscape area deglaciated in this interval
         # Load ice extents at bin boundaries
         landscape_areas = {}
+        lon_threshold = config.get('continental_lon_threshold', -110.0)
 
         for extent_type in config['extent_types']:
             # Get ice extent at start of bin (younger = smaller ice)
@@ -4048,30 +4117,9 @@ def compute_density_by_deglaciation_age_with_area(lake_gdf, age_bins=None,
                 # If no data for this time, try nearby
                 continue
 
-            # Filter to continental ice
-            lon_threshold = config.get('continental_lon_threshold', -110.0)
-
-            if gdf_end is not None:
-                continental_end = gdf_end[gdf_end.geometry.centroid.x > lon_threshold]
-            else:
-                continental_end = gpd.GeoDataFrame()
-
-            if gdf_start is not None:
-                continental_start = gdf_start[gdf_start.geometry.centroid.x > lon_threshold]
-            else:
-                continental_start = gpd.GeoDataFrame()
-
-            # Calculate area of older extent
-            if len(continental_end) > 0:
-                area_end = continental_end.geometry.apply(project_and_area).sum()
-            else:
-                area_end = 0
-
-            # Calculate area of younger extent
-            if len(continental_start) > 0:
-                area_start = continental_start.geometry.apply(project_and_area).sum()
-            else:
-                area_start = 0
+            # Calculate continental ice area at each time using proper CRS handling
+            area_end = filter_continental_and_area(gdf_end, lon_threshold)
+            area_start = filter_continental_and_area(gdf_start, lon_threshold)
 
             # Deglaciated area is the difference
             # (area at older time) - (area at younger time)
@@ -4727,13 +4775,150 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
     else:
         results['decay_model'] = None
 
-    # Step 6: Add Illinoian and Driftless comparison
-    if compare_with_illinoian and verbose:
-        print("\n" + "-" * 60)
-        print("STEP 6: COMPARISON WITH ILLINOIAN AND DRIFTLESS")
-        print("-" * 60)
-        print("\n  Note: This requires classification from run_glacial_chronosequence_analysis()")
-        print("  Run that analysis first to get Wisconsin/Illinoian/Driftless comparison.")
+    # Step 6: Add Illinoian and Driftless end members
+    if compare_with_illinoian:
+        if verbose:
+            print("\n" + "-" * 60)
+            print("STEP 6: ADDING DEEP TIME END MEMBERS (ILLINOIAN & DRIFTLESS)")
+            print("-" * 60)
+
+        try:
+            # Load glacial boundary shapefiles
+            wisconsin_gdf = load_wisconsin_extent()
+            illinoian_gdf = load_illinoian_extent()
+            driftless_gdf = load_driftless_area(use_definite=True)
+
+            # Compute zone areas using equal-area projection
+            import pyproj
+            from shapely.ops import transform as shp_transform
+
+            albers = pyproj.CRS('EPSG:5070')
+            transformer_to_albers = pyproj.Transformer.from_crs('EPSG:4326', albers, always_xy=True)
+
+            def compute_zone_area(gdf):
+                """Compute area in km² for a GeoDataFrame."""
+                if gdf is None or len(gdf) == 0:
+                    return 0
+                try:
+                    gdf_wgs84 = gdf.to_crs('EPSG:4326')
+                    total_area = 0
+                    for geom in gdf_wgs84.geometry:
+                        proj_geom = shp_transform(transformer_to_albers.transform, geom)
+                        total_area += proj_geom.area / 1e6  # m² to km²
+                    return total_area
+                except Exception as e:
+                    if verbose:
+                        print(f"    Warning: Could not compute zone area: {e}")
+                    return 0
+
+            # Compute zone areas
+            zone_areas = {}
+            for name, gdf in [('wisconsin', wisconsin_gdf),
+                             ('illinoian', illinoian_gdf),
+                             ('driftless', driftless_gdf)]:
+                area = compute_zone_area(gdf)
+                zone_areas[name] = area
+                if verbose:
+                    print(f"    {name.capitalize()} zone area: {area:,.0f} km²")
+
+            # Classify lakes by glacial stage using spatial join
+            if verbose:
+                print("\n  Classifying lakes by glacial stage...")
+
+            lake_gdf_staged = lake_gdf_with_ages.copy()
+            lake_gdf_staged['glacial_stage'] = 'unclassified'
+
+            # Assign glacial stages (order matters - most specific first)
+            if wisconsin_gdf is not None and len(wisconsin_gdf) > 0:
+                wisconsin_union = wisconsin_gdf.to_crs(lake_gdf_staged.crs).unary_union
+                in_wisconsin = lake_gdf_staged.geometry.within(wisconsin_union)
+                lake_gdf_staged.loc[in_wisconsin, 'glacial_stage'] = 'Wisconsin'
+
+            if illinoian_gdf is not None and len(illinoian_gdf) > 0:
+                illinoian_union = illinoian_gdf.to_crs(lake_gdf_staged.crs).unary_union
+                in_illinoian = lake_gdf_staged.geometry.within(illinoian_union)
+                # Only mark as Illinoian if not already Wisconsin
+                in_illinoian_only = in_illinoian & (lake_gdf_staged['glacial_stage'] != 'Wisconsin')
+                lake_gdf_staged.loc[in_illinoian_only, 'glacial_stage'] = 'Illinoian'
+
+            if driftless_gdf is not None and len(driftless_gdf) > 0:
+                driftless_union = driftless_gdf.to_crs(lake_gdf_staged.crs).unary_union
+                in_driftless = lake_gdf_staged.geometry.within(driftless_union)
+                lake_gdf_staged.loc[in_driftless, 'glacial_stage'] = 'Driftless'
+
+            # Compute densities by glacial stage
+            stage_densities = {}
+            for stage in ['Wisconsin', 'Illinoian', 'Driftless']:
+                stage_lakes = lake_gdf_staged[lake_gdf_staged['glacial_stage'] == stage]
+                n_lakes = len(stage_lakes)
+
+                zone_key = stage.lower()
+                zone_area = zone_areas.get(zone_key, 0)
+
+                if zone_area > 0:
+                    density = (n_lakes / zone_area) * 1000  # per 1000 km²
+                else:
+                    density = np.nan
+
+                stage_densities[stage] = {
+                    'n_lakes': n_lakes,
+                    'zone_area_km2': zone_area,
+                    'density': density,
+                }
+
+                if verbose:
+                    print(f"    {stage}: {n_lakes:,} lakes, {zone_area:,.0f} km², "
+                          f"density = {density:.2f} per 1000 km²" if not np.isnan(density) else f"    {stage}: {n_lakes:,} lakes")
+
+            results['glacial_stage_densities'] = stage_densities
+            results['lake_gdf_staged'] = lake_gdf_staged
+
+            # Add end member data points for combined model
+            # Ages from GLACIAL_CHRONOLOGY
+            end_member_data = []
+
+            if stage_densities.get('Wisconsin', {}).get('density') and not np.isnan(stage_densities['Wisconsin']['density']):
+                end_member_data.append({
+                    'stage': 'Wisconsin',
+                    'age_ka': 20.0,
+                    'age_lower_ka': 15.0,
+                    'age_upper_ka': 25.0,
+                    'density': stage_densities['Wisconsin']['density'],
+                    'n_lakes': stage_densities['Wisconsin']['n_lakes'],
+                })
+
+            if stage_densities.get('Illinoian', {}).get('density') and not np.isnan(stage_densities['Illinoian']['density']):
+                end_member_data.append({
+                    'stage': 'Illinoian',
+                    'age_ka': 160.0,
+                    'age_lower_ka': 130.0,
+                    'age_upper_ka': 190.0,
+                    'density': stage_densities['Illinoian']['density'],
+                    'n_lakes': stage_densities['Illinoian']['n_lakes'],
+                })
+
+            if stage_densities.get('Driftless', {}).get('density') and not np.isnan(stage_densities['Driftless']['density']):
+                end_member_data.append({
+                    'stage': 'Driftless',
+                    'age_ka': 1500.0,  # >1.5 Ma never glaciated
+                    'age_lower_ka': 1000.0,
+                    'age_upper_ka': 3000.0,  # Allow very old ages
+                    'density': stage_densities['Driftless']['density'],
+                    'n_lakes': stage_densities['Driftless']['n_lakes'],
+                })
+
+            results['end_member_data'] = end_member_data
+
+            if verbose and end_member_data:
+                print("\n  Deep time end members for model:")
+                for em in end_member_data:
+                    print(f"    {em['stage']}: age={em['age_ka']:.0f} ka [{em['age_lower_ka']:.0f}-{em['age_upper_ka']:.0f}], "
+                          f"density={em['density']:.2f}/1000km²")
+
+        except Exception as e:
+            if verbose:
+                print(f"\n  Warning: Could not load glacial boundaries for end members: {e}")
+                print("  Continuing without Illinoian/Driftless data.")
 
     # Step 7: Uncertainty analysis
     if include_uncertainty:
