@@ -7929,10 +7929,16 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
 
     x = density_df['age_midpoint_ka'].values
     y = density_df['density_opt'].values
-    y_min = density_df['density_min'].values
-    y_max = density_df['density_max'].values
-    yerr_lower = y - y_min
-    yerr_upper = y_max - y
+    y_from_min_ice = density_df['density_min'].values
+    y_from_max_ice = density_df['density_max'].values
+
+    # Compute actual lower/upper bounds across all estimates
+    y_lower_actual = np.minimum.reduce([y, y_from_min_ice, y_from_max_ice])
+    y_upper_actual = np.maximum.reduce([y, y_from_min_ice, y_from_max_ice])
+
+    # Error bars must be non-negative distances from the central value
+    yerr_lower = np.maximum(y - y_lower_actual, 0)
+    yerr_upper = np.maximum(y_upper_actual - y, 0)
 
     # Plot Bayesian credible intervals if available
     if bayesian_results is not None and 'curves' in bayesian_results:
@@ -7971,11 +7977,11 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
                 markeredgecolor='black', markeredgewidth=1.5, elinewidth=2,
                 label='Observed (OPTIMAL)', zorder=10)
 
-    # Add MIN and MAX points (smaller, for reference)
-    ax.scatter(x, y_min, marker='v', s=40, color='lightblue', edgecolors='gray',
-               alpha=0.6, label='MIN extent', zorder=6)
-    ax.scatter(x, y_max, marker='^', s=40, color='darkblue', edgecolors='gray',
-               alpha=0.6, label='MAX extent', zorder=6)
+    # Add MIN and MAX ice extent density points (smaller, for reference)
+    ax.scatter(x, y_from_min_ice, marker='v', s=40, color='lightblue', edgecolors='gray',
+               alpha=0.6, label='MIN ice extent', zorder=6)
+    ax.scatter(x, y_from_max_ice, marker='^', s=40, color='darkblue', edgecolors='gray',
+               alpha=0.6, label='MAX ice extent', zorder=6)
 
     ax.set_xlabel('Deglaciation Age (ka BP)', fontsize=14)
     ax.set_ylabel('Lake Density (lakes per 1000 km²)', fontsize=14)

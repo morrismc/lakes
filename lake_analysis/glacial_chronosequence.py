@@ -3958,7 +3958,7 @@ def compute_glaciated_area_timeseries(config=None, verbose=True):
                 'area_max_km2': area_max,
                 'area_optimal_km2': area_opt,
                 'area_mean_km2': (area_min + area_max) / 2,
-                'area_error_km2': (area_max - area_min) / 2,
+                'area_error_km2': np.abs(area_max - area_min) / 2,  # Use abs for safety
             })
 
         if verbose and len(results) % 10 == 0:
@@ -4159,7 +4159,7 @@ def compute_density_by_deglaciation_age_with_area(lake_gdf, age_bins=None,
             'density_min': density_min,
             'density_max': density_max,
             'density_opt': density_opt,
-            'density_error': (density_max - density_min) / 2 if not (np.isnan(density_min) or np.isnan(density_max)) else np.nan,
+            'density_error': np.abs(density_max - density_min) / 2 if not (np.isnan(density_min) or np.isnan(density_max)) else np.nan,
         })
 
     df = pd.DataFrame(results)
@@ -4670,8 +4670,8 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                 stages = [f"Age_{int(age)}ka" for age in x]
                 densities = y.astype(float)  # Now using proper density!
 
-                # Calculate uncertainty from MIN/MAX
-                density_errors = (y_max - y_min) / 2
+                # Calculate uncertainty from MIN/MAX (use absolute difference)
+                density_errors = np.abs(y_max - y_min) / 2
                 density_cv = np.mean(density_errors / y)  # Average coefficient of variation
 
                 if verbose:
@@ -4732,8 +4732,8 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                 # Initial guess based on proper density values
                 p0 = [y.max(), 0.05]
 
-                # Weight by inverse uncertainty from MIN/MAX
-                sigma = (y_max - y_min) / 2
+                # Weight by inverse uncertainty from MIN/MAX (use absolute difference)
+                sigma = np.abs(y_max - y_min) / 2
                 sigma = np.maximum(sigma, 0.1)  # Minimum uncertainty
 
                 popt, pcov = curve_fit(decay_func, x, y, p0=p0, sigma=sigma,
