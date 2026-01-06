@@ -7605,6 +7605,382 @@ def plot_bayesian_summary(bayesian_results, save_path=None):
     return fig
 
 
+def plot_glaciated_area_timeseries(area_df, save_path=None):
+    """
+    Plot glaciated area over time with MIN/MAX uncertainty.
+
+    Creates a time series plot showing how glaciated area changed over time,
+    with error bars from MIN and MAX ice extent reconstructions.
+
+    Parameters
+    ----------
+    area_df : pd.DataFrame
+        Output from compute_glaciated_area_timeseries() with columns:
+        - age_ka: Time in ka
+        - area_min_km2, area_max_km2, area_optimal_km2
+        - area_error_km2
+    save_path : str, optional
+        Path to save the figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    setup_plot_style()
+
+    if area_df is None or len(area_df) == 0:
+        print("No area data available for plotting")
+        return None
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Panel A: Glaciated area time series
+    ax = axes[0]
+    x = area_df['age_ka'].values
+    y_opt = area_df['area_optimal_km2'].values / 1e6  # Convert to million km²
+    y_min = area_df['area_min_km2'].values / 1e6
+    y_max = area_df['area_max_km2'].values / 1e6
+
+    # Fill between MIN and MAX
+    ax.fill_between(x, y_min, y_max, alpha=0.3, color='steelblue',
+                    label='MIN-MAX range')
+
+    # Plot OPTIMAL line
+    ax.plot(x, y_opt, 'b-', linewidth=2, marker='o', markersize=4,
+            label='OPTIMAL', zorder=5)
+
+    # Mark LGM
+    lgm_idx = np.argmax(y_opt)
+    lgm_age = x[lgm_idx]
+    lgm_area = y_opt[lgm_idx]
+    ax.annotate(f'LGM\n{lgm_age:.0f} ka\n{lgm_area:.2f} M km²',
+                xy=(lgm_age, lgm_area), xytext=(lgm_age + 2, lgm_area * 0.9),
+                fontsize=10, ha='left',
+                arrowprops=dict(arrowstyle='->', color='red', alpha=0.7))
+
+    ax.set_xlabel('Time (ka BP)', fontsize=12)
+    ax.set_ylabel('Continental Ice Area (million km²)', fontsize=12)
+    ax.set_title('A) Laurentide Ice Sheet Area Over Time', fontsize=12, fontweight='bold')
+    ax.legend(loc='upper left')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, max(x) + 1)
+    ax.set_ylim(0, max(y_max) * 1.1)
+    ax.invert_xaxis()  # Older ages on left
+
+    # Panel B: Rate of deglaciation
+    ax = axes[1]
+
+    # Calculate rate of area change (km²/ka)
+    if len(x) > 1:
+        # Sort by age (young to old)
+        sort_idx = np.argsort(x)
+        x_sorted = x[sort_idx]
+        y_sorted = y_opt[sort_idx]
+
+        # Calculate rate: dA/dt
+        rate = np.diff(y_sorted) / np.diff(x_sorted)  # million km²/ka
+        x_rate = (x_sorted[:-1] + x_sorted[1:]) / 2
+
+        ax.bar(x_rate, -rate, width=0.4, color='steelblue', edgecolor='black', alpha=0.7)
+        ax.axhline(0, color='black', linestyle='-', linewidth=0.5)
+
+        # Mark peak deglaciation rate
+        peak_idx = np.argmax(-rate)
+        peak_rate = -rate[peak_idx]
+        peak_age = x_rate[peak_idx]
+        ax.annotate(f'Peak: {peak_rate:.3f} M km²/ka\nat {peak_age:.0f} ka',
+                    xy=(peak_age, peak_rate), xytext=(peak_age + 3, peak_rate * 1.1),
+                    fontsize=10,
+                    arrowprops=dict(arrowstyle='->', color='red', alpha=0.7))
+
+    ax.set_xlabel('Time (ka BP)', fontsize=12)
+    ax.set_ylabel('Deglaciation Rate (million km²/ka)', fontsize=12)
+    ax.set_title('B) Rate of Ice Sheet Retreat', fontsize=12, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.invert_xaxis()
+
+    fig.suptitle('NADI-1 Ice Sheet Reconstruction (Continental Ice, East of -110°)',
+                 fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+def plot_density_with_uncertainty(density_df, save_path=None, fit_model=True):
+    """
+    Plot lake density vs deglaciation age with MIN/MAX uncertainty.
+
+    Creates a plot showing lake density (lakes per 1000 km²) over time,
+    with proper error bars from MIN and MAX ice extent uncertainties.
+
+    Parameters
+    ----------
+    density_df : pd.DataFrame
+        Output from compute_density_by_deglaciation_age_with_area() with columns:
+        - age_midpoint_ka: Time bin midpoint in ka
+        - density_opt, density_min, density_max: Lake densities
+        - density_error: Half-width of MIN-MAX range
+        - n_lakes: Number of lakes per bin
+        - landscape_area_km2_opt: Landscape area per bin
+    save_path : str, optional
+        Path to save the figure.
+    fit_model : bool
+        If True, fit and plot exponential decay model.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+    from scipy.optimize import curve_fit
+
+    setup_plot_style()
+
+    if density_df is None or len(density_df) == 0:
+        print("No density data available for plotting")
+        return None
+
+    fig = plt.figure(figsize=(14, 10))
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
+
+    # Panel A: Lake density vs age with error bars
+    ax = fig.add_subplot(gs[0, 0])
+
+    x = density_df['age_midpoint_ka'].values
+    y = density_df['density_opt'].values
+    y_min = density_df['density_min'].values
+    y_max = density_df['density_max'].values
+    yerr_lower = y - y_min
+    yerr_upper = y_max - y
+
+    # Plot with asymmetric error bars
+    ax.errorbar(x, y, yerr=[yerr_lower, yerr_upper],
+                fmt='o', markersize=10, color='steelblue', capsize=5,
+                markeredgecolor='black', markeredgewidth=1.5, elinewidth=2,
+                label='Observed density', zorder=5)
+
+    # Fit exponential decay if requested
+    if fit_model and len(x) >= 3:
+        try:
+            def exp_decay(t, D0, k):
+                return D0 * np.exp(-k * t)
+
+            # Weight by inverse variance
+            valid = ~np.isnan(y) & ~np.isnan(y_min) & ~np.isnan(y_max)
+            x_fit = x[valid]
+            y_fit = y[valid]
+            yerr_fit = (y_max[valid] - y_min[valid]) / 2
+            yerr_fit = np.maximum(yerr_fit, 0.01)  # Avoid zero weights
+
+            popt, pcov = curve_fit(exp_decay, x_fit, y_fit,
+                                   p0=[max(y_fit), 0.1],
+                                   sigma=yerr_fit,
+                                   absolute_sigma=True,
+                                   bounds=([0, 0], [np.inf, 1]))
+
+            D0_fit, k_fit = popt
+            half_life = np.log(2) / k_fit
+
+            # Plot fit
+            x_model = np.linspace(0, max(x) * 1.2, 100)
+            y_model = exp_decay(x_model, D0_fit, k_fit)
+            ax.plot(x_model, y_model, 'r-', linewidth=2, zorder=3,
+                    label=f'Fit: D₀={D0_fit:.1f}, t½={half_life:.1f} ka')
+
+            # Half-life marker
+            ax.axhline(D0_fit/2, color='gray', linestyle='--', alpha=0.5)
+            ax.axvline(half_life, color='gray', linestyle='--', alpha=0.5)
+
+        except Exception as e:
+            print(f"Warning: Could not fit exponential decay: {e}")
+
+    ax.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax.set_ylabel('Lake Density (lakes per 1000 km²)', fontsize=12)
+    ax.set_title('A) Lake Density Decay with Age', fontsize=12, fontweight='bold')
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, max(x) * 1.15)
+    ax.set_ylim(0, max(y_max) * 1.1 if np.any(~np.isnan(y_max)) else None)
+
+    # Panel B: Landscape area deglaciated per bin
+    ax = fig.add_subplot(gs[0, 1])
+
+    area_opt = density_df['landscape_area_km2_opt'].values / 1e3  # thousand km²
+    area_min = density_df['landscape_area_km2_min'].values / 1e3
+    area_max = density_df['landscape_area_km2_max'].values / 1e3
+
+    bar_width = (x.max() - x.min()) / (len(x) * 1.5) if len(x) > 1 else 2
+
+    ax.bar(x, area_opt, width=bar_width, color='forestgreen', edgecolor='black',
+           alpha=0.7, label='OPTIMAL')
+    ax.errorbar(x, area_opt, yerr=[area_opt - area_min, area_max - area_opt],
+                fmt='none', color='black', capsize=4, elinewidth=1.5)
+
+    ax.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax.set_ylabel('Landscape Area Deglaciated (thousand km²)', fontsize=12)
+    ax.set_title('B) Landscape Area per Time Bin', fontsize=12, fontweight='bold')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Panel C: Number of lakes per bin
+    ax = fig.add_subplot(gs[1, 0])
+
+    n_lakes = density_df['n_lakes'].values
+
+    ax.bar(x, n_lakes, width=bar_width, color='steelblue', edgecolor='black', alpha=0.7)
+
+    ax.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
+    ax.set_ylabel('Number of Lakes', fontsize=12)
+    ax.set_title('C) Lake Count per Time Bin', fontsize=12, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+
+    # Panel D: Summary table
+    ax = fig.add_subplot(gs[1, 1])
+    ax.axis('off')
+
+    summary_lines = [
+        "LAKE DENSITY ANALYSIS SUMMARY",
+        "=" * 45,
+        "",
+        "Age Bin    N Lakes    Area (km²)    Density",
+        "-" * 45,
+    ]
+
+    for _, row in density_df.iterrows():
+        density_str = f"{row['density_opt']:.2f}" if not np.isnan(row['density_opt']) else "N/A"
+        summary_lines.append(
+            f"{row['age_bin']:<10} {row['n_lakes']:>8,}   {row['landscape_area_km2_opt']:>11,.0f}   {density_str:>8}"
+        )
+
+    summary_lines.extend([
+        "-" * 45,
+        f"Total:     {density_df['n_lakes'].sum():>8,}   {density_df['landscape_area_km2_opt'].sum():>11,.0f}",
+        "",
+        "Note: Density = lakes per 1000 km²",
+        "Error bars show MIN-MAX ice extent uncertainty"
+    ])
+
+    summary_text = "\n".join(summary_lines)
+    ax.text(0.05, 0.95, summary_text, transform=ax.transAxes,
+            fontsize=9, fontfamily='monospace', verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+
+    fig.suptitle('Lake Density by Deglaciation Age (NADI-1 Time Slices)',
+                 fontsize=14, fontweight='bold', y=0.98)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
+def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
+    """
+    Plot lake density decay with NADI-1 time slice data and Bayesian model fit.
+
+    Creates a publication-quality figure showing:
+    - Lake density (per 1000 km²) vs deglaciation age
+    - MIN/MAX uncertainty from ice extent reconstructions
+    - Bayesian credible intervals on decay curve
+
+    Parameters
+    ----------
+    density_df : pd.DataFrame
+        Output from compute_density_by_deglaciation_age_with_area()
+    bayesian_results : dict, optional
+        Output from fit_bayesian_decay_model()
+    save_path : str, optional
+        Path to save the figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    setup_plot_style()
+
+    if density_df is None or len(density_df) == 0:
+        print("No density data available for plotting")
+        return None
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    x = density_df['age_midpoint_ka'].values
+    y = density_df['density_opt'].values
+    y_min = density_df['density_min'].values
+    y_max = density_df['density_max'].values
+    yerr_lower = y - y_min
+    yerr_upper = y_max - y
+
+    # Plot Bayesian credible intervals if available
+    if bayesian_results is not None and 'curves' in bayesian_results:
+        curves = bayesian_results['curves']
+        age_grid = curves['age_grid']
+
+        # 95% credible interval
+        ax.fill_between(age_grid, curves['ci_95_lower'], curves['ci_95_upper'],
+                        alpha=0.15, color='red', label='95% credible interval')
+
+        # 50% credible interval
+        ax.fill_between(age_grid, curves['ci_50_lower'], curves['ci_50_upper'],
+                        alpha=0.25, color='red', label='50% credible interval')
+
+        # Median curve
+        ax.plot(age_grid, curves['median'], 'r-', linewidth=2,
+                label='Posterior median', zorder=4)
+
+        # Half-life annotation
+        hl = bayesian_results['half_life']['mean']
+        hl_lower = bayesian_results['half_life']['ci_lower']
+        hl_upper = bayesian_results['half_life']['ci_upper']
+        D0 = bayesian_results['D0']['mean']
+
+        ax.axhline(D0/2, color='gray', linestyle='--', alpha=0.5, zorder=1)
+        ax.axvline(hl, color='gray', linestyle='--', alpha=0.5, zorder=1)
+
+        ax.annotate(f't½ = {hl:.0f} ka\n[{hl_lower:.0f}, {hl_upper:.0f}]',
+                    xy=(hl, D0/2), xytext=(hl + 3, D0/2 + 5),
+                    fontsize=10, color='red',
+                    arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7))
+
+    # Plot data points with error bars
+    ax.errorbar(x, y, yerr=[yerr_lower, yerr_upper],
+                fmt='o', markersize=12, color='#2166AC', capsize=5,
+                markeredgecolor='black', markeredgewidth=1.5, elinewidth=2,
+                label='Observed (OPTIMAL)', zorder=10)
+
+    # Add MIN and MAX points (smaller, for reference)
+    ax.scatter(x, y_min, marker='v', s=40, color='lightblue', edgecolors='gray',
+               alpha=0.6, label='MIN extent', zorder=6)
+    ax.scatter(x, y_max, marker='^', s=40, color='darkblue', edgecolors='gray',
+               alpha=0.6, label='MAX extent', zorder=6)
+
+    ax.set_xlabel('Deglaciation Age (ka BP)', fontsize=14)
+    ax.set_ylabel('Lake Density (lakes per 1000 km²)', fontsize=14)
+    ax.set_title('Lake Density Decay with Landscape Age\n(NADI-1 Ice Sheet Reconstruction)',
+                 fontsize=14, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, max(x) * 1.15)
+    ax.set_ylim(0, None)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig
+
+
 if __name__ == "__main__":
     print("Visualization module loaded.")
     print("Key functions:")
@@ -7627,6 +8003,10 @@ if __name__ == "__main__":
     print("  - plot_xmin_sensitivity_by_elevation()")
     print("  - plot_ks_curves_overlay()")
     print("  - plot_optimal_xmin_vs_elevation()")
+    print("  # NADI-1 visualizations:")
+    print("  - plot_glaciated_area_timeseries()")
+    print("  - plot_density_with_uncertainty()")
+    print("  - plot_nadi1_density_decay()")
     print("  - plot_alpha_stability_by_elevation()")
     print("  - plot_xmin_elevation_summary()")
     print("  - plot_alpha_vs_xmin_by_elevation()")

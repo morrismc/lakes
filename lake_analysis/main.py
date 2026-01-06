@@ -2329,6 +2329,57 @@ def analyze_nadi1_chronosequence(lakes=None, data_source='conus', min_lake_area=
             if fig:
                 plt.close(fig)
 
+        # New: Glaciated area time series plot
+        if results.get('area_timeseries') is not None:
+            try:
+                from .visualization import plot_glaciated_area_timeseries
+            except ImportError:
+                from visualization import plot_glaciated_area_timeseries
+
+            fig = plot_glaciated_area_timeseries(
+                results['area_timeseries'],
+                save_path=os.path.join(output_subdir, 'glaciated_area_timeseries.png')
+            )
+            if fig:
+                plt.close(fig)
+
+        # New: Lake density with uncertainty (proper lakes per 1000 km²)
+        if results.get('density_by_age_with_area') is not None:
+            try:
+                from .visualization import plot_density_with_uncertainty, plot_nadi1_density_decay
+            except ImportError:
+                from visualization import plot_density_with_uncertainty, plot_nadi1_density_decay
+
+            fig = plot_density_with_uncertainty(
+                results['density_by_age_with_area'],
+                save_path=os.path.join(output_subdir, 'density_with_uncertainty.png')
+            )
+            if fig:
+                plt.close(fig)
+
+            # Density decay with Bayesian fit (if available)
+            fig = plot_nadi1_density_decay(
+                results['density_by_age_with_area'],
+                bayesian_results=results.get('bayesian_model'),
+                save_path=os.path.join(output_subdir, 'nadi1_density_decay.png')
+            )
+            if fig:
+                plt.close(fig)
+
+        # Bayesian model visualizations
+        if results.get('bayesian_model') is not None:
+            try:
+                from .visualization import plot_bayesian_summary
+            except ImportError:
+                from visualization import plot_bayesian_summary
+
+            fig = plot_bayesian_summary(
+                results['bayesian_model'],
+                save_path=os.path.join(output_subdir, 'bayesian_summary.png')
+            )
+            if fig:
+                plt.close(fig)
+
         if verbose:
             print(f"  Figures saved to: {output_subdir}/")
 
