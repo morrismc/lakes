@@ -3868,11 +3868,14 @@ def compute_glaciated_area_timeseries(config=None, verbose=True):
     if config is None:
         config = NADI1_CONFIG
 
-    # Get available time slices
-    time_slices = discover_nadi1_time_slices(config)
+    # Get available time slices (returns DataFrame)
+    time_slices_df = discover_nadi1_time_slices(verbose=False)
 
-    # Group by age
-    ages = sorted(set(ts['age_ka'] for ts in time_slices))
+    # Filter to existing files only
+    existing = time_slices_df[time_slices_df['exists']]
+
+    # Get unique ages
+    ages = sorted(existing['age_ka'].unique())
 
     if verbose:
         print(f"\n  Computing glaciated area for {len(ages)} time slices...")
