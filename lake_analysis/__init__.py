@@ -117,6 +117,8 @@ from .glacial_chronosequence import (
     load_nadi1_time_slice,
     assign_deglaciation_age,
     compute_density_by_deglaciation_age,
+    compute_glaciated_area_timeseries,
+    compute_density_by_deglaciation_age_with_area,
     run_nadi1_chronosequence_analysis,
     # Bayesian decay model
     fit_bayesian_decay_model,
@@ -165,7 +167,10 @@ from .visualization import (
 # NADI-1 chronosequence visualization functions
 from .visualization import (
     plot_nadi1_chronosequence,
-    plot_deglaciation_age_histogram
+    plot_deglaciation_age_histogram,
+    plot_glaciated_area_timeseries,
+    plot_density_with_uncertainty,
+    plot_nadi1_density_decay
 )
 
 # Bayesian visualization functions

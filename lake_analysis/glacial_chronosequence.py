@@ -3837,6 +3837,292 @@ def compute_density_by_deglaciation_age(lake_gdf, age_bins=None,
     return df
 
 
+def compute_glaciated_area_timeseries(config=None, verbose=True):
+    """
+    Compute glaciated area for each NADI-1 time slice.
+
+    This calculates the continental ice extent area for each time slice,
+    accounting for MIN, MAX, and OPTIMAL reconstructions.
+
+    Parameters
+    ----------
+    config : dict, optional
+        NADI-1 configuration. Default uses NADI1_CONFIG.
+    verbose : bool
+        Print progress messages.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns:
+        - age_ka: Time slice age in ka
+        - area_min_km2: Minimum ice extent area
+        - area_max_km2: Maximum ice extent area
+        - area_optimal_km2: Optimal ice extent area
+        - area_mean_km2: Mean of MIN and MAX
+        - area_error_km2: Half-width of MIN-MAX range
+    """
+    import pyproj
+    from shapely.ops import transform
+
+    if config is None:
+        config = NADI1_CONFIG
+
+    # Get available time slices
+    time_slices = discover_nadi1_time_slices(config)
+
+    # Group by age
+    ages = sorted(set(ts['age_ka'] for ts in time_slices))
+
+    if verbose:
+        print(f"\n  Computing glaciated area for {len(ages)} time slices...")
+
+    # Setup projection for area calculation (Albers Equal Area for North America)
+    wgs84 = pyproj.CRS('EPSG:4326')
+    albers = pyproj.CRS('EPSG:5070')  # NAD83 / Conus Albers
+    transformer = pyproj.Transformer.from_crs(wgs84, albers, always_xy=True)
+
+    def project_and_area(geom):
+        """Project geometry and calculate area in km²."""
+        projected = transform(transformer.transform, geom)
+        return projected.area / 1e6  # m² to km²
+
+    results = []
+    for age in ages:
+        areas = {}
+        for extent_type in config['extent_types']:
+            # Load time slice
+            gdf = load_nadi1_time_slice(age, extent_type, config)
+            if gdf is None or len(gdf) == 0:
+                continue
+
+            # Filter to continental ice (east of threshold longitude)
+            lon_threshold = config.get('continental_lon_threshold', -110.0)
+            continental = gdf[gdf.geometry.centroid.x > lon_threshold].copy()
+
+            if len(continental) == 0:
+                continue
+
+            # Calculate total area
+            total_area = continental.geometry.apply(project_and_area).sum()
+            areas[extent_type] = total_area
+
+        if areas:
+            area_min = areas.get('MIN', areas.get('OPTIMAL', 0))
+            area_max = areas.get('MAX', areas.get('OPTIMAL', 0))
+            area_opt = areas.get('OPTIMAL', (area_min + area_max) / 2)
+
+            results.append({
+                'age_ka': age,
+                'area_min_km2': area_min,
+                'area_max_km2': area_max,
+                'area_optimal_km2': area_opt,
+                'area_mean_km2': (area_min + area_max) / 2,
+                'area_error_km2': (area_max - area_min) / 2,
+            })
+
+        if verbose and len(results) % 10 == 0:
+            print(f"    Processed {len(results)} time slices...")
+
+    df = pd.DataFrame(results).sort_values('age_ka')
+
+    if verbose:
+        print(f"\n  Area summary:")
+        print(f"    Time range: {df['age_ka'].min():.1f} - {df['age_ka'].max():.1f} ka")
+        print(f"    Max glaciated area: {df['area_optimal_km2'].max():,.0f} km²")
+        print(f"    LGM area (~20 ka): {df[df['age_ka'] == 20.0]['area_optimal_km2'].values[0]:,.0f} km²"
+              if 20.0 in df['age_ka'].values else "")
+
+    return df
+
+
+def compute_density_by_deglaciation_age_with_area(lake_gdf, age_bins=None,
+                                                   area_col=None, min_lake_area=0.01,
+                                                   config=None, verbose=True):
+    """
+    Compute lake density (lakes per 1000 km²) as a function of deglaciation age.
+
+    This version properly calculates landscape area deglaciated in each time bin
+    using the NADI-1 ice extent shapefiles, enabling true lake density calculation.
+
+    Parameters
+    ----------
+    lake_gdf : gpd.GeoDataFrame
+        Lakes with deglaciation_age column (from assign_deglaciation_age).
+    age_bins : list, optional
+        Bin edges for age categories. Default uses 5 ka intervals.
+    area_col : str, optional
+        Column containing lake area. Default uses COLS['area'].
+    min_lake_area : float
+        Minimum lake area in km². Default 0.01.
+    config : dict, optional
+        NADI-1 configuration. Default uses NADI1_CONFIG.
+    verbose : bool
+        Print summary statistics.
+
+    Returns
+    -------
+    pd.DataFrame
+        Lake density statistics by age bin with columns:
+        - age_bin: Age bin label
+        - age_midpoint_ka: Midpoint of bin in ka
+        - n_lakes: Number of lakes
+        - total_lake_area_km2: Total lake area
+        - mean_lake_area_km2: Mean lake area
+        - landscape_area_km2_min: Landscape area (MIN extent)
+        - landscape_area_km2_max: Landscape area (MAX extent)
+        - landscape_area_km2_opt: Landscape area (OPTIMAL extent)
+        - density_min: Lake density per 1000 km² (using MAX landscape)
+        - density_max: Lake density per 1000 km² (using MIN landscape)
+        - density_opt: Lake density per 1000 km² (using OPTIMAL landscape)
+    """
+    import pyproj
+    from shapely.ops import transform
+
+    if area_col is None:
+        area_col = COLS['area']
+    if config is None:
+        config = NADI1_CONFIG
+
+    # Default age bins: 5 ka intervals for cleaner model input
+    if age_bins is None:
+        age_bins = [0, 5, 10, 15, 20, 25]
+
+    # Filter to glaciated lakes with assigned ages
+    glaciated = lake_gdf[
+        (lake_gdf['was_glaciated']) &
+        (lake_gdf['deglaciation_age'].notna()) &
+        (lake_gdf[area_col] >= min_lake_area)
+    ].copy()
+
+    if verbose:
+        print(f"\n  Computing density by deglaciation age (with landscape area)...")
+        print(f"    Lakes with ages: {len(glaciated):,}")
+        print(f"    Age bins: {age_bins}")
+
+    # Setup projection for area calculation
+    wgs84 = pyproj.CRS('EPSG:4326')
+    albers = pyproj.CRS('EPSG:5070')
+    transformer = pyproj.Transformer.from_crs(wgs84, albers, always_xy=True)
+
+    def project_and_area(geom):
+        projected = transform(transformer.transform, geom)
+        return projected.area / 1e6
+
+    # Bin lakes by age
+    glaciated['age_bin'] = pd.cut(
+        glaciated['deglaciation_age'],
+        bins=age_bins,
+        labels=[f"{age_bins[i]}-{age_bins[i+1]} ka" for i in range(len(age_bins)-1)]
+    )
+
+    # For each bin, compute the landscape area that deglaciated during that interval
+    # This is the difference between ice extents at bin start and end
+    results = []
+
+    for i in range(len(age_bins) - 1):
+        bin_start = age_bins[i]
+        bin_end = age_bins[i + 1]
+        age_label = f"{bin_start}-{bin_end} ka"
+        age_mid = (bin_start + bin_end) / 2
+
+        bin_lakes = glaciated[glaciated['age_bin'] == age_label]
+
+        if verbose:
+            print(f"\n    Processing bin {age_label}...")
+
+        # Compute landscape area deglaciated in this interval
+        # Load ice extents at bin boundaries
+        landscape_areas = {}
+
+        for extent_type in config['extent_types']:
+            # Get ice extent at start of bin (younger = smaller ice)
+            gdf_start = load_nadi1_time_slice(bin_start, extent_type, config)
+            # Get ice extent at end of bin (older = larger ice)
+            gdf_end = load_nadi1_time_slice(bin_end, extent_type, config)
+
+            if gdf_end is None:
+                # If no data for this time, try nearby
+                continue
+
+            # Filter to continental ice
+            lon_threshold = config.get('continental_lon_threshold', -110.0)
+
+            if gdf_end is not None:
+                continental_end = gdf_end[gdf_end.geometry.centroid.x > lon_threshold]
+            else:
+                continental_end = gpd.GeoDataFrame()
+
+            if gdf_start is not None:
+                continental_start = gdf_start[gdf_start.geometry.centroid.x > lon_threshold]
+            else:
+                continental_start = gpd.GeoDataFrame()
+
+            # Calculate area of older extent
+            if len(continental_end) > 0:
+                area_end = continental_end.geometry.apply(project_and_area).sum()
+            else:
+                area_end = 0
+
+            # Calculate area of younger extent
+            if len(continental_start) > 0:
+                area_start = continental_start.geometry.apply(project_and_area).sum()
+            else:
+                area_start = 0
+
+            # Deglaciated area is the difference
+            # (area at older time) - (area at younger time)
+            deglaciated_area = max(0, area_end - area_start)
+            landscape_areas[extent_type] = deglaciated_area
+
+            if verbose:
+                print(f"      {extent_type}: {deglaciated_area:,.0f} km² deglaciated")
+
+        # Calculate densities
+        n_lakes_bin = len(bin_lakes)
+        total_lake_area = bin_lakes[area_col].sum() if n_lakes_bin > 0 else 0
+        mean_lake_area = bin_lakes[area_col].mean() if n_lakes_bin > 0 else 0
+
+        area_min = landscape_areas.get('MIN', 0)
+        area_max = landscape_areas.get('MAX', 0)
+        area_opt = landscape_areas.get('OPTIMAL', (area_min + area_max) / 2 if area_min and area_max else 0)
+
+        # Density = lakes per 1000 km²
+        # Note: MIN ice extent -> MAX landscape -> MIN density
+        #       MAX ice extent -> MIN landscape -> MAX density
+        density_min = (n_lakes_bin / area_max * 1000) if area_max > 0 else np.nan
+        density_max = (n_lakes_bin / area_min * 1000) if area_min > 0 else np.nan
+        density_opt = (n_lakes_bin / area_opt * 1000) if area_opt > 0 else np.nan
+
+        results.append({
+            'age_bin': age_label,
+            'age_midpoint_ka': age_mid,
+            'age_min_ka': bin_start,
+            'age_max_ka': bin_end,
+            'n_lakes': n_lakes_bin,
+            'total_lake_area_km2': total_lake_area,
+            'mean_lake_area_km2': mean_lake_area,
+            'landscape_area_km2_min': area_min,
+            'landscape_area_km2_max': area_max,
+            'landscape_area_km2_opt': area_opt,
+            'density_min': density_min,
+            'density_max': density_max,
+            'density_opt': density_opt,
+            'density_error': (density_max - density_min) / 2 if not (np.isnan(density_min) or np.isnan(density_max)) else np.nan,
+        })
+
+    df = pd.DataFrame(results)
+
+    if verbose and len(df) > 0:
+        print(f"\n  Age Bin        N lakes   Landscape (km²)   Density (per 1000 km²)")
+        print("  " + "-" * 70)
+        for _, row in df.iterrows():
+            print(f"  {row['age_bin']:<12} {row['n_lakes']:>10,}   {row['landscape_area_km2_opt']:>14,.0f}   "
+                  f"{row['density_opt']:>8.2f} [{row['density_min']:.2f}-{row['density_max']:.2f}]")
+
+    return df
+
+
 def fit_bayesian_decay_model(stages, densities, n_lakes, ages_point,
                               ages_lower=None, ages_upper=None,
                               density_cv=0.10, n_samples=4000, n_tune=2000,
@@ -4267,17 +4553,40 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
     )
     results['lake_gdf'] = lake_gdf_with_ages
 
-    # Step 4: Compute density by age
+    # Step 4: Compute glaciated area time series
     if verbose:
         print("\n" + "-" * 60)
-        print("STEP 4: COMPUTING LAKE DENSITY BY DEGLACIATION AGE")
+        print("STEP 4: COMPUTING GLACIATED AREA TIME SERIES")
         print("-" * 60)
 
+    area_timeseries = compute_glaciated_area_timeseries(verbose=verbose)
+    results['area_timeseries'] = area_timeseries
+
+    # Step 4b: Compute lake density by age WITH landscape area
+    if verbose:
+        print("\n" + "-" * 60)
+        print("STEP 4b: COMPUTING LAKE DENSITY BY DEGLACIATION AGE")
+        print("-" * 60)
+        print("  Using 5 ka bins and computing landscape area for each bin")
+
+    # Use 5 ka bins for cleaner model input
+    age_bins = [0, 5, 10, 15, 20, 25]
+
+    density_by_age_with_area = compute_density_by_deglaciation_age_with_area(
+        lake_gdf_with_ages,
+        age_bins=age_bins,
+        area_col=area_col,
+        min_lake_area=min_lake_area,
+        verbose=verbose
+    )
+    results['density_by_age_with_area'] = density_by_age_with_area
+
+    # Also compute raw density for backward compatibility
     density_by_age = compute_density_by_deglaciation_age(
         lake_gdf_with_ages,
         area_col=area_col,
         min_lake_area=min_lake_area,
-        verbose=verbose
+        verbose=False  # Already printed above
     )
     results['density_by_age'] = density_by_age
 
@@ -4287,27 +4596,36 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
         model_type = "BAYESIAN" if use_bayesian else "FREQUENTIST"
         print(f"STEP 5: FITTING {model_type} DECAY MODEL")
         print("-" * 60)
+        print("  Using proper lake density (lakes per 1000 km²) from NADI-1 data")
 
-    if len(density_by_age) >= 3:
-        x = density_by_age['age_midpoint_ka'].values
-        y = density_by_age['n_lakes'].values
+    # Use the density data with landscape area calculations
+    density_data = density_by_age_with_area
+
+    # Filter to valid density values
+    valid_mask = ~np.isnan(density_data['density_opt'].values)
+    density_data_valid = density_data[valid_mask]
+
+    if len(density_data_valid) >= 3:
+        x = density_data_valid['age_midpoint_ka'].values
+        y = density_data_valid['density_opt'].values  # Proper lake density!
+        y_min = density_data_valid['density_min'].values
+        y_max = density_data_valid['density_max'].values
+        n_lakes_arr = density_data_valid['n_lakes'].values
 
         if use_bayesian:
             # Try Bayesian model first
             try:
                 # For Bayesian model, we need stage-level data
-                # Use the density_by_age bins as "stages"
                 stages = [f"Age_{int(age)}ka" for age in x]
-                densities = y.astype(float)
-                n_lakes_arr = y.copy()
+                densities = y.astype(float)  # Now using proper density!
 
-                # Calculate densities per 1000 km² if we have area information
-                # For now, use raw counts normalized
-                total_area_km2 = density_by_age.get('total_area_km2', pd.Series([1]*len(y)))
-                if 'total_area_km2' in density_by_age.columns:
-                    # Estimate zone area from lake density pattern
-                    # This is approximate - would need actual zone areas
-                    densities = y  # Use raw counts for now
+                # Calculate uncertainty from MIN/MAX
+                density_errors = (y_max - y_min) / 2
+                density_cv = np.mean(density_errors / y)  # Average coefficient of variation
+
+                if verbose:
+                    print(f"  Lake densities (per 1000 km²): {y}")
+                    print(f"  Average density CV from MIN/MAX: {density_cv:.2%}")
 
                 bayesian_results = fit_bayesian_decay_model(
                     stages=stages,
@@ -4316,7 +4634,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                     ages_point=x,
                     ages_lower=x * 0.9,
                     ages_upper=x * 1.1,
-                    density_cv=0.10,
+                    density_cv=max(density_cv, 0.05),  # Minimum 5% uncertainty
                     n_samples=bayesian_samples,
                     n_tune=bayesian_tune,
                     output_dir=output_dir,
@@ -4357,32 +4675,38 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
             try:
                 from scipy.optimize import curve_fit
 
-                def decay_func(age, n0, lam):
-                    return n0 * np.exp(-lam * age)
+                def decay_func(age, D0, k):
+                    return D0 * np.exp(-k * age)
 
-                # Initial guess
+                # Initial guess based on proper density values
                 p0 = [y.max(), 0.05]
 
-                popt, pcov = curve_fit(decay_func, x, y, p0=p0, maxfev=5000)
-                n0_fit, lambda_fit = popt
-                n0_err, lambda_err = np.sqrt(np.diag(pcov))
+                # Weight by inverse uncertainty from MIN/MAX
+                sigma = (y_max - y_min) / 2
+                sigma = np.maximum(sigma, 0.1)  # Minimum uncertainty
 
-                # Half-life = ln(2) / λ
-                half_life = np.log(2) / lambda_fit if lambda_fit > 0 else np.inf
+                popt, pcov = curve_fit(decay_func, x, y, p0=p0, sigma=sigma,
+                                       absolute_sigma=True, maxfev=5000)
+                D0_fit, k_fit = popt
+                D0_err, k_err = np.sqrt(np.diag(pcov))
+
+                # Half-life = ln(2) / k
+                half_life = np.log(2) / k_fit if k_fit > 0 else np.inf
 
                 results['decay_model'] = {
-                    'n0': n0_fit,
-                    'n0_err': n0_err,
-                    'lambda': lambda_fit,
-                    'lambda_err': lambda_err,
+                    'n0': D0_fit,  # Now D0 = initial density, not count
+                    'n0_err': D0_err,
+                    'lambda': k_fit,
+                    'lambda_err': k_err,
                     'half_life_ka': half_life,
                     'model_type': 'frequentist',
+                    'uses_density': True,
                 }
 
                 if verbose:
-                    print(f"\n  Frequentist fit: N(t) = N0 * exp(-λ * t)")
-                    print(f"    N0 = {n0_fit:.0f} ± {n0_err:.0f} lakes")
-                    print(f"    λ  = {lambda_fit:.4f} ± {lambda_err:.4f} /ka")
+                    print(f"\n  Frequentist fit: D(t) = D0 * exp(-k * t)")
+                    print(f"    D0 = {D0_fit:.2f} ± {D0_err:.2f} lakes/1000 km²")
+                    print(f"    k  = {k_fit:.4f} ± {k_err:.4f} /ka")
                     print(f"    Half-life = {half_life:.1f} ka")
 
                     # R-squared
