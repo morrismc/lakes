@@ -7754,10 +7754,17 @@ def plot_density_with_uncertainty(density_df, save_path=None, fit_model=True):
 
     x = density_df['age_midpoint_ka'].values
     y = density_df['density_opt'].values
-    y_min = density_df['density_min'].values
-    y_max = density_df['density_max'].values
-    yerr_lower = y - y_min
-    yerr_upper = y_max - y
+    y_from_min_ice = density_df['density_min'].values  # From MIN ice extent
+    y_from_max_ice = density_df['density_max'].values  # From MAX ice extent
+
+    # Compute actual lower/upper bounds across all estimates
+    # (MIN/MAX ice extent doesn't directly correspond to min/max density)
+    y_lower_actual = np.minimum.reduce([y, y_from_min_ice, y_from_max_ice])
+    y_upper_actual = np.maximum.reduce([y, y_from_min_ice, y_from_max_ice])
+
+    # Error bars must be non-negative distances from the central value
+    yerr_lower = np.maximum(y - y_lower_actual, 0)
+    yerr_upper = np.maximum(y_upper_actual - y, 0)
 
     # Plot with asymmetric error bars
     ax.errorbar(x, y, yerr=[yerr_lower, yerr_upper],
@@ -7772,10 +7779,11 @@ def plot_density_with_uncertainty(density_df, save_path=None, fit_model=True):
                 return D0 * np.exp(-k * t)
 
             # Weight by inverse variance
-            valid = ~np.isnan(y) & ~np.isnan(y_min) & ~np.isnan(y_max)
+            valid = ~np.isnan(y) & ~np.isnan(y_from_min_ice) & ~np.isnan(y_from_max_ice)
             x_fit = x[valid]
             y_fit = y[valid]
-            yerr_fit = (y_max[valid] - y_min[valid]) / 2
+            # Use actual bounds for error calculation
+            yerr_fit = (y_upper_actual[valid] - y_lower_actual[valid]) / 2
             yerr_fit = np.maximum(yerr_fit, 0.01)  # Avoid zero weights
 
             popt, pcov = curve_fit(exp_decay, x_fit, y_fit,
@@ -7806,20 +7814,26 @@ def plot_density_with_uncertainty(density_df, save_path=None, fit_model=True):
     ax.legend(loc='upper right')
     ax.grid(True, alpha=0.3)
     ax.set_xlim(0, max(x) * 1.15)
-    ax.set_ylim(0, max(y_max) * 1.1 if np.any(~np.isnan(y_max)) else None)
+    ax.set_ylim(0, max(y_upper_actual) * 1.1 if np.any(~np.isnan(y_upper_actual)) else None)
 
     # Panel B: Landscape area deglaciated per bin
     ax = fig.add_subplot(gs[0, 1])
 
     area_opt = density_df['landscape_area_km2_opt'].values / 1e3  # thousand km²
-    area_min = density_df['landscape_area_km2_min'].values / 1e3
-    area_max = density_df['landscape_area_km2_max'].values / 1e3
+    area_from_min_ice = density_df['landscape_area_km2_min'].values / 1e3
+    area_from_max_ice = density_df['landscape_area_km2_max'].values / 1e3
+
+    # Compute actual bounds for area (same logic as density)
+    area_lower_actual = np.minimum.reduce([area_opt, area_from_min_ice, area_from_max_ice])
+    area_upper_actual = np.maximum.reduce([area_opt, area_from_min_ice, area_from_max_ice])
 
     bar_width = (x.max() - x.min()) / (len(x) * 1.5) if len(x) > 1 else 2
 
     ax.bar(x, area_opt, width=bar_width, color='forestgreen', edgecolor='black',
            alpha=0.7, label='OPTIMAL')
-    ax.errorbar(x, area_opt, yerr=[area_opt - area_min, area_max - area_opt],
+    ax.errorbar(x, area_opt,
+                yerr=[np.maximum(area_opt - area_lower_actual, 0),
+                      np.maximum(area_upper_actual - area_opt, 0)],
                 fmt='none', color='black', capsize=4, elinewidth=1.5)
 
     ax.set_xlabel('Deglaciation Age (ka BP)', fontsize=12)
