@@ -1160,14 +1160,15 @@ def plot_powerlaw_explained(results, figsize=(14, 10), save_path=None):
 def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
                                     var1_units='', var2_units='',
                                     log_scale=True, figsize=(12, 10),
-                                    save_path=None, title=None):
+                                    save_path=None, title=None,
+                                    show_marginals=False):
     """
-    Create 2D heatmap with marginal density distributions along each axis.
+    Create 2D heatmap with optional marginal density distributions along each axis.
 
     This is a key visualization showing:
     - Central heatmap: 2D normalized lake density
-    - Top margin: 1D density vs var2 (integrated over var1)
-    - Left margin: 1D density vs var1 (integrated over var2)
+    - Top margin: 1D density vs var2 (integrated over var1) [if show_marginals=True]
+    - Left margin: 1D density vs var1 (integrated over var2) [if show_marginals=True]
 
     Parameters
     ----------
@@ -1181,22 +1182,29 @@ def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
         If True, use log10 color scale
     title : str, optional
         Custom title for the plot
+    show_marginals : bool
+        If True, show marginal PDFs on top and left. Default False.
     """
     setup_plot_style()
 
     # Create figure with gridspec for layout
-    # Layout: [left marginal | main | colorbar] x [top marginal | main]
     fig = plt.figure(figsize=figsize)
-    gs = fig.add_gridspec(2, 3, width_ratios=[0.25, 1, 0.06], height_ratios=[0.2, 1],
-                          hspace=0.08, wspace=0.12)
 
-    # Main heatmap
-    ax_main = fig.add_subplot(gs[1, 1])
-
-    # Marginal axes
-    ax_top = fig.add_subplot(gs[0, 1])
-    ax_left = fig.add_subplot(gs[1, 0])
-    ax_cbar = fig.add_subplot(gs[1, 2])
+    if show_marginals:
+        # Layout with marginals: [left marginal | main | colorbar] x [top marginal | main]
+        gs = fig.add_gridspec(2, 3, width_ratios=[0.25, 1, 0.06], height_ratios=[0.2, 1],
+                              hspace=0.08, wspace=0.12)
+        ax_main = fig.add_subplot(gs[1, 1])
+        ax_top = fig.add_subplot(gs[0, 1])
+        ax_left = fig.add_subplot(gs[1, 0])
+        ax_cbar = fig.add_subplot(gs[1, 2])
+    else:
+        # Simple layout without marginals: [main | colorbar]
+        gs = fig.add_gridspec(1, 2, width_ratios=[1, 0.04], wspace=0.08)
+        ax_main = fig.add_subplot(gs[0, 0])
+        ax_cbar = fig.add_subplot(gs[0, 1])
+        ax_top = None
+        ax_left = None
 
     # Pivot data for heatmap
     var1_mid = f'{var1_name}_mid'
@@ -1228,65 +1236,69 @@ def plot_2d_heatmap_with_marginals(result_df, var1_name, var2_name,
     cbar = plt.colorbar(im, cax=ax_cbar)
     cbar.set_label(cbar_label, fontsize=11)
 
-    # Top marginal: density vs var2 (sum over var1)
-    marginal_top = result_df.groupby(var2_mid).agg({
-        'n_lakes': 'sum',
-        'area_km2': 'sum'
-    }).reset_index().sort_values(var2_mid)
-    marginal_top['density'] = (marginal_top['n_lakes'] / marginal_top['area_km2']) * 1000
-    marginal_top['density'] = marginal_top['density'].fillna(0)
-
-    # Apply smoothing for cleaner marginal PDFs
-    try:
-        from scipy.ndimage import gaussian_filter1d
-        density_smoothed = gaussian_filter1d(marginal_top['density'].values, sigma=1.5)
-    except ImportError:
-        density_smoothed = marginal_top['density'].values
-
-    ax_top.fill_between(marginal_top[var2_mid], density_smoothed,
-                        alpha=0.4, color='steelblue')
-    ax_top.plot(marginal_top[var2_mid], density_smoothed,
-                '-', color='steelblue', linewidth=2)
-    ax_top.set_ylabel('Density\n(lakes/1000 km²)', fontsize=9)
-    ax_top.tick_params(labelbottom=False)
-    ax_top.set_xlim(extent[0], extent[1])
-    ax_top.set_ylim(bottom=0)
-    ax_top.spines['top'].set_visible(False)
-    ax_top.spines['right'].set_visible(False)
-
-    # Set title
+    # Clean up variable names for labels
     clean_var1 = var1_name.replace('_', '')
     clean_var2 = var2_name.replace('_', '')
     plot_title = title if title else f'Lake Density in {clean_var1} × {clean_var2} Space'
-    ax_top.set_title(plot_title, fontsize=14, fontweight='bold', pad=10)
 
-    # Left marginal: density vs var1 (sum over var2)
-    marginal_left = result_df.groupby(var1_mid).agg({
-        'n_lakes': 'sum',
-        'area_km2': 'sum'
-    }).reset_index().sort_values(var1_mid)
-    marginal_left['density'] = (marginal_left['n_lakes'] / marginal_left['area_km2']) * 1000
-    marginal_left['density'] = marginal_left['density'].fillna(0)
+    if show_marginals:
+        # Top marginal: density vs var2 (sum over var1)
+        marginal_top = result_df.groupby(var2_mid).agg({
+            'n_lakes': 'sum',
+            'area_km2': 'sum'
+        }).reset_index().sort_values(var2_mid)
+        marginal_top['density'] = (marginal_top['n_lakes'] / marginal_top['area_km2']) * 1000
+        marginal_top['density'] = marginal_top['density'].fillna(0)
 
-    # Apply smoothing
-    try:
-        from scipy.ndimage import gaussian_filter1d
-        density_smoothed_left = gaussian_filter1d(marginal_left['density'].values, sigma=1.5)
-    except ImportError:
-        density_smoothed_left = marginal_left['density'].values
+        # Apply smoothing for cleaner marginal PDFs
+        try:
+            from scipy.ndimage import gaussian_filter1d
+            density_smoothed = gaussian_filter1d(marginal_top['density'].values, sigma=1.5)
+        except ImportError:
+            density_smoothed = marginal_top['density'].values
 
-    # Plot left marginal - density on x-axis (inverted), var1 on y-axis
-    ax_left.fill_betweenx(marginal_left[var1_mid], density_smoothed_left,
-                          alpha=0.4, color='darkred')
-    ax_left.plot(density_smoothed_left, marginal_left[var1_mid],
-                 '-', color='darkred', linewidth=2)
-    ax_left.set_xlabel('Density\n(lakes/1000 km²)', fontsize=9)
-    ax_left.tick_params(labelleft=False)
-    ax_left.invert_xaxis()  # Density increases to the left
-    ax_left.set_ylim(extent[2], extent[3])
-    ax_left.set_xlim(left=0)
-    ax_left.spines['top'].set_visible(False)
-    ax_left.spines['right'].set_visible(False)
+        ax_top.fill_between(marginal_top[var2_mid], density_smoothed,
+                            alpha=0.4, color='steelblue')
+        ax_top.plot(marginal_top[var2_mid], density_smoothed,
+                    '-', color='steelblue', linewidth=2)
+        ax_top.set_ylabel('Density\n(lakes/1000 km²)', fontsize=9)
+        ax_top.tick_params(labelbottom=False)
+        ax_top.set_xlim(extent[0], extent[1])
+        ax_top.set_ylim(bottom=0)
+        ax_top.spines['top'].set_visible(False)
+        ax_top.spines['right'].set_visible(False)
+        ax_top.set_title(plot_title, fontsize=14, fontweight='bold', pad=10)
+
+        # Left marginal: density vs var1 (sum over var2)
+        marginal_left = result_df.groupby(var1_mid).agg({
+            'n_lakes': 'sum',
+            'area_km2': 'sum'
+        }).reset_index().sort_values(var1_mid)
+        marginal_left['density'] = (marginal_left['n_lakes'] / marginal_left['area_km2']) * 1000
+        marginal_left['density'] = marginal_left['density'].fillna(0)
+
+        # Apply smoothing
+        try:
+            from scipy.ndimage import gaussian_filter1d
+            density_smoothed_left = gaussian_filter1d(marginal_left['density'].values, sigma=1.5)
+        except ImportError:
+            density_smoothed_left = marginal_left['density'].values
+
+        # Plot left marginal - density on x-axis (inverted), var1 on y-axis
+        ax_left.fill_betweenx(marginal_left[var1_mid], density_smoothed_left,
+                              alpha=0.4, color='darkred')
+        ax_left.plot(density_smoothed_left, marginal_left[var1_mid],
+                     '-', color='darkred', linewidth=2)
+        ax_left.set_xlabel('Density\n(lakes/1000 km²)', fontsize=9)
+        ax_left.tick_params(labelleft=False)
+        ax_left.invert_xaxis()  # Density increases to the left
+        ax_left.set_ylim(extent[2], extent[3])
+        ax_left.set_xlim(left=0)
+        ax_left.spines['top'].set_visible(False)
+        ax_left.spines['right'].set_visible(False)
+    else:
+        # Set title on main axes when no marginals
+        ax_main.set_title(plot_title, fontsize=14, fontweight='bold', pad=10)
 
     # Labels - clean up variable names
     var1_label = f'{clean_var1} ({var1_units})' if var1_units else clean_var1
@@ -1779,7 +1791,8 @@ def plot_alpha_by_process_domain(fit_results, figsize=(14, 8), save_path=None):
 
 def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_relief',
                                slope_units='°', relief_units='m',
-                               figsize=(14, 10), save_path=None):
+                               figsize=(14, 10), save_path=None,
+                               show_marginals=False):
     """
     Create Slope-Relief 2D heatmap with normalized lake density.
 
@@ -1793,6 +1806,8 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
         Column name prefixes
     figsize : tuple
     save_path : str, optional
+    show_marginals : bool
+        If True, show marginal PDFs on top and left. Default False.
 
     Returns
     -------
@@ -1800,16 +1815,24 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
     """
     setup_plot_style()
 
-    # Create figure with gridspec for marginals
-    # Increased left margin width ratio for more space and better label visibility
+    # Create figure with gridspec
     fig = plt.figure(figsize=figsize)
-    gs = fig.add_gridspec(2, 3, width_ratios=[0.25, 1, 0.05], height_ratios=[0.2, 1],
-                          hspace=0.08, wspace=0.12)
 
-    ax_main = fig.add_subplot(gs[1, 1])
-    ax_top = fig.add_subplot(gs[0, 1])
-    ax_left = fig.add_subplot(gs[1, 0])
-    ax_cbar = fig.add_subplot(gs[1, 2])
+    if show_marginals:
+        # Layout with marginals
+        gs = fig.add_gridspec(2, 3, width_ratios=[0.25, 1, 0.05], height_ratios=[0.2, 1],
+                              hspace=0.08, wspace=0.12)
+        ax_main = fig.add_subplot(gs[1, 1])
+        ax_top = fig.add_subplot(gs[0, 1])
+        ax_left = fig.add_subplot(gs[1, 0])
+        ax_cbar = fig.add_subplot(gs[1, 2])
+    else:
+        # Simple layout without marginals
+        gs = fig.add_gridspec(1, 2, width_ratios=[1, 0.04], wspace=0.08)
+        ax_main = fig.add_subplot(gs[0, 0])
+        ax_cbar = fig.add_subplot(gs[0, 1])
+        ax_top = None
+        ax_left = None
 
     # Find the column names
     slope_mid = f'{slope_name}_mid'
@@ -1869,60 +1892,64 @@ def plot_slope_relief_heatmap(result_df, slope_name='Slope', relief_name='F5km_r
     cbar = plt.colorbar(im, cax=ax_cbar)
     cbar.set_label('log₁₀(Lakes per 1,000 km²)', fontsize=11)
 
-    # Top marginal: density vs slope
-    marginal_top = result_df.groupby(slope_mid).agg({
-        'n_lakes': 'sum',
-        'area_km2': 'sum'
-    }).reset_index().sort_values(slope_mid)
-    marginal_top['density'] = (marginal_top['n_lakes'] / marginal_top['area_km2']) * 1000
-    marginal_top['density'] = marginal_top['density'].fillna(0)
+    if show_marginals:
+        # Top marginal: density vs slope
+        marginal_top = result_df.groupby(slope_mid).agg({
+            'n_lakes': 'sum',
+            'area_km2': 'sum'
+        }).reset_index().sort_values(slope_mid)
+        marginal_top['density'] = (marginal_top['n_lakes'] / marginal_top['area_km2']) * 1000
+        marginal_top['density'] = marginal_top['density'].fillna(0)
 
-    # Apply smoothing for cleaner marginal PDFs
-    try:
-        from scipy.ndimage import gaussian_filter1d
-        density_smooth_top = gaussian_filter1d(marginal_top['density'].values, sigma=1.5)
-    except ImportError:
-        density_smooth_top = marginal_top['density'].values
+        # Apply smoothing for cleaner marginal PDFs
+        try:
+            from scipy.ndimage import gaussian_filter1d
+            density_smooth_top = gaussian_filter1d(marginal_top['density'].values, sigma=1.5)
+        except ImportError:
+            density_smooth_top = marginal_top['density'].values
 
-    ax_top.fill_between(marginal_top[slope_mid], density_smooth_top,
-                        alpha=0.4, color='steelblue')
-    ax_top.plot(marginal_top[slope_mid], density_smooth_top,
-                '-', color='steelblue', linewidth=2)
-    ax_top.set_ylabel('Density\n(lakes/1000 km²)', fontsize=9)
-    ax_top.tick_params(labelbottom=False)
-    ax_top.set_xlim(ax_main.get_xlim())
-    ax_top.set_ylim(bottom=0)
-    ax_top.spines['top'].set_visible(False)
-    ax_top.spines['right'].set_visible(False)
-    ax_top.set_title('Lake Density in Slope × Relief Space', fontsize=14, fontweight='bold', pad=10)
+        ax_top.fill_between(marginal_top[slope_mid], density_smooth_top,
+                            alpha=0.4, color='steelblue')
+        ax_top.plot(marginal_top[slope_mid], density_smooth_top,
+                    '-', color='steelblue', linewidth=2)
+        ax_top.set_ylabel('Density\n(lakes/1000 km²)', fontsize=9)
+        ax_top.tick_params(labelbottom=False)
+        ax_top.set_xlim(ax_main.get_xlim())
+        ax_top.set_ylim(bottom=0)
+        ax_top.spines['top'].set_visible(False)
+        ax_top.spines['right'].set_visible(False)
+        ax_top.set_title('Lake Density in Slope × Relief Space', fontsize=14, fontweight='bold', pad=10)
 
-    # Left marginal: density vs relief (horizontal bar going left)
-    marginal_left = result_df.groupby(relief_mid).agg({
-        'n_lakes': 'sum',
-        'area_km2': 'sum'
-    }).reset_index().sort_values(relief_mid)
-    marginal_left['density'] = (marginal_left['n_lakes'] / marginal_left['area_km2']) * 1000
-    marginal_left['density'] = marginal_left['density'].fillna(0)
+        # Left marginal: density vs relief (horizontal bar going left)
+        marginal_left = result_df.groupby(relief_mid).agg({
+            'n_lakes': 'sum',
+            'area_km2': 'sum'
+        }).reset_index().sort_values(relief_mid)
+        marginal_left['density'] = (marginal_left['n_lakes'] / marginal_left['area_km2']) * 1000
+        marginal_left['density'] = marginal_left['density'].fillna(0)
 
-    # Apply smoothing
-    try:
-        from scipy.ndimage import gaussian_filter1d
-        density_smooth_left = gaussian_filter1d(marginal_left['density'].values, sigma=1.5)
-    except ImportError:
-        density_smooth_left = marginal_left['density'].values
+        # Apply smoothing
+        try:
+            from scipy.ndimage import gaussian_filter1d
+            density_smooth_left = gaussian_filter1d(marginal_left['density'].values, sigma=1.5)
+        except ImportError:
+            density_smooth_left = marginal_left['density'].values
 
-    # Plot relief marginal - density on x-axis (inverted), relief on y-axis
-    ax_left.fill_betweenx(marginal_left[relief_mid], density_smooth_left,
-                          alpha=0.4, color='darkred')
-    ax_left.plot(density_smooth_left, marginal_left[relief_mid],
-                 '-', color='darkred', linewidth=2)
-    ax_left.set_xlabel('Density\n(lakes/1000 km²)', fontsize=9)
-    ax_left.tick_params(labelleft=False)
-    ax_left.invert_xaxis()  # Density increases to the left
-    ax_left.set_ylim(ax_main.get_ylim())
-    ax_left.set_xlim(left=0)
-    ax_left.spines['top'].set_visible(False)
-    ax_left.spines['right'].set_visible(False)
+        # Plot relief marginal - density on x-axis (inverted), relief on y-axis
+        ax_left.fill_betweenx(marginal_left[relief_mid], density_smooth_left,
+                              alpha=0.4, color='darkred')
+        ax_left.plot(density_smooth_left, marginal_left[relief_mid],
+                     '-', color='darkred', linewidth=2)
+        ax_left.set_xlabel('Density\n(lakes/1000 km²)', fontsize=9)
+        ax_left.tick_params(labelleft=False)
+        ax_left.invert_xaxis()  # Density increases to the left
+        ax_left.set_ylim(ax_main.get_ylim())
+        ax_left.set_xlim(left=0)
+        ax_left.spines['top'].set_visible(False)
+        ax_left.spines['right'].set_visible(False)
+    else:
+        # Set title on main axes when no marginals
+        ax_main.set_title('Lake Density in Slope × Relief Space', fontsize=14, fontweight='bold', pad=10)
 
     # Labels
     ax_main.set_xlabel(f'Slope ({slope_units})', fontsize=12)
