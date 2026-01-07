@@ -7773,16 +7773,31 @@ def plot_density_with_uncertainty(density_df, save_path=None, fit_model=True):
         print("No density data available for plotting")
         return None
 
+    # Filter to valid data (non-NaN density and non-zero area)
+    valid_mask = (
+        ~np.isnan(density_df['density_opt'].values) &
+        (density_df['landscape_area_km2_opt'].values > 0)
+    )
+    plot_df = density_df[valid_mask].copy()
+
+    if len(plot_df) == 0:
+        print("No valid density data available for plotting (all NaN or zero area)")
+        return None
+
     fig = plt.figure(figsize=(14, 10))
     gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
 
     # Panel A: Lake density vs age with error bars
     ax = fig.add_subplot(gs[0, 0])
 
-    x = density_df['age_midpoint_ka'].values
-    y = density_df['density_opt'].values
-    y_from_min_ice = density_df['density_min'].values  # From MIN ice extent
-    y_from_max_ice = density_df['density_max'].values  # From MAX ice extent
+    x = plot_df['age_midpoint_ka'].values
+    y = plot_df['density_opt'].values
+    y_from_min_ice = plot_df['density_min'].values  # From MIN ice extent
+    y_from_max_ice = plot_df['density_max'].values  # From MAX ice extent
+
+    # Replace any remaining NaN with the optimal value for min/max
+    y_from_min_ice = np.where(np.isnan(y_from_min_ice), y, y_from_min_ice)
+    y_from_max_ice = np.where(np.isnan(y_from_max_ice), y, y_from_max_ice)
 
     # Compute actual lower/upper bounds across all estimates
     # (MIN/MAX ice extent doesn't directly correspond to min/max density)
@@ -7843,12 +7858,16 @@ def plot_density_with_uncertainty(density_df, save_path=None, fit_model=True):
     ax.set_xlim(0, max(x) * 1.15)
     ax.set_ylim(0, max(y_upper_actual) * 1.1 if np.any(~np.isnan(y_upper_actual)) else None)
 
-    # Panel B: Landscape area deglaciated per bin
+    # Panel B: Landscape area deglaciated per bin (using filtered data)
     ax = fig.add_subplot(gs[0, 1])
 
-    area_opt = density_df['landscape_area_km2_opt'].values / 1e3  # thousand km²
-    area_from_min_ice = density_df['landscape_area_km2_min'].values / 1e3
-    area_from_max_ice = density_df['landscape_area_km2_max'].values / 1e3
+    area_opt = plot_df['landscape_area_km2_opt'].values / 1e3  # thousand km²
+    area_from_min_ice = plot_df['landscape_area_km2_min'].values / 1e3
+    area_from_max_ice = plot_df['landscape_area_km2_max'].values / 1e3
+
+    # Replace NaN with optimal value
+    area_from_min_ice = np.where(np.isnan(area_from_min_ice), area_opt, area_from_min_ice)
+    area_from_max_ice = np.where(np.isnan(area_from_max_ice), area_opt, area_from_max_ice)
 
     # Compute actual bounds for area (same logic as density)
     area_lower_actual = np.minimum.reduce([area_opt, area_from_min_ice, area_from_max_ice])
@@ -7869,10 +7888,10 @@ def plot_density_with_uncertainty(density_df, save_path=None, fit_model=True):
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # Panel C: Number of lakes per bin
+    # Panel C: Number of lakes per bin (using filtered data)
     ax = fig.add_subplot(gs[1, 0])
 
-    n_lakes = density_df['n_lakes'].values
+    n_lakes = plot_df['n_lakes'].values
 
     ax.bar(x, n_lakes, width=bar_width, color='steelblue', edgecolor='black', alpha=0.7)
 
@@ -7952,12 +7971,27 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
         print("No density data available for plotting")
         return None
 
+    # Filter to valid data (non-NaN density and non-zero area)
+    valid_mask = (
+        ~np.isnan(density_df['density_opt'].values) &
+        (density_df['landscape_area_km2_opt'].values > 0)
+    )
+    plot_df = density_df[valid_mask].copy()
+
+    if len(plot_df) == 0:
+        print("No valid density data available for plotting (all NaN or zero area)")
+        return None
+
     fig, ax = plt.subplots(figsize=(10, 7))
 
-    x = density_df['age_midpoint_ka'].values
-    y = density_df['density_opt'].values
-    y_from_min_ice = density_df['density_min'].values
-    y_from_max_ice = density_df['density_max'].values
+    x = plot_df['age_midpoint_ka'].values
+    y = plot_df['density_opt'].values
+    y_from_min_ice = plot_df['density_min'].values
+    y_from_max_ice = plot_df['density_max'].values
+
+    # Replace any remaining NaN with the optimal value for min/max
+    y_from_min_ice = np.where(np.isnan(y_from_min_ice), y, y_from_min_ice)
+    y_from_max_ice = np.where(np.isnan(y_from_max_ice), y, y_from_max_ice)
 
     # Compute actual lower/upper bounds across all estimates
     y_lower_actual = np.minimum.reduce([y, y_from_min_ice, y_from_max_ice])
