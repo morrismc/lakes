@@ -3902,12 +3902,13 @@ def compute_glaciated_area_timeseries(config=None, verbose=True):
                     print(f"  Warning: No CRS defined, assuming WGS84")
                 gdf = gdf.set_crs('EPSG:4326')
 
-            # Reproject to WGS84 to get longitude values
-            gdf_wgs84 = gdf.to_crs('EPSG:4326')
+            # Compute centroids on original CRS (avoid warning on geographic CRS)
+            centroids = gdf.geometry.centroid
 
-            # Get centroid longitude
-            centroids = gdf_wgs84.geometry.centroid
-            lons = centroids.x
+            # Convert centroid points to WGS84 to get longitude values
+            centroid_gdf = gpd.GeoDataFrame(geometry=centroids, crs=gdf.crs)
+            centroid_wgs84 = centroid_gdf.to_crs('EPSG:4326')
+            lons = centroid_wgs84.geometry.x
 
             # Filter by longitude (continental = east of threshold)
             mask = lons > lon_threshold
@@ -3933,10 +3934,16 @@ def compute_glaciated_area_timeseries(config=None, verbose=True):
             if len(continental) == 0:
                 continue
 
-            # Calculate total area - reproject to WGS84 first for area calculation
+            # Calculate total area
             try:
-                continental_wgs84 = continental.to_crs('EPSG:4326')
-                total_area = continental_wgs84.geometry.apply(project_and_area).sum()
+                # If already in projected CRS, use area directly; otherwise project
+                if continental.crs and continental.crs.is_projected:
+                    # Already in projected CRS - use area directly (m² to km²)
+                    total_area = continental.geometry.area.sum() / 1e6
+                else:
+                    # Need to project to equal-area CRS
+                    continental_wgs84 = continental.to_crs('EPSG:4326')
+                    total_area = continental_wgs84.geometry.apply(project_and_area).sum()
             except Exception as e:
                 if verbose:
                     print(f"  Warning: Area calculation failed for {age} ka {extent_type}: {e}")
@@ -4060,20 +4067,30 @@ def compute_density_by_deglaciation_age_with_area(lake_gdf, age_bins=None,
             if gdf.crs is None:
                 gdf = gdf.set_crs('EPSG:4326')
 
-            # Reproject to WGS84 to get longitude values
-            gdf_wgs84 = gdf.to_crs('EPSG:4326')
+            # Compute centroids on original CRS (avoid warning on geographic CRS)
+            centroids = gdf.geometry.centroid
 
-            # Filter by centroid longitude (continental = east of threshold)
-            centroids = gdf_wgs84.geometry.centroid
-            lons = centroids.x
+            # Convert centroid points to WGS84 to get longitude values
+            centroid_gdf = gpd.GeoDataFrame(geometry=centroids, crs=gdf.crs)
+            centroid_wgs84 = centroid_gdf.to_crs('EPSG:4326')
+            lons = centroid_wgs84.geometry.x
+
+            # Filter by longitude (continental = east of threshold)
             mask = lons > lon_threshold
 
             if mask.sum() == 0:
                 return 0
 
             # Calculate area for continental features
-            continental_wgs84 = gdf_wgs84[mask]
-            total_area = continental_wgs84.geometry.apply(project_and_area).sum()
+            # If already in projected CRS, use area directly; otherwise project
+            continental = gdf[mask]
+            if continental.crs and continental.crs.is_projected:
+                # Already in projected CRS - use area directly (m² to km²)
+                total_area = continental.geometry.area.sum() / 1e6
+            else:
+                # Need to project to equal-area CRS
+                continental_wgs84 = continental.to_crs('EPSG:4326')
+                total_area = continental_wgs84.geometry.apply(project_and_area).sum()
             return total_area
         except Exception as e:
             if verbose:
