@@ -8007,11 +8007,11 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
         age_grid = curves['age_grid']
 
         # 95% credible interval
-        ax.fill_between(age_grid, curves['ci_95_lower'], curves['ci_95_upper'],
+        ax.fill_between(age_grid, curves['ci_lower_95'], curves['ci_upper_95'],
                         alpha=0.15, color='red', label='95% credible interval')
 
         # 50% credible interval
-        ax.fill_between(age_grid, curves['ci_50_lower'], curves['ci_50_upper'],
+        ax.fill_between(age_grid, curves['ci_lower_50'], curves['ci_upper_50'],
                         alpha=0.25, color='red', label='50% credible interval')
 
         # Median curve

@@ -3922,8 +3922,8 @@ def compute_glaciated_area_timeseries(config=None, verbose=True):
     for age in ages:
         areas = {}
         for extent_type in config['extent_types']:
-            # Load time slice
-            gdf = load_nadi1_time_slice(age, extent_type, config)
+            # Load time slice (verbose=False to avoid duplicate messages)
+            gdf = load_nadi1_time_slice(age, extent_type, verbose=False)
             if gdf is None or len(gdf) == 0:
                 continue
 
@@ -3952,7 +3952,7 @@ def compute_glaciated_area_timeseries(config=None, verbose=True):
             areas[extent_type] = total_area
 
             if verbose:
-                print(f"  Loaded {age} ka ({extent_type}): {total_area:,.0f} km²")
+                print(f"    {age} ka ({extent_type}): {total_area:,.0f} km²")
 
         if areas:
             area_min = areas.get('MIN', areas.get('OPTIMAL', 0))
@@ -4126,9 +4126,9 @@ def compute_density_by_deglaciation_age_with_area(lake_gdf, age_bins=None,
 
         for extent_type in config['extent_types']:
             # Get ice extent at start of bin (younger = smaller ice)
-            gdf_start = load_nadi1_time_slice(bin_start, extent_type, config)
+            gdf_start = load_nadi1_time_slice(bin_start, extent_type, verbose=False)
             # Get ice extent at end of bin (older = larger ice)
-            gdf_end = load_nadi1_time_slice(bin_end, extent_type, config)
+            gdf_end = load_nadi1_time_slice(bin_end, extent_type, verbose=False)
 
             if gdf_end is None:
                 # If no data for this time, try nearby
