@@ -7941,14 +7941,15 @@ def plot_density_with_uncertainty(density_df, save_path=None, fit_model=True):
     return fig
 
 
-def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
+def plot_nadi1_density_decay(density_df, bayesian_results=None, end_member_data=None,
+                             save_path=None):
     """
-    Plot lake density decay with NADI-1 time slice data and Bayesian model fit.
+    Plot lake density decay with deep time end members and Bayesian model fit.
 
     Creates a publication-quality figure showing:
     - Lake density (per 1000 km²) vs deglaciation age
-    - MIN/MAX uncertainty from ice extent reconstructions
-    - Bayesian credible intervals on decay curve
+    - Deep time end members (Wisconsin, Illinoian, Driftless)
+    - Bayesian credible intervals on exponential decay curve
 
     Parameters
     ----------
@@ -7956,6 +7957,8 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
         Output from compute_density_by_deglaciation_age_with_area()
     bayesian_results : dict, optional
         Output from fit_bayesian_decay_model()
+    end_member_data : list of dict, optional
+        Deep time end members from run_nadi1_chronosequence_analysis()
     save_path : str, optional
         Path to save the figure.
 
@@ -7967,39 +7970,21 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
 
     setup_plot_style()
 
-    if density_df is None or len(density_df) == 0:
-        print("No density data available for plotting")
-        return None
+    # Check if we have end member data (the primary data for the decay model)
+    has_end_members = end_member_data is not None and len(end_member_data) >= 3
 
-    # Filter to valid data (non-NaN density and non-zero area)
-    valid_mask = (
-        ~np.isnan(density_df['density_opt'].values) &
-        (density_df['landscape_area_km2_opt'].values > 0)
-    )
-    plot_df = density_df[valid_mask].copy()
+    if not has_end_members:
+        print("Warning: No deep time end member data provided.")
+        print("The Bayesian decay model requires Wisconsin, Illinoian, and Driftless data.")
 
-    if len(plot_df) == 0:
-        print("No valid density data available for plotting (all NaN or zero area)")
-        return None
+    fig, ax = plt.subplots(figsize=(12, 8))
 
-    fig, ax = plt.subplots(figsize=(10, 7))
-
-    x = plot_df['age_midpoint_ka'].values
-    y = plot_df['density_opt'].values
-    y_from_min_ice = plot_df['density_min'].values
-    y_from_max_ice = plot_df['density_max'].values
-
-    # Replace any remaining NaN with the optimal value for min/max
-    y_from_min_ice = np.where(np.isnan(y_from_min_ice), y, y_from_min_ice)
-    y_from_max_ice = np.where(np.isnan(y_from_max_ice), y, y_from_max_ice)
-
-    # Compute actual lower/upper bounds across all estimates
-    y_lower_actual = np.minimum.reduce([y, y_from_min_ice, y_from_max_ice])
-    y_upper_actual = np.maximum.reduce([y, y_from_min_ice, y_from_max_ice])
-
-    # Error bars must be non-negative distances from the central value
-    yerr_lower = np.maximum(y - y_lower_actual, 0)
-    yerr_upper = np.maximum(y_upper_actual - y, 0)
+    # Determine x-axis range based on end members
+    if has_end_members:
+        max_age = max(em['age_upper_ka'] for em in end_member_data)
+        x_max = min(max_age * 1.1, 3500)  # Cap at 3500 ka for readability
+    else:
+        x_max = 30  # Just NADI-1 range
 
     # Plot Bayesian credible intervals if available
     if bayesian_results is not None and 'curves' in bayesian_results:
@@ -8015,7 +8000,7 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
                         alpha=0.25, color='red', label='50% credible interval')
 
         # Median curve
-        ax.plot(age_grid, curves['median'], 'r-', linewidth=2,
+        ax.plot(age_grid, curves['median'], 'r-', linewidth=2.5,
                 label='Posterior median', zorder=4)
 
         # Half-life annotation
@@ -8027,31 +8012,86 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, save_path=None):
         ax.axhline(D0/2, color='gray', linestyle='--', alpha=0.5, zorder=1)
         ax.axvline(hl, color='gray', linestyle='--', alpha=0.5, zorder=1)
 
+        # Position annotation based on half-life
+        text_x = min(hl + 50, x_max * 0.6)
         ax.annotate(f't½ = {hl:.0f} ka\n[{hl_lower:.0f}, {hl_upper:.0f}]',
-                    xy=(hl, D0/2), xytext=(hl + 3, D0/2 + 5),
-                    fontsize=10, color='red',
+                    xy=(hl, D0/2), xytext=(text_x, D0/2 + 20),
+                    fontsize=11, color='red', fontweight='bold',
                     arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7))
 
-    # Plot data points with error bars
-    ax.errorbar(x, y, yerr=[yerr_lower, yerr_upper],
-                fmt='o', markersize=12, color='#2166AC', capsize=5,
-                markeredgecolor='black', markeredgewidth=1.5, elinewidth=2,
-                label='Observed (OPTIMAL)', zorder=10)
+    # Plot deep time end members (primary data points)
+    if has_end_members:
+        stage_colors = {
+            'Wisconsin': '#2166AC',  # Blue
+            'Illinoian': '#4DAF4A',  # Green
+            'Driftless': '#984EA3',  # Purple
+        }
+        stage_markers = {
+            'Wisconsin': 'o',
+            'Illinoian': 's',
+            'Driftless': 'D',
+        }
 
-    # Add MIN and MAX ice extent density points (smaller, for reference)
-    ax.scatter(x, y_from_min_ice, marker='v', s=40, color='lightblue', edgecolors='gray',
-               alpha=0.6, label='MIN ice extent', zorder=6)
-    ax.scatter(x, y_from_max_ice, marker='^', s=40, color='darkblue', edgecolors='gray',
-               alpha=0.6, label='MAX ice extent', zorder=6)
+        for em in end_member_data:
+            stage = em['stage']
+            age = em['age_ka']
+            density = em['density']
+            age_lower = em['age_lower_ka']
+            age_upper = em['age_upper_ka']
 
-    ax.set_xlabel('Deglaciation Age (ka BP)', fontsize=14)
+            color = stage_colors.get(stage, 'gray')
+            marker = stage_markers.get(stage, 'o')
+
+            # Calculate age error bars
+            xerr_lower = age - age_lower
+            xerr_upper = age_upper - age
+
+            # Plot with error bars
+            ax.errorbar(age, density, xerr=[[xerr_lower], [xerr_upper]],
+                       fmt=marker, markersize=14, color=color, capsize=6,
+                       markeredgecolor='black', markeredgewidth=1.5, elinewidth=2,
+                       label=f'{stage} (~{age:.0f} ka)', zorder=10)
+
+    # Also plot NADI-1 bin data if available (as smaller reference points)
+    if density_df is not None and len(density_df) > 0:
+        valid_mask = (
+            ~np.isnan(density_df['density_opt'].values) &
+            (density_df['landscape_area_km2_opt'].values > 0)
+        )
+        plot_df = density_df[valid_mask].copy()
+
+        if len(plot_df) > 0:
+            x = plot_df['age_midpoint_ka'].values
+            y = plot_df['density_opt'].values
+
+            ax.scatter(x, y, marker='o', s=50, color='lightblue', edgecolors='gray',
+                      alpha=0.7, label='NADI-1 bins (10-25 ka)', zorder=5)
+
+    ax.set_xlabel('Landscape Age (ka)', fontsize=14)
     ax.set_ylabel('Lake Density (lakes per 1000 km²)', fontsize=14)
-    ax.set_title('Lake Density Decay with Landscape Age\n(NADI-1 Ice Sheet Reconstruction)',
+    ax.set_title('Lake Density Decay with Landscape Age\n(Davis Lake Extinction Hypothesis)',
                  fontsize=14, fontweight='bold')
     ax.legend(loc='upper right', fontsize=10)
     ax.grid(True, alpha=0.3)
-    ax.set_xlim(0, max(x) * 1.15)
+    ax.set_xlim(0, x_max)
     ax.set_ylim(0, None)
+
+    # Add text box with model summary if Bayesian results available
+    if bayesian_results is not None:
+        D0 = bayesian_results['D0']['mean']
+        D0_ci = (bayesian_results['D0']['ci_lower'], bayesian_results['D0']['ci_upper'])
+        k = bayesian_results['k']['mean']
+        hl = bayesian_results['half_life']['mean']
+        hl_ci = (bayesian_results['half_life']['ci_lower'], bayesian_results['half_life']['ci_upper'])
+
+        textstr = (f"Bayesian Decay Model:\n"
+                   f"D(t) = D₀ × exp(-k × t)\n"
+                   f"D₀ = {D0:.1f} [{D0_ci[0]:.1f}, {D0_ci[1]:.1f}]\n"
+                   f"t½ = {hl:.0f} [{hl_ci[0]:.0f}, {hl_ci[1]:.0f}] ka")
+
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        ax.text(0.02, 0.02, textstr, transform=ax.transAxes, fontsize=10,
+                verticalalignment='bottom', bbox=props, family='monospace')
 
     plt.tight_layout()
 

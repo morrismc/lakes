@@ -4658,145 +4658,16 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
     )
     results['density_by_age'] = density_by_age
 
-    # Step 5: Fit decay model (Bayesian or frequentist)
-    if verbose:
-        print("\n" + "-" * 60)
-        model_type = "BAYESIAN" if use_bayesian else "FREQUENTIST"
-        print(f"STEP 5: FITTING {model_type} DECAY MODEL")
-        print("-" * 60)
-        print("  Using proper lake density (lakes per 1000 km²) from NADI-1 data")
+    # Step 5: Add deep time end members (Illinoian & Driftless) BEFORE fitting decay model
+    # This is critical - the Bayesian model needs the full time span (20 ka to >1500 ka)
+    # to properly constrain the exponential decay
+    end_member_data = []
+    stage_densities = {}
 
-    # Use the density data with landscape area calculations
-    density_data = density_by_age_with_area
-
-    # Filter to valid density values
-    valid_mask = ~np.isnan(density_data['density_opt'].values)
-    density_data_valid = density_data[valid_mask]
-
-    if len(density_data_valid) >= 3:
-        x = density_data_valid['age_midpoint_ka'].values
-        y = density_data_valid['density_opt'].values  # Proper lake density!
-        y_min = density_data_valid['density_min'].values
-        y_max = density_data_valid['density_max'].values
-        n_lakes_arr = density_data_valid['n_lakes'].values
-
-        if use_bayesian:
-            # Try Bayesian model first
-            try:
-                # For Bayesian model, we need stage-level data
-                stages = [f"Age_{int(age)}ka" for age in x]
-                densities = y.astype(float)  # Now using proper density!
-
-                # Calculate uncertainty from MIN/MAX (use absolute difference)
-                density_errors = np.abs(y_max - y_min) / 2
-                density_cv = np.mean(density_errors / y)  # Average coefficient of variation
-
-                if verbose:
-                    print(f"  Lake densities (per 1000 km²): {y}")
-                    print(f"  Average density CV from MIN/MAX: {density_cv:.2%}")
-
-                bayesian_results = fit_bayesian_decay_model(
-                    stages=stages,
-                    densities=densities,
-                    n_lakes=n_lakes_arr,
-                    ages_point=x,
-                    ages_lower=x * 0.9,
-                    ages_upper=x * 1.1,
-                    density_cv=max(density_cv, 0.05),  # Minimum 5% uncertainty
-                    n_samples=bayesian_samples,
-                    n_tune=bayesian_tune,
-                    output_dir=output_dir,
-                    verbose=verbose
-                )
-
-                if bayesian_results is not None:
-                    results['bayesian_model'] = bayesian_results
-                    # Extract summary for backward compatibility
-                    results['decay_model'] = {
-                        'n0': bayesian_results['D0']['mean'],
-                        'n0_err': bayesian_results['D0']['std'],
-                        'n0_ci': (bayesian_results['D0']['ci_lower'],
-                                  bayesian_results['D0']['ci_upper']),
-                        'lambda': bayesian_results['k']['mean'],
-                        'lambda_err': bayesian_results['k']['std'],
-                        'lambda_ci': (bayesian_results['k']['ci_lower'],
-                                      bayesian_results['k']['ci_upper']),
-                        'half_life_ka': bayesian_results['half_life']['mean'],
-                        'half_life_ci': (bayesian_results['half_life']['ci_lower'],
-                                         bayesian_results['half_life']['ci_upper']),
-                        'model_type': 'bayesian',
-                    }
-                else:
-                    # Fall back to frequentist
-                    if verbose:
-                        print("  Falling back to frequentist curve_fit...")
-                    use_bayesian = False
-
-            except Exception as e:
-                if verbose:
-                    print(f"  Warning: Bayesian model failed: {e}")
-                    print("  Falling back to frequentist curve_fit...")
-                use_bayesian = False
-
-        if not use_bayesian or results.get('decay_model') is None:
-            # Frequentist approach using scipy curve_fit
-            try:
-                from scipy.optimize import curve_fit
-
-                def decay_func(age, D0, k):
-                    return D0 * np.exp(-k * age)
-
-                # Initial guess based on proper density values
-                p0 = [y.max(), 0.05]
-
-                # Weight by inverse uncertainty from MIN/MAX (use absolute difference)
-                sigma = np.abs(y_max - y_min) / 2
-                sigma = np.maximum(sigma, 0.1)  # Minimum uncertainty
-
-                popt, pcov = curve_fit(decay_func, x, y, p0=p0, sigma=sigma,
-                                       absolute_sigma=True, maxfev=5000)
-                D0_fit, k_fit = popt
-                D0_err, k_err = np.sqrt(np.diag(pcov))
-
-                # Half-life = ln(2) / k
-                half_life = np.log(2) / k_fit if k_fit > 0 else np.inf
-
-                results['decay_model'] = {
-                    'n0': D0_fit,  # Now D0 = initial density, not count
-                    'n0_err': D0_err,
-                    'lambda': k_fit,
-                    'lambda_err': k_err,
-                    'half_life_ka': half_life,
-                    'model_type': 'frequentist',
-                    'uses_density': True,
-                }
-
-                if verbose:
-                    print(f"\n  Frequentist fit: D(t) = D0 * exp(-k * t)")
-                    print(f"    D0 = {D0_fit:.2f} ± {D0_err:.2f} lakes/1000 km²")
-                    print(f"    k  = {k_fit:.4f} ± {k_err:.4f} /ka")
-                    print(f"    Half-life = {half_life:.1f} ka")
-
-                    # R-squared
-                    y_pred = decay_func(x, *popt)
-                    ss_res = np.sum((y - y_pred) ** 2)
-                    ss_tot = np.sum((y - np.mean(y)) ** 2)
-                    r2 = 1 - ss_res / ss_tot
-                    results['decay_model']['r2'] = r2
-                    print(f"    R² = {r2:.3f}")
-
-            except Exception as e:
-                if verbose:
-                    print(f"  Warning: Could not fit decay model: {e}")
-                results['decay_model'] = None
-    else:
-        results['decay_model'] = None
-
-    # Step 6: Add Illinoian and Driftless end members
     if compare_with_illinoian:
         if verbose:
             print("\n" + "-" * 60)
-            print("STEP 6: ADDING DEEP TIME END MEMBERS (ILLINOIAN & DRIFTLESS)")
+            print("STEP 5: COMPUTING DEEP TIME END MEMBERS (WISCONSIN, ILLINOIAN, DRIFTLESS)")
             print("-" * 60)
 
         try:
@@ -4936,6 +4807,134 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
             if verbose:
                 print(f"\n  Warning: Could not load glacial boundaries for end members: {e}")
                 print("  Continuing without Illinoian/Driftless data.")
+
+    # Step 6: Fit decay model using deep time end members (Wisconsin, Illinoian, Driftless)
+    # This uses the full time span (~20 ka to >1500 ka) to properly constrain exponential decay
+    if verbose:
+        print("\n" + "-" * 60)
+        model_type = "BAYESIAN" if use_bayesian else "FREQUENTIST"
+        print(f"STEP 6: FITTING {model_type} DECAY MODEL")
+        print("-" * 60)
+
+    if len(end_member_data) >= 3:
+        if verbose:
+            print("  Using deep time end members (Wisconsin, Illinoian, Driftless)")
+            print("  This provides the full time range needed for exponential decay fitting")
+
+        # Extract data from end members
+        stages = [em['stage'] for em in end_member_data]
+        densities = np.array([em['density'] for em in end_member_data])
+        n_lakes_arr = np.array([em['n_lakes'] for em in end_member_data])
+        ages_point = np.array([em['age_ka'] for em in end_member_data])
+        ages_lower = np.array([em['age_lower_ka'] for em in end_member_data])
+        ages_upper = np.array([em['age_upper_ka'] for em in end_member_data])
+
+        if use_bayesian:
+            try:
+                if verbose:
+                    print(f"\n  Fitting Bayesian exponential decay model:")
+                    for i, stage in enumerate(stages):
+                        print(f"    {stage}: density={densities[i]:.1f}/1000km², "
+                              f"age={ages_point[i]:.0f} [{ages_lower[i]:.0f}-{ages_upper[i]:.0f}] ka")
+
+                bayesian_results = fit_bayesian_decay_model(
+                    stages=stages,
+                    densities=densities,
+                    n_lakes=n_lakes_arr,
+                    ages_point=ages_point,
+                    ages_lower=ages_lower,
+                    ages_upper=ages_upper,
+                    density_cv=0.10,  # 10% density uncertainty
+                    n_samples=bayesian_samples,
+                    n_tune=bayesian_tune,
+                    output_dir=output_dir,
+                    verbose=verbose
+                )
+
+                if bayesian_results is not None:
+                    results['bayesian_model'] = bayesian_results
+                    # Extract summary for backward compatibility
+                    results['decay_model'] = {
+                        'n0': bayesian_results['D0']['mean'],
+                        'n0_err': bayesian_results['D0']['std'],
+                        'n0_ci': (bayesian_results['D0']['ci_lower'],
+                                  bayesian_results['D0']['ci_upper']),
+                        'lambda': bayesian_results['k']['mean'],
+                        'lambda_err': bayesian_results['k']['std'],
+                        'lambda_ci': (bayesian_results['k']['ci_lower'],
+                                      bayesian_results['k']['ci_upper']),
+                        'half_life_ka': bayesian_results['half_life']['mean'],
+                        'half_life_ci': (bayesian_results['half_life']['ci_lower'],
+                                         bayesian_results['half_life']['ci_upper']),
+                        'model_type': 'bayesian',
+                    }
+                else:
+                    if verbose:
+                        print("  Bayesian model returned None, falling back to frequentist...")
+                    use_bayesian = False
+
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Bayesian model failed: {e}")
+                    print("  Falling back to frequentist curve_fit...")
+                use_bayesian = False
+
+        if not use_bayesian or results.get('decay_model') is None:
+            # Frequentist approach using scipy curve_fit
+            try:
+                from scipy.optimize import curve_fit
+
+                def decay_func(age, D0, k):
+                    return D0 * np.exp(-k * age)
+
+                # Initial guess
+                p0 = [densities.max(), 0.001]  # Small k for long half-life
+
+                # Weight by age uncertainty
+                sigma = (ages_upper - ages_lower) / 4  # Approximate std
+                sigma = np.maximum(sigma, 1.0)  # Minimum 1 ka uncertainty
+
+                popt, pcov = curve_fit(decay_func, ages_point, densities, p0=p0,
+                                       maxfev=5000)
+                D0_fit, k_fit = popt
+                D0_err, k_err = np.sqrt(np.diag(pcov))
+
+                # Half-life = ln(2) / k
+                half_life = np.log(2) / k_fit if k_fit > 0 else np.inf
+
+                results['decay_model'] = {
+                    'n0': D0_fit,
+                    'n0_err': D0_err,
+                    'lambda': k_fit,
+                    'lambda_err': k_err,
+                    'half_life_ka': half_life,
+                    'model_type': 'frequentist',
+                    'uses_density': True,
+                }
+
+                if verbose:
+                    print(f"\n  Frequentist fit: D(t) = D0 * exp(-k * t)")
+                    print(f"    D0 = {D0_fit:.2f} ± {D0_err:.2f} lakes/1000 km²")
+                    print(f"    k  = {k_fit:.6f} ± {k_err:.6f} /ka")
+                    print(f"    Half-life = {half_life:.0f} ka")
+
+                    # R-squared
+                    y_pred = decay_func(ages_point, *popt)
+                    ss_res = np.sum((densities - y_pred) ** 2)
+                    ss_tot = np.sum((densities - np.mean(densities)) ** 2)
+                    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+                    results['decay_model']['r2'] = r2
+                    print(f"    R² = {r2:.3f}")
+
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Could not fit decay model: {e}")
+                results['decay_model'] = None
+    else:
+        if verbose:
+            print(f"  Warning: Only {len(end_member_data)} end members found (need 3)")
+            print("  Cannot fit decay model without Wisconsin, Illinoian, and Driftless data")
+        results['decay_model'] = None
 
     # Step 7: Uncertainty analysis
     if include_uncertainty:
