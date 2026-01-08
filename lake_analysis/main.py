@@ -2361,6 +2361,7 @@ def analyze_nadi1_chronosequence(lakes=None, data_source='conus', min_lake_area=
             fig = plot_nadi1_density_decay(
                 results['density_by_age_with_area'],
                 bayesian_results=results.get('bayesian_model'),
+                end_member_data=results.get('end_member_data'),
                 save_path=os.path.join(output_subdir, 'nadi1_density_decay.png')
             )
             if fig:
