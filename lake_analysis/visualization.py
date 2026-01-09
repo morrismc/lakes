@@ -8052,20 +8052,14 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, end_member_data=
                        markeredgecolor='black', markeredgewidth=1.5, elinewidth=2,
                        label=f'{stage} (~{age:.0f} ka)', zorder=10)
 
-    # Also plot NADI-1 bin data if available (as smaller reference points)
-    if density_df is not None and len(density_df) > 0:
-        valid_mask = (
-            ~np.isnan(density_df['density_opt'].values) &
-            (density_df['landscape_area_km2_opt'].values > 0)
-        )
-        plot_df = density_df[valid_mask].copy()
-
-        if len(plot_df) > 0:
-            x = plot_df['age_midpoint_ka'].values
-            y = plot_df['density_opt'].values
-
-            ax.scatter(x, y, marker='o', s=50, color='lightblue', edgecolors='gray',
-                      alpha=0.7, label='NADI-1 bins (10-25 ka)', zorder=5)
+    # Set y-axis based on end member data (ignore NADI-1 bins which may have outliers)
+    if has_end_members:
+        max_density = max(em['density'] for em in end_member_data)
+        y_max = max_density * 1.3  # 30% headroom
+    elif bayesian_results is not None:
+        y_max = bayesian_results['D0']['ci_upper'] * 1.2
+    else:
+        y_max = None  # Auto-scale
 
     ax.set_xlabel('Landscape Age (ka)', fontsize=14)
     ax.set_ylabel('Lake Density (lakes per 1000 km²)', fontsize=14)
@@ -8074,7 +8068,7 @@ def plot_nadi1_density_decay(density_df, bayesian_results=None, end_member_data=
     ax.legend(loc='upper right', fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.set_xlim(0, x_max)
-    ax.set_ylim(0, None)
+    ax.set_ylim(0, y_max)
 
     # Add text box with model summary if Bayesian results available
     if bayesian_results is not None:

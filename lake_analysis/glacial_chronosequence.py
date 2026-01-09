@@ -4486,6 +4486,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                                       use_bayesian=True,
                                       bayesian_samples=4000, bayesian_tune=2000,
                                       area_col=None, min_lake_area=0.01,
+                                      max_lake_area=None,
                                       output_dir=None, verbose=True):
     """
     Run comprehensive glacial chronosequence analysis using NADI-1 time slices.
@@ -4519,6 +4520,10 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
         Column containing lake area. Default uses COLS['area'].
     min_lake_area : float, optional
         Minimum lake area in km². Default 0.01.
+    max_lake_area : float, optional
+        Maximum lake area in km². Default None (no upper limit).
+        Use to exclude anomalously large basins like the Great Lakes
+        (e.g., max_lake_area=20000 excludes lakes > 20,000 km²).
     output_dir : str, optional
         Directory for output files. Default uses OUTPUT_DIR.
     verbose : bool, optional
@@ -4554,6 +4559,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
             'extent_type': extent_type,
             'include_uncertainty': include_uncertainty,
             'min_lake_area': min_lake_area,
+            'max_lake_area': max_lake_area,
         }
     }
 
@@ -4600,12 +4606,20 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
     else:
         lake_gdf_continental = lake_gdf.copy()
 
-    # Apply minimum area filter
+    # Apply area filters (min and max)
     area_mask = lake_gdf_continental[area_col] >= min_lake_area
+    if max_lake_area is not None:
+        area_mask = area_mask & (lake_gdf_continental[area_col] <= max_lake_area)
     lake_gdf_filtered = lake_gdf_continental[area_mask].copy()
 
     if verbose:
-        print(f"  After area filter (≥{min_lake_area} km²): {len(lake_gdf_filtered):,} lakes")
+        if max_lake_area is not None:
+            print(f"  After area filter ({min_lake_area} - {max_lake_area:,} km²): {len(lake_gdf_filtered):,} lakes")
+            n_large_excluded = (lake_gdf_continental[area_col] > max_lake_area).sum()
+            if n_large_excluded > 0:
+                print(f"    (Excluded {n_large_excluded} lakes > {max_lake_area:,} km², e.g., Great Lakes)")
+        else:
+            print(f"  After area filter (≥{min_lake_area} km²): {len(lake_gdf_filtered):,} lakes")
 
     # Step 3: Assign deglaciation ages
     if verbose:
