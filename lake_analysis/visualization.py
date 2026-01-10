@@ -883,6 +883,34 @@ def plot_powerlaw_by_elevation_multipanel(lake_df, elev_bands, area_col=None,
 
     colors = plt.cm.viridis(np.linspace(0, 0.9, n_bands))
 
+    # First pass: collect global axis limits for consistent scaling
+    global_xmin, global_xmax = np.inf, -np.inf
+    global_ymin, global_ymax = np.inf, -np.inf
+
+    for i in range(n_bands):
+        elev_low, elev_high = elev_bands[i], elev_bands[i+1]
+        mask = (lake_df[elev_col] >= elev_low) & (lake_df[elev_col] < elev_high)
+        areas = lake_df.loc[mask, area_col].values
+        areas = areas[areas > 0]
+
+        if len(areas) >= 50:
+            sorted_areas = np.sort(areas)[::-1]
+            ranks = np.arange(1, len(sorted_areas) + 1)
+            ccdf = ranks / len(sorted_areas)
+
+            global_xmin = min(global_xmin, sorted_areas.min())
+            global_xmax = max(global_xmax, sorted_areas.max())
+            global_ymin = min(global_ymin, ccdf.min())
+            global_ymax = max(global_ymax, ccdf.max())
+
+    # Add padding to limits (in log space)
+    if global_xmin < np.inf:
+        global_xmin = global_xmin / 2
+        global_xmax = global_xmax * 2
+        global_ymin = global_ymin / 2
+        global_ymax = min(global_ymax * 1.5, 1.5)
+
+    # Second pass: plot the data
     for i in range(n_bands):
         row, col = divmod(i, n_cols)
         ax = axes[row, col]
@@ -922,6 +950,8 @@ def plot_powerlaw_by_elevation_multipanel(lake_df, elev_bands, area_col=None,
 
         ax.set_xscale('log')
         ax.set_yscale('log')
+        ax.set_xlim(global_xmin, global_xmax)
+        ax.set_ylim(global_ymin, global_ymax)
         ax.set_xlabel('Area (km²)', fontsize=10)
         ax.set_ylabel('P(X ≥ x)', fontsize=10)
         ax.set_title(f'{elev_low}-{elev_high} m (n={len(areas):,})', fontsize=12)
