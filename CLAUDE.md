@@ -46,8 +46,11 @@ lakes/
 │   ├── powerlaw_analysis.py  # Power law fitting (Clauset et al. 2009)
 │   ├── spatial_scaling.py    # Geographic pattern analysis
 │   ├── glacial_chronosequence.py  # Glacial history analysis (Davis hypothesis)
+│   ├── size_stratified_analysis.py  # Size-stratified half-life analysis
 │   ├── visualization.py   # Publication-quality plots
 │   └── main.py           # Entry point, orchestration
+├── examples/
+│   └── example_size_stratified_analysis.py  # Size-stratified analysis example
 ├── data/                  # Data files (not in git)
 │   ├── NHD/              # National Hydrography Dataset
 │   ├── rasters/          # Elevation, slope, relief, climate
@@ -69,6 +72,30 @@ Main analysis for Davis's hypothesis. Key functions:
 - `max_lake_area=20000`: Maximum lake size (km²) - **use this to exclude Great Lakes**
 - `use_bayesian=True`: Use PyMC for proper uncertainty quantification
 - `compare_with_illinoian=True`: Include deep time end members
+
+### size_stratified_analysis.py
+Tests whether lake half-lives vary by lake size. Key functions:
+- `run_size_stratified_analysis()`: Complete pipeline for size-stratified analysis
+- `detection_limit_diagnostics()`: Check for mapping biases across glacial stages
+- `calculate_size_stratified_densities()`: Compute density by size class and stage
+- `fit_size_stratified_halflife_models()`: Bayesian half-life estimation per size class
+- `test_halflife_size_relationship()`: Statistical tests for size-halflife correlation
+
+**Important parameters:**
+- `size_bins`: List of (min, max, label) tuples defining size classes
+- `min_lakes_per_class=10`: Minimum lakes needed for Bayesian analysis
+- `bayesian_params`: Dict with n_samples, n_tune, n_chains, target_accept
+- `landscape_areas`: Dict mapping stage names to land area (km²)
+
+**Scientific hypothesis:**
+Small lakes may decay faster than large lakes due to higher sedimentation rates,
+higher evaporative concentration, or larger catchment/lake area ratios.
+
+**Outputs:**
+- Detection limit diagnostics (6-panel figure)
+- Size-stratified density patterns (4-panel figure)
+- Bayesian half-life results (4-panel figure showing half-life vs size)
+- CSV files with density and half-life estimates
 
 ### visualization.py
 - `plot_nadi1_density_decay()`: Main decay plot with Bayesian credible intervals
@@ -139,10 +166,41 @@ Compute centroids on projected CRS first, then transform to geographic.
 
 ## Typical Workflow
 
+### Standard Glacial Chronosequence
 1. **Load data**: `lakes = load_conus_lake_data()`
 2. **Filter**: Apply min/max lake area filters
 3. **Run chronosequence**: `results = run_nadi1_chronosequence_analysis(lakes, max_lake_area=20000)`
 4. **Visualize**: Figures auto-saved to output directory
+
+### Size-Stratified Half-Life Analysis
+1. **Load and classify**:
+   ```python
+   lakes = load_conus_lake_data()
+   boundaries = {
+       'wisconsin': load_wisconsin_extent(),
+       'illinoian': load_illinoian_extent(),
+       'driftless': load_driftless_area()
+   }
+   lakes = classify_lakes_by_glacial_extent(lakes, boundaries)
+   ```
+2. **Run analysis**:
+   ```python
+   results = run_size_stratified_analysis(
+       lakes,
+       min_lake_area=0.05,
+       max_lake_area=20000,  # Exclude Great Lakes
+       min_lakes_per_class=10
+   )
+   ```
+3. **Interpret**:
+   - Check detection diagnostics for mapping biases
+   - Examine half-life vs size relationship
+   - Look for positive slope: larger lakes persist longer
+4. **Outputs**:
+   - `detection_limit_diagnostics.png`
+   - `size_stratified_density_patterns.png`
+   - `size_stratified_bayesian_results.png`
+   - CSV files with numerical results
 
 ## Git Workflow
 
