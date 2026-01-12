@@ -437,6 +437,59 @@ COLORMAPS = {
     'elevation': 'terrain',
 }
 
+# ============================================================================
+# SIZE-STRATIFIED ANALYSIS PARAMETERS
+# ============================================================================
+
+# Default size bins for size-stratified analysis (min, max in km², label)
+# These bins are chosen to balance:
+# - Sufficient lakes in each bin for statistical power
+# - Fine enough resolution to detect size-dependent trends
+# - Detection limits across all glacial stages
+SIZE_STRATIFIED_BINS = [
+    (0.05, 0.1, 'tiny'),
+    (0.1, 0.25, 'very_small'),
+    (0.25, 0.5, 'small'),
+    (0.5, 1.0, 'medium_small'),
+    (1.0, 2.5, 'medium'),
+    (2.5, 10.0, 'large'),
+    (10.0, float('inf'), 'very_large')
+]
+
+# Default landscape areas (km²) for glacial stages
+# These are approximate values and should be recalculated from actual boundaries
+SIZE_STRATIFIED_LANDSCAPE_AREAS = {
+    'Wisconsin': 1225000,   # Adjust based on actual Wisconsin boundary area
+    'Illinoian': 145000,    # Adjust based on actual Illinoian boundary area
+    'Driftless': 25500      # Adjust based on actual Driftless boundary area
+}
+
+# Age estimates for glacial stages (ka = thousands of years before present)
+SIZE_STRATIFIED_AGE_ESTIMATES = {
+    'Wisconsin': {'mean': 20, 'std': 5},       # ~15-25 ka
+    'Illinoian': {'mean': 160, 'std': 30},     # ~130-190 ka
+    'Driftless': {'mean': 1500, 'std': 500}    # >1500 ka (never glaciated)
+}
+
+# Bayesian sampling parameters for size-stratified analysis
+SIZE_STRATIFIED_BAYESIAN_PARAMS = {
+    'n_samples': 2000,       # Number of posterior samples per chain
+    'n_tune': 1000,          # Number of tuning/warmup samples
+    'n_chains': 4,           # Number of MCMC chains
+    'target_accept': 0.95    # Target acceptance rate (higher = slower but more accurate)
+}
+
+# Minimum number of lakes needed in a size class for Bayesian analysis
+SIZE_STRATIFIED_MIN_LAKES = 10
+
+# Color scheme for glacial stages in size-stratified plots
+SIZE_STRATIFIED_STAGE_COLORS = {
+    'Wisconsin': '#3498db',     # Blue
+    'Illinoian': '#e74c3c',     # Red
+    'Driftless': '#2ecc71',     # Green
+    'unclassified': '#95a5a6'   # Gray
+}
+
 
 # ============================================================================
 # HELPER FUNCTIONS

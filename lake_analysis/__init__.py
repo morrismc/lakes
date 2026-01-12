@@ -9,13 +9,14 @@ Core Innovation: Elevation-normalization of lake density to reveal
 bimodal patterns controlled by glacial and floodplain processes.
 
 Modules:
-    config                  - Configuration settings and paths
-    data_loading            - Load data from geodatabase and rasters
-    normalization           - Compute normalized lake density
-    visualization           - Publication-quality plotting
-    powerlaw_analysis       - Power law fitting with MLE
-    glacial_chronosequence  - Glacial chronosequence analysis (Davis's hypothesis)
-    main                    - Orchestration and pipeline
+    config                     - Configuration settings and paths
+    data_loading               - Load data from geodatabase and rasters
+    normalization              - Compute normalized lake density
+    visualization              - Publication-quality plotting
+    powerlaw_analysis          - Power law fitting with MLE
+    glacial_chronosequence     - Glacial chronosequence analysis (Davis's hypothesis)
+    size_stratified_analysis   - Size-stratified lake half-life analysis
+    main                       - Orchestration and pipeline
 
 Quick Start:
     >>> from lake_analysis import load_data, analyze_elevation
@@ -32,6 +33,12 @@ Aridity Analysis (standalone):
     >>> results = analyze_aridity()
     # Compares aridity vs glacial stage as lake density predictors
     # Runs glacial classification first, then aridity comparison
+
+Size-Stratified Half-Life Analysis:
+    >>> from lake_analysis import run_size_stratified_analysis
+    >>> results = run_size_stratified_analysis(lakes)
+    # Tests whether lake half-lives vary by lake size
+    # Fits Bayesian exponential decay models for each size class
 
 Author: [Your Name]
 Project: Lake Scaling and Occurrence Analysis
@@ -179,4 +186,27 @@ from .visualization import (
     plot_bayesian_decay_curves,
     plot_bayesian_covariance,
     plot_bayesian_summary
+)
+
+# Size-stratified analysis
+from .size_stratified_analysis import (
+    # Main pipeline
+    run_size_stratified_analysis,
+    # Individual components
+    detection_limit_diagnostics,
+    calculate_size_stratified_densities,
+    plot_size_stratified_densities,
+    fit_size_stratified_halflife_models,
+    plot_bayesian_halflife_results,
+    test_halflife_size_relationship
+)
+
+# Size-stratified analysis configuration
+from .config import (
+    SIZE_STRATIFIED_BINS,
+    SIZE_STRATIFIED_LANDSCAPE_AREAS,
+    SIZE_STRATIFIED_AGE_ESTIMATES,
+    SIZE_STRATIFIED_BAYESIAN_PARAMS,
+    SIZE_STRATIFIED_MIN_LAKES,
+    SIZE_STRATIFIED_STAGE_COLORS
 )
