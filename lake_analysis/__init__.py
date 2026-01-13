@@ -105,6 +105,10 @@ from .config import NADI1_CONFIG, get_nadi1_ages
 from .glacial_chronosequence import (
     run_glacial_chronosequence_analysis,
     load_all_glacial_boundaries,
+    load_wisconsin_extent,
+    load_illinoian_extent,
+    load_driftless_area,
+    convert_lakes_to_gdf,
     classify_lakes_by_glacial_extent,
     compute_lake_density_by_glacial_stage,
     test_davis_hypothesis,
