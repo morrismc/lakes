@@ -1234,15 +1234,19 @@ def fit_overall_bayesian_halflife(
         n_lakes = np.ones(len(stages)) * 1000
     else:
         # DataFrame input
-        stages = density_by_stage['stage'].values
+        stages = density_by_stage['glacial_stage'].values
         densities = density_by_stage['density_per_1000km2'].values
         n_lakes = density_by_stage.get('n_lakes', np.ones(len(stages)) * 1000).values
 
-    # Get ages
-    ages_mean = np.array([age_estimates[s]['mean'] for s in stages])
-    ages_std = np.array([age_estimates[s]['std'] for s in stages])
+    # Get ages (use NaN for stages without age estimates)
+    ages_mean = np.array([
+        age_estimates.get(s, {}).get('mean', np.nan) for s in stages
+    ])
+    ages_std = np.array([
+        age_estimates.get(s, {}).get('std', np.nan) for s in stages
+    ])
 
-    # Remove stages with NaN density
+    # Remove stages with NaN density or NaN age (e.g., 'unclassified')
     valid_mask = ~np.isnan(densities) & (densities > 0) & ~np.isnan(ages_mean)
     if valid_mask.sum() < 2:
         if verbose:
