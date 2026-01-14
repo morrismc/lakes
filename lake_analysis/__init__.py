@@ -93,6 +93,7 @@ from .main import (
     analyze_powerlaw,
     analyze_glacial_chronosequence,
     analyze_aridity,
+    analyze_bayesian_halflife,
     analyze_nadi1_chronosequence,
     run_full_analysis,
     quick_start
@@ -202,7 +203,10 @@ from .size_stratified_analysis import (
     plot_size_stratified_densities,
     fit_size_stratified_halflife_models,
     plot_bayesian_halflife_results,
-    test_halflife_size_relationship
+    test_halflife_size_relationship,
+    # Overall Bayesian half-life (not size-stratified)
+    fit_overall_bayesian_halflife,
+    plot_overall_bayesian_halflife
 )
 
 # Size-stratified analysis configuration
@@ -212,5 +216,8 @@ from .config import (
     SIZE_STRATIFIED_AGE_ESTIMATES,
     SIZE_STRATIFIED_BAYESIAN_PARAMS,
     SIZE_STRATIFIED_MIN_LAKES,
-    SIZE_STRATIFIED_STAGE_COLORS
+    SIZE_STRATIFIED_STAGE_COLORS,
+    # Bayesian half-life configuration
+    BAYESIAN_HALFLIFE_DEFAULTS,
+    GLACIAL_STAGES_CONFIG
 )

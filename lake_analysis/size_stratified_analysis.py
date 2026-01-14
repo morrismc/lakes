@@ -1169,6 +1169,295 @@ def run_size_stratified_analysis(lake_gdf, landscape_areas=None, age_estimates=N
 
 
 # =============================================================================
+# OVERALL BAYESIAN HALF-LIFE ANALYSIS (Not Size-Stratified)
+# =============================================================================
+
+def fit_overall_bayesian_halflife(
+    density_by_stage,
+    age_estimates=None,
+    bayesian_params=None,
+    verbose=True
+):
+    """
+    Fit Bayesian exponential decay model to overall lake density across glacial stages.
+
+    This estimates the OVERALL half-life for ALL lakes (not stratified by size).
+    Model: D(t) = D₀ × exp(-k × t)
+    Half-life: t½ = ln(2) / k
+
+    Parameters
+    ----------
+    density_by_stage : dict or DataFrame
+        Lake density data for each glacial stage.
+        If dict: {'Wisconsin': 228.2, 'Illinoian': 202.8, 'Driftless': 69.4}
+        If DataFrame: Must have columns 'stage', 'density_per_1000km2', 'n_lakes'
+    age_estimates : dict, optional
+        Age estimates for each stage: {'Wisconsin': {'mean': 20, 'std': 5}, ...}
+        If None, uses DEFAULT_AGE_ESTIMATES
+    bayesian_params : dict, optional
+        PyMC sampling parameters. If None, uses DEFAULT_BAYESIAN_PARAMS
+    verbose : bool
+        Print progress messages
+
+    Returns
+    -------
+    dict or None
+        Results dict with:
+        - halflife_mean, halflife_median, halflife_ci_low, halflife_ci_high (ka)
+        - D0: Initial density posterior
+        - k: Decay rate posterior
+        - trace: PyMC InferenceData
+        - summary: DataFrame with posterior summaries
+        Returns None if PyMC not available or insufficient data
+    """
+
+    if not PYMC_AVAILABLE:
+        print("PyMC not available - skipping overall Bayesian half-life analysis")
+        return None
+
+    if bayesian_params is None:
+        bayesian_params = DEFAULT_BAYESIAN_PARAMS
+
+    if age_estimates is None:
+        age_estimates = DEFAULT_AGE_ESTIMATES
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("OVERALL BAYESIAN HALF-LIFE ANALYSIS")
+        print("=" * 70)
+
+    # Parse input data
+    if isinstance(density_by_stage, dict):
+        stages = list(density_by_stage.keys())
+        densities = np.array([density_by_stage[s] for s in stages])
+        # Assume equal weight if n_lakes not provided
+        n_lakes = np.ones(len(stages)) * 1000
+    else:
+        # DataFrame input
+        stages = density_by_stage['stage'].values
+        densities = density_by_stage['density_per_1000km2'].values
+        n_lakes = density_by_stage.get('n_lakes', np.ones(len(stages)) * 1000).values
+
+    # Get ages
+    ages_mean = np.array([age_estimates[s]['mean'] for s in stages])
+    ages_std = np.array([age_estimates[s]['std'] for s in stages])
+
+    # Remove stages with NaN density
+    valid_mask = ~np.isnan(densities) & (densities > 0) & ~np.isnan(ages_mean)
+    if valid_mask.sum() < 2:
+        if verbose:
+            print("  Insufficient valid stages for analysis (need ≥2)")
+        return None
+
+    stages = stages[valid_mask]
+    densities = densities[valid_mask]
+    n_lakes = n_lakes[valid_mask]
+    ages_mean = ages_mean[valid_mask]
+    ages_std = ages_std[valid_mask]
+
+    if verbose:
+        print(f"\nFitting exponential decay to {len(stages)} stages:")
+        for i, stage in enumerate(stages):
+            print(f"  {stage:12s}: density={densities[i]:7.2f}, "
+                  f"age={ages_mean[i]:6.0f} ± {ages_std[i]:4.0f} ka, "
+                  f"n={n_lakes[i]:,.0f}")
+
+    # Density uncertainty from Poisson counting statistics
+    density_se = np.sqrt(n_lakes) / (n_lakes / densities) / 1000  # Propagated SE
+    density_se = np.maximum(density_se, densities * 0.05)  # At least 5% error
+
+    # Build PyMC model
+    with pm.Model() as model:
+        # Prior on initial density (Wisconsin baseline)
+        D0 = pm.HalfNormal('D0', sigma=densities.max() * 2)
+
+        # Prior on half-life (in ka) - broad log-normal
+        # Centered around 500 ka with wide uncertainty
+        halflife = pm.LogNormal('halflife', mu=np.log(500), sigma=1.5)
+        k = pm.Deterministic('k', np.log(2) / halflife)
+
+        # Account for age uncertainty
+        true_ages = pm.Normal('true_ages', mu=ages_mean, sigma=ages_std, shape=len(ages_mean))
+
+        # Expected density under exponential decay
+        mu = D0 * pm.math.exp(-k * true_ages)
+
+        # Observation noise
+        sigma_obs = pm.HalfNormal('sigma_obs', sigma=10)
+        total_sigma = pm.math.sqrt(density_se**2 + sigma_obs**2)
+
+        # Likelihood
+        D_obs = pm.Normal('D_obs', mu=mu, sigma=total_sigma, observed=densities)
+
+        # Sample
+        if verbose:
+            print("\nSampling posterior...")
+
+        trace = pm.sample(
+            bayesian_params['n_samples'],
+            tune=bayesian_params['n_tune'],
+            chains=bayesian_params['n_chains'],
+            target_accept=bayesian_params.get('target_accept', 0.95),
+            return_inferencedata=True,
+            progressbar=verbose,
+            random_seed=42
+        )
+
+    # Extract posteriors
+    halflife_samples = trace.posterior['halflife'].values.flatten()
+    D0_samples = trace.posterior['D0'].values.flatten()
+    k_samples = trace.posterior['k'].values.flatten()
+
+    halflife_median = np.median(halflife_samples)
+    halflife_mean = np.mean(halflife_samples)
+    halflife_ci = np.percentile(halflife_samples, [2.5, 97.5])
+
+    D0_mean = np.mean(D0_samples)
+    D0_ci = np.percentile(D0_samples, [2.5, 97.5])
+
+    k_mean = np.mean(k_samples)
+    k_ci = np.percentile(k_samples, [2.5, 97.5])
+
+    # Check convergence
+    rhat_vals = az.rhat(trace)
+    max_rhat = max(rhat_vals['halflife'].values.max(), rhat_vals['D0'].values.max())
+
+    if verbose:
+        print(f"\nResults:")
+        print(f"  Half-life: {halflife_median:.0f} ka (95% CI: [{halflife_ci[0]:.0f}, {halflife_ci[1]:.0f}])")
+        print(f"  D₀: {D0_mean:.1f} lakes/1000km² (95% CI: [{D0_ci[0]:.1f}, {D0_ci[1]:.1f}])")
+        print(f"  k: {k_mean:.6f} per ka (95% CI: [{k_ci[0]:.6f}, {k_ci[1]:.6f}])")
+        print(f"  Convergence (R-hat): {max_rhat:.3f} {'✓' if max_rhat < 1.05 else '⚠'}")
+
+    # Get summary
+    summary = az.summary(trace, var_names=['D0', 'k', 'halflife'])
+
+    results = {
+        'halflife_mean': halflife_mean,
+        'halflife_median': halflife_median,
+        'halflife_ci_low': halflife_ci[0],
+        'halflife_ci_high': halflife_ci[1],
+        'D0': {
+            'mean': D0_mean,
+            'ci_low': D0_ci[0],
+            'ci_high': D0_ci[1],
+            'samples': D0_samples
+        },
+        'k': {
+            'mean': k_mean,
+            'ci_low': k_ci[0],
+            'ci_high': k_ci[1],
+            'samples': k_samples
+        },
+        'halflife_samples': halflife_samples,
+        'trace': trace,
+        'summary': summary,
+        'max_rhat': max_rhat,
+        'stages': stages,
+        'densities': densities,
+        'ages': ages_mean
+    }
+
+    return results
+
+
+def plot_overall_bayesian_halflife(results, output_dir=None, verbose=True):
+    """
+    Visualize overall Bayesian half-life results.
+
+    Parameters
+    ----------
+    results : dict
+        Output from fit_overall_bayesian_halflife()
+    output_dir : str, optional
+        Directory to save figure. If None, uses OUTPUT_DIR from config.
+    verbose : bool
+        Print progress messages
+
+    Returns
+    -------
+    fig : matplotlib.Figure
+        2-panel figure (decay curve + posteriors)
+    """
+
+    if results is None:
+        print("No results to plot")
+        return None
+
+    if output_dir is None:
+        from .config import OUTPUT_DIR, ensure_output_dir
+        output_dir = ensure_output_dir()
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig.suptitle('Overall Bayesian Half-Life Analysis', fontsize=14, fontweight='bold')
+
+    # Panel A: Decay curve with uncertainty
+    ax = axes[0]
+
+    ages_plot = np.linspace(1, max(results['ages']) * 1.5, 200)
+
+    # Plot posterior samples (uncertainty band)
+    D0_samples = results['D0']['samples']
+    k_samples = results['k']['samples']
+
+    for _ in range(50):
+        idx = np.random.randint(len(D0_samples))
+        ax.plot(ages_plot, D0_samples[idx] * np.exp(-k_samples[idx] * ages_plot),
+                color='steelblue', alpha=0.05, linewidth=0.5)
+
+    # Plot median fit
+    D0_med = results['D0']['mean']
+    k_med = results['k']['mean']
+    ax.plot(ages_plot, D0_med * np.exp(-k_med * ages_plot),
+            color='darkblue', linewidth=2, label='Median fit')
+
+    # Plot data points
+    ax.scatter(results['ages'], results['densities'],
+              s=100, color='red', edgecolor='black', zorder=5,
+              label='Observed')
+
+    # Add half-life annotation
+    halflife = results['halflife_median']
+    halflife_ci = (results['halflife_ci_low'], results['halflife_ci_high'])
+    ax.axvline(halflife, color='green', linestyle='--', linewidth=2,
+              label=f't½ = {halflife:.0f} ka [{halflife_ci[0]:.0f}, {halflife_ci[1]:.0f}]')
+
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('Landscape Age (ka)', fontsize=11)
+    ax.set_ylabel('Lake Density (per 1000 km²)', fontsize=11)
+    ax.set_title('A) Exponential Decay Fit')
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3)
+
+    # Panel B: Posterior distributions
+    ax = axes[1]
+
+    # Halflife posterior
+    halflife_samples = results['halflife_samples']
+    ax.hist(halflife_samples, bins=50, alpha=0.6, color='green',
+           density=True, label='Half-life')
+    ax.axvline(np.median(halflife_samples), color='darkgreen',
+              linestyle='--', linewidth=2)
+
+    ax.set_xlabel('Half-life (ka)', fontsize=11)
+    ax.set_ylabel('Posterior Density', fontsize=11)
+    ax.set_title('B) Half-Life Posterior Distribution')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save
+    fig_path = os.path.join(output_dir, 'bayesian_overall_halflife.png')
+    fig.savefig(fig_path, dpi=150, bbox_inches='tight')
+    if verbose:
+        print(f"\nSaved: {fig_path}")
+
+    return fig
+
+
+# =============================================================================
 # EXAMPLE USAGE
 # =============================================================================
 
