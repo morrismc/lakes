@@ -1910,6 +1910,192 @@ def analyze_aridity_effects(lake_gdf, zone_areas=None, save_figures=True, verbos
     return results
 
 
+def analyze_bayesian_halflife(
+    lakes,
+    run_overall=True,
+    run_size_stratified=True,
+    min_lake_area=0.05,
+    max_lake_area=20000,
+    min_lakes_per_class=10,
+    save_figures=True,
+    verbose=True
+):
+    """
+    Run Bayesian half-life analysis (overall and/or size-stratified).
+
+    This function can be run standalone or as part of run_full_analysis().
+    It estimates lake half-lives across glacial chronosequence using Bayesian
+    exponential decay models.
+
+    Two modes:
+    1. Overall: Fit single half-life to all lakes in each glacial stage
+    2. Size-stratified: Fit separate half-life for each lake size class
+
+    Parameters
+    ----------
+    lakes : DataFrame or GeoDataFrame
+        Lake data. Must have 'glacial_stage' column (from classify_lakes_by_glacial_extent)
+    run_overall : bool
+        If True, run overall Bayesian half-life analysis
+    run_size_stratified : bool
+        If True, run size-stratified half-life analysis
+    min_lake_area : float
+        Minimum lake area (km²) for analysis
+    max_lake_area : float
+        Maximum lake area (km²) to exclude Great Lakes
+    min_lakes_per_class : int
+        Minimum lakes needed per size class for Bayesian analysis
+    save_figures : bool
+        Generate and save visualizations
+    verbose : bool
+        Print progress messages
+
+    Returns
+    -------
+    dict
+        Results with 'overall' and/or 'size_stratified' keys containing analysis results
+
+    Examples
+    --------
+    # Run both analyses
+    >>> results = analyze_bayesian_halflife(lakes)
+
+    # Run only overall half-life
+    >>> results = analyze_bayesian_halflife(lakes, run_size_stratified=False)
+
+    # Run only size-stratified
+    >>> results = analyze_bayesian_halflife(lakes, run_overall=False)
+    """
+
+    print("\n" + "=" * 70)
+    print("BAYESIAN HALF-LIFE ANALYSIS")
+    print("=" * 70)
+
+    if not run_overall and not run_size_stratified:
+        print("ERROR: Must run at least one analysis type (overall or size-stratified)")
+        return None
+
+    # Check for glacial_stage column
+    if 'glacial_stage' not in lakes.columns:
+        print("ERROR: 'glacial_stage' column not found in lakes dataframe")
+        print("Run glacial chronosequence analysis first to classify lakes by stage")
+        return None
+
+    results = {}
+
+    # Import required functions
+    from .size_stratified_analysis import (
+        fit_overall_bayesian_halflife,
+        plot_overall_bayesian_halflife,
+        run_size_stratified_analysis
+    )
+    from .glacial_chronosequence import compute_lake_density_by_glacial_stage
+
+    # ---------------------------------------------------------------------
+    # OVERALL HALF-LIFE ANALYSIS
+    # ---------------------------------------------------------------------
+    if run_overall:
+        print("\n" + "-" * 70)
+        print("OVERALL BAYESIAN HALF-LIFE (All Lakes Per Stage)")
+        print("-" * 70)
+
+        try:
+            # Compute density by stage
+            if verbose:
+                print("\nComputing lake density by glacial stage...")
+
+            density_by_stage = compute_lake_density_by_glacial_stage(
+                lakes,
+                zone_areas=None,  # Will use default areas
+                verbose=verbose
+            )
+
+            if density_by_stage is None or len(density_by_stage) < 2:
+                print("  Insufficient data for overall half-life analysis")
+                results['overall'] = None
+            else:
+                # Fit Bayesian model
+                overall_results = fit_overall_bayesian_halflife(
+                    density_by_stage,
+                    verbose=verbose
+                )
+
+                results['overall'] = overall_results
+
+                # Generate visualization
+                if save_figures and overall_results is not None:
+                    fig = plot_overall_bayesian_halflife(
+                        overall_results,
+                        verbose=verbose
+                    )
+                    if fig:
+                        plt.close(fig)
+
+        except Exception as e:
+            print(f"\nERROR in overall half-life analysis: {e}")
+            if verbose:
+                import traceback
+                traceback.print_exc()
+            results['overall'] = {'error': str(e)}
+
+    # ---------------------------------------------------------------------
+    # SIZE-STRATIFIED HALF-LIFE ANALYSIS
+    # ---------------------------------------------------------------------
+    if run_size_stratified:
+        print("\n" + "-" * 70)
+        print("SIZE-STRATIFIED BAYESIAN HALF-LIFE")
+        print("-" * 70)
+
+        try:
+            # Run size-stratified analysis
+            size_results = run_size_stratified_analysis(
+                lakes,
+                min_lake_area=min_lake_area,
+                max_lake_area=max_lake_area,
+                min_lakes_per_class=min_lakes_per_class,
+                verbose=verbose
+            )
+
+            results['size_stratified'] = size_results
+
+        except Exception as e:
+            print(f"\nERROR in size-stratified analysis: {e}")
+            if verbose:
+                import traceback
+                traceback.print_exc()
+            results['size_stratified'] = {'error': str(e)}
+
+    # ---------------------------------------------------------------------
+    # SUMMARY
+    # ---------------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("BAYESIAN HALF-LIFE ANALYSIS COMPLETE")
+    print("=" * 70)
+
+    if results.get('overall') and results['overall'] is not None and 'error' not in results['overall']:
+        overall = results['overall']
+        print(f"\nOverall Half-Life:")
+        print(f"  t½ = {overall['halflife_median']:.0f} ka")
+        print(f"  95% CI: [{overall['halflife_ci_low']:.0f}, {overall['halflife_ci_high']:.0f}] ka")
+
+    if results.get('size_stratified') and results['size_stratified'].get('halflife_df') is not None:
+        print(f"\nSize-Stratified Half-Lives:")
+        halflife_df = results['size_stratified']['halflife_df']
+        print(f"  Analyzed {len(halflife_df)} size classes")
+
+        if results['size_stratified'].get('statistics'):
+            stats = results['size_stratified']['statistics']
+            if stats.get('spearman_p', 1) < 0.05:
+                if stats['spearman_rho'] > 0:
+                    print(f"  ✓ Larger lakes persist longer (ρ={stats['spearman_rho']:.3f}, p={stats['spearman_p']:.4f})")
+                else:
+                    print(f"  ✗ Smaller lakes persist longer (ρ={stats['spearman_rho']:.3f}, p={stats['spearman_p']:.4f})")
+            else:
+                print(f"  - No significant size-halflife relationship (p={stats['spearman_p']:.4f})")
+
+    return results
+
+
 def analyze_aridity(lakes=None, data_source='conus', min_lake_area=None,
                     save_figures=True, verbose=True):
     """
@@ -2404,7 +2590,7 @@ def analyze_nadi1_chronosequence(lakes=None, data_source='conus', min_lake_area=
 
 def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                        include_glacial_analysis=True, include_spatial_scaling=True,
-                       include_aridity_analysis=True,
+                       include_aridity_analysis=True, include_bayesian_halflife=True,
                        min_lake_area=None, prompt_for_threshold=False):
     """
     Run complete analysis pipeline for all hypotheses.
@@ -2426,6 +2612,9 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
     include_aridity_analysis : bool
         If True (default), run aridity vs glacial stage comparison analysis.
         Requires lakes to have aridity ('AI') and glacial_stage columns.
+    include_bayesian_halflife : bool
+        If True (default), run Bayesian half-life analysis (overall + size-stratified).
+        Requires glacial_stage column from glacial chronosequence analysis.
     min_lake_area : float, optional
         Minimum lake area (km²) for power law analyses. If None, uses config default.
         Lower values include more lakes but may violate power law assumptions.
@@ -2484,6 +2673,8 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
     if include_xmin_by_elevation:
         total_steps += 1
     if include_glacial_analysis:
+        total_steps += 1
+    if include_bayesian_halflife:
         total_steps += 1
     if include_spatial_scaling:
         total_steps += 1
@@ -2597,7 +2788,25 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
         with timed_step(timer, "Glacial chronosequence analysis"):
             results['glacial_chronosequence'] = analyze_glacial_chronosequence(lakes)
 
-    # Step 13: Spatial scaling analysis (if enabled)
+    # Step 13: Bayesian half-life analysis (if enabled)
+    if include_bayesian_halflife and results.get('glacial_chronosequence'):
+        step += 1
+        print_step_header(step, total_steps, "Bayesian Half-Life Analysis (Overall + Size-Stratified)")
+        with timed_step(timer, "Bayesian half-life analysis"):
+            # Check if glacial analysis succeeded
+            glacial = results['glacial_chronosequence']
+            if glacial and 'lake_gdf' in glacial:
+                results['bayesian_halflife'] = analyze_bayesian_halflife(
+                    glacial['lake_gdf'],
+                    run_overall=True,
+                    run_size_stratified=True,
+                    verbose=True
+                )
+            else:
+                print("  Skipping: Glacial chronosequence analysis required")
+                results['bayesian_halflife'] = {'error': 'glacial_analysis_required'}
+
+    # Step 14/15: Spatial scaling analysis (if enabled)
     if include_spatial_scaling:
         step += 1
         print_step_header(step, total_steps, "Spatial Scaling Analysis (Geographic Patterns)")
@@ -2608,7 +2817,7 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                 lake_gdf = results['glacial_chronosequence']['lake_gdf']
             results['spatial_scaling'] = analyze_spatial_scaling(lakes, lake_gdf=lake_gdf)
 
-    # Step 14: Aridity vs glacial stage comparison (if enabled)
+    # Step 15/16: Aridity vs glacial stage comparison (if enabled)
     if include_aridity_analysis:
         step += 1
         print_step_header(step, total_steps, "Aridity vs Glacial Stage Analysis")
@@ -2658,7 +2867,7 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                 print("  Warning: Glacial analysis required for aridity comparison. Skipping.")
                 results['aridity_analysis'] = {'error': 'glacial_analysis_required'}
 
-    # Step 15: Generate additional figures
+    # Step 16/17: Generate additional figures
     step += 1
     print_step_header(step, total_steps, "Generating Summary Figures")
     with timed_step(timer, "Summary figures"):
@@ -2813,11 +3022,46 @@ def print_analysis_summary(results):
             if davis.get('p_value') is not None:
                 print(f"    P-value: {davis['p_value']:.4f}")
 
-    # 4. DALTON 18ka RESULTS
+    # 4. BAYESIAN HALF-LIFE RESULTS
+    bayesian = results.get('bayesian_halflife', {})
+    if bayesian and 'error' not in bayesian:
+        print("\n┌" + "─" * 78 + "┐")
+        print("│ 4. BAYESIAN HALF-LIFE ANALYSIS" + " " * 47 + "│")
+        print("└" + "─" * 78 + "┘")
+
+        if bayesian.get('overall'):
+            overall = bayesian['overall']
+            halflife = overall.get('halflife_median')
+            if halflife:
+                ci_low = overall.get('halflife_ci_low')
+                ci_high = overall.get('halflife_ci_high')
+                print(f"\n  Overall Half-Life:")
+                print(f"    t½ = {halflife:.0f} ka (95% CI: [{ci_low:.0f}, {ci_high:.0f}])")
+                print(f"    (Time for lake density to decrease by 50%)")
+
+        if bayesian.get('size_stratified') and bayesian['size_stratified'].get('halflife_df') is not None:
+            halflife_df = bayesian['size_stratified']['halflife_df']
+            print(f"\n  Size-Stratified Half-Lives:")
+            print(f"    Analyzed {len(halflife_df)} size classes")
+
+            if bayesian['size_stratified'].get('statistics'):
+                stats = bayesian['size_stratified']['statistics']
+                print(f"    Spearman ρ = {stats.get('spearman_rho', 0):.3f}")
+                print(f"    p-value = {stats.get('spearman_p', 1):.4f}")
+
+                if stats.get('spearman_p', 1) < 0.05:
+                    if stats['spearman_rho'] > 0:
+                        print(f"    ✓ Larger lakes persist significantly longer")
+                    else:
+                        print(f"    ✗ Smaller lakes persist longer (unexpected)")
+                else:
+                    print(f"    - No significant size-halflife relationship")
+
+    # 5. DALTON 18ka RESULTS
     dalton = results.get('dalton_18ka', {})
     if dalton:
         print("\n┌" + "─" * 78 + "┐")
-        print("│ 4. DALTON 18KA (LGM) ANALYSIS" + " " * 48 + "│")
+        print("│ 5. DALTON 18KA (LGM) ANALYSIS" + " " * 48 + "│")
         print("└" + "─" * 78 + "┘")
 
         density_comp = dalton.get('density_comparison', {})
@@ -2841,11 +3085,11 @@ def print_analysis_summary(results):
             if ratio and not np.isnan(ratio):
                 print(f"\n  Density ratio (glaciated/unglaciated): {ratio:.2f}x")
 
-    # 5. SPATIAL SCALING RESULTS
+    # 6. SPATIAL SCALING RESULTS
     spatial = results.get('spatial_scaling', {})
     if spatial:
         print("\n┌" + "─" * 78 + "┐")
-        print("│ 5. SPATIAL SCALING PATTERNS" + " " * 50 + "│")
+        print("│ 6. SPATIAL SCALING PATTERNS" + " " * 50 + "│")
         print("└" + "─" * 78 + "┘")
 
         lat = spatial.get('latitudinal', {})

@@ -26,7 +26,7 @@ This document provides the complete, tested workflow for running the size-strati
 # =============================================================================
 
 from lake_analysis import (
-    load_data,                          # Load lake data
+    load_lake_data_from_parquet,        # Load lake data from parquet (DIRECT)
     load_wisconsin_extent,              # Load Wisconsin boundary
     load_illinoian_extent,              # Load Illinoian boundary
     load_driftless_area,                # Load Driftless boundary
@@ -37,10 +37,15 @@ from lake_analysis import (
 )
 
 # -----------------------------------------------------------------------------
-# STEP 1: Load Lake Data
+# STEP 1: Load Lake Data from Parquet (Fast & Direct)
 # -----------------------------------------------------------------------------
-print("Step 1: Loading lake data...")
-lakes = load_data()  # Returns pandas DataFrame with ~4.9M lakes
+print("Step 1: Loading lake data from parquet...")
+# Uses default path: F:\Lakes\Data\lakes.parquet
+lakes = load_lake_data_from_parquet()
+
+# Or specify path explicitly:
+# lakes = load_lake_data_from_parquet(r"F:\Lakes\Data\lakes_conus.parquet")
+
 print(f"✓ Loaded {len(lakes):,} lakes")
 
 # -----------------------------------------------------------------------------
@@ -251,6 +256,84 @@ lakes_gdf = convert_lakes_to_gdf(lakes_subset)
 - **Classification**: 10-30 minutes (4.9M spatial joins)
 - **Bayesian analysis**: 5-15 minutes per size class
 - **Total**: 30-60 minutes for complete analysis
+
+## Integrated Bayesian Half-Life Analysis
+
+The Bayesian half-life analysis is now fully integrated into the main workflow. It automatically runs in `run_full_analysis()` and includes:
+
+### Two Analysis Modes
+
+**1. Overall Half-Life** (all lakes per glacial stage):
+- Fits: D(t) = D₀ × exp(-k × t)
+- Estimates: t½ (half-life), D₀ (initial density), k (decay rate)
+- Output: `bayesian_overall_halflife.png`
+
+**2. Size-Stratified Half-Life** (separate models per size class):
+- Tests if small lakes have shorter half-lives than large lakes
+- Outputs: 3 figures (detection, density, halflife) + CSV files
+
+### Standalone Usage
+
+```python
+from lake_analysis import analyze_bayesian_halflife
+
+# Run both analyses (default)
+results = analyze_bayesian_halflife(lakes)
+
+# Run only overall half-life
+results = analyze_bayesian_halflife(
+    lakes,
+    run_overall=True,
+    run_size_stratified=False
+)
+
+# Run only size-stratified
+results = analyze_bayesian_halflife(
+    lakes,
+    run_overall=False,
+    run_size_stratified=True
+)
+```
+
+### Integrated with Full Pipeline
+
+```python
+# Runs automatically as Step 13 in full pipeline
+results = run_full_analysis(
+    data_source='conus',
+    include_bayesian_halflife=True  # Default
+)
+
+# Access results
+overall = results['bayesian_halflife']['overall']
+print(f"Overall half-life: {overall['halflife_median']:.0f} ka")
+
+size_stratified = results['bayesian_halflife']['size_stratified']
+if size_stratified.get('halflife_df') is not None:
+    print(f"Analyzed {len(size_stratified['halflife_df'])} size classes")
+```
+
+### Requirements
+
+- Requires `glacial_stage` column (from glacial chronosequence analysis)
+- PyMC and ArviZ must be installed: `pip install pymc arviz`
+- Runs after glacial chronosequence, before spatial scaling
+
+### Expected Outputs
+
+**Overall Analysis:**
+- `bayesian_overall_halflife.png` (2-panel figure)
+  - A) Exponential decay curve with uncertainty
+  - B) Half-life posterior distribution
+
+**Size-Stratified Analysis:**
+- Same outputs as described in "Expected Output" section above
+
+### Future Support
+
+Configuration includes placeholder for pre-Illinoian glacial boundaries:
+- `GLACIAL_STAGES_CONFIG['Pre-Illinoian']` with `required: False`
+- Will be automatically included when boundaries become available
 
 ## Next Steps
 

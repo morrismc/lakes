@@ -490,6 +490,55 @@ SIZE_STRATIFIED_STAGE_COLORS = {
     'unclassified': '#95a5a6'   # Gray
 }
 
+# ============================================================================
+# BAYESIAN HALF-LIFE ANALYSIS DEFAULTS
+# ============================================================================
+
+# Default parameters for Bayesian half-life analysis
+BAYESIAN_HALFLIFE_DEFAULTS = {
+    'run_overall': True,           # Run overall half-life analysis
+    'run_size_stratified': True,   # Run size-stratified analysis
+    'min_lake_area': 0.05,         # Minimum lake size (km²)
+    'max_lake_area': 20000,        # Maximum lake size (km²) - excludes Great Lakes
+    'min_lakes_per_class': 10,     # Min lakes per size class for Bayesian fit
+    'n_samples': 2000,             # PyMC samples per chain
+    'n_tune': 1000,                # PyMC tuning samples
+    'n_chains': 4,                 # PyMC MCMC chains
+    'target_accept': 0.95          # PyMC target acceptance rate
+}
+
+# Glacial stages for half-life analysis (supports future expansion)
+GLACIAL_STAGES_CONFIG = {
+    'Wisconsin': {
+        'age_mean_ka': 20,
+        'age_std_ka': 5,
+        'boundary_key': 'wisconsin',
+        'required': True,
+        'description': 'Most recent glaciation (~15-25 ka)'
+    },
+    'Illinoian': {
+        'age_mean_ka': 160,
+        'age_std_ka': 30,
+        'boundary_key': 'illinoian',
+        'required': True,
+        'description': 'Older glaciation (~130-190 ka)'
+    },
+    'Pre-Illinoian': {
+        'age_mean_ka': 500,
+        'age_std_ka': 100,
+        'boundary_key': 'pre_illinoian',
+        'required': False,  # Not yet available - placeholder for future
+        'description': 'Pre-Illinoian glaciation (>~500 ka)'
+    },
+    'Driftless': {
+        'age_mean_ka': 1500,
+        'age_std_ka': 500,
+        'boundary_key': 'driftless',
+        'required': True,
+        'description': 'Never glaciated (>1.5 Ma)'
+    }
+}
+
 
 # ============================================================================
 # HELPER FUNCTIONS

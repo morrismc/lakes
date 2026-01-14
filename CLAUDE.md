@@ -202,6 +202,65 @@ Compute centroids on projected CRS first, then transform to geographic.
    - `size_stratified_bayesian_results.png`
    - CSV files with numerical results
 
+### Bayesian Half-Life Analysis (Integrated)
+The Bayesian half-life analysis is now fully integrated into the main workflow. It runs automatically in `run_full_analysis()` and can also be run standalone.
+
+**Two Analysis Modes:**
+1. **Overall Half-Life**: Fits single exponential decay to all lakes per glacial stage
+   - Model: D(t) = D₀ × exp(-k × t)
+   - Estimates: t½ (half-life), D₀ (initial density), k (decay rate)
+   - Output: `bayesian_overall_halflife.png`
+
+2. **Size-Stratified Half-Life**: Fits separate models for each lake size class
+   - Tests if small lakes have shorter half-lives than large lakes
+   - Statistical tests for size-halflife correlation
+   - Outputs: Same as size-stratified analysis above
+
+**Standalone Usage:**
+```python
+from lake_analysis import analyze_bayesian_halflife
+
+# Run both analyses (default)
+results = analyze_bayesian_halflife(lakes)
+
+# Run only overall half-life
+results = analyze_bayesian_halflife(
+    lakes,
+    run_overall=True,
+    run_size_stratified=False
+)
+
+# Run only size-stratified
+results = analyze_bayesian_halflife(
+    lakes,
+    run_overall=False,
+    run_size_stratified=True
+)
+```
+
+**Integrated Usage:**
+The analysis runs automatically as Step 13 in `run_full_analysis()`:
+```python
+results = run_full_analysis(
+    data_source='conus',
+    include_bayesian_halflife=True  # Default
+)
+
+# Access results
+overall = results['bayesian_halflife']['overall']
+size_stratified = results['bayesian_halflife']['size_stratified']
+```
+
+**Requirements:**
+- Requires `glacial_stage` column (from glacial chronosequence analysis)
+- PyMC and ArviZ for Bayesian inference
+- Runs after glacial chronosequence, before spatial scaling
+
+**Future Support:**
+Configuration includes placeholder for pre-Illinoian glacial boundaries:
+- `GLACIAL_STAGES_CONFIG['Pre-Illinoian']` with `required: False`
+- Will be automatically included when boundaries become available
+
 ## Git Workflow
 
 - **Main branch**: `main` (or `master`)
