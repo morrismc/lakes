@@ -26,7 +26,7 @@ This document provides the complete, tested workflow for running the size-strati
 # =============================================================================
 
 from lake_analysis import (
-    load_data,                          # Load lake data
+    load_lake_data_from_parquet,        # Load lake data from parquet (DIRECT)
     load_wisconsin_extent,              # Load Wisconsin boundary
     load_illinoian_extent,              # Load Illinoian boundary
     load_driftless_area,                # Load Driftless boundary
@@ -37,10 +37,15 @@ from lake_analysis import (
 )
 
 # -----------------------------------------------------------------------------
-# STEP 1: Load Lake Data
+# STEP 1: Load Lake Data from Parquet (Fast & Direct)
 # -----------------------------------------------------------------------------
-print("Step 1: Loading lake data...")
-lakes = load_data()  # Returns pandas DataFrame with ~4.9M lakes
+print("Step 1: Loading lake data from parquet...")
+# Uses default path: F:\Lakes\Data\lakes.parquet
+lakes = load_lake_data_from_parquet()
+
+# Or specify path explicitly:
+# lakes = load_lake_data_from_parquet(r"F:\Lakes\Data\lakes_conus.parquet")
+
 print(f"✓ Loaded {len(lakes):,} lakes")
 
 # -----------------------------------------------------------------------------

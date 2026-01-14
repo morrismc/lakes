@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lake_analysis import (
     # Data loading
     load_lake_data_from_parquet,
+    convert_lakes_to_gdf,
 
     # Glacial classification
     load_wisconsin_extent,
@@ -46,7 +47,6 @@ from lake_analysis import (
     run_size_stratified_analysis,
 
     # Configuration
-    LAKE_CONUS_PARQUET_PATH,
     OUTPUT_DIR,
     COLS,
     SIZE_STRATIFIED_BINS,
@@ -75,29 +75,46 @@ def main():
     print(f"Output directory: {output_dir}")
 
     # ========================================================================
-    # STEP 1: Load lake data
+    # STEP 1: Load lake data from parquet
     # ========================================================================
 
     print("\n" + "-" * 80)
-    print("STEP 1: Loading lake data")
+    print("STEP 1: Loading lake data from parquet")
     print("-" * 80)
 
     try:
-        lakes = load_lake_data_from_parquet(LAKE_CONUS_PARQUET_PATH)
-        print(f"Loaded {len(lakes):,} lakes from CONUS dataset")
+        # Use default parquet path from config
+        lakes = load_lake_data_from_parquet()
+        print(f"Loaded {len(lakes):,} lakes")
         print(f"Area range: {lakes[COLS['area']].min():.4f} - {lakes[COLS['area']].max():.1f} km²")
-    except FileNotFoundError:
-        print(f"ERROR: Could not find lake data at {LAKE_CONUS_PARQUET_PATH}")
-        print("Please ensure the CONUS lake parquet file exists.")
-        print("You can create it using the data loading utilities.")
+    except FileNotFoundError as e:
+        print(f"ERROR: Could not find parquet file: {e}")
+        print("Please ensure your parquet file exists.")
+        print("Check paths in lake_analysis/config.py")
         return
 
     # ========================================================================
-    # STEP 2: Load glacial boundaries and classify lakes
+    # STEP 2: Convert DataFrame to GeoDataFrame
     # ========================================================================
 
     print("\n" + "-" * 80)
-    print("STEP 2: Loading glacial boundaries and classifying lakes")
+    print("STEP 2: Converting to GeoDataFrame")
+    print("-" * 80)
+
+    try:
+        print("Converting DataFrame to GeoDataFrame with point geometries...")
+        lakes_gdf = convert_lakes_to_gdf(lakes)
+        print(f"Created GeoDataFrame with CRS: {lakes_gdf.crs}")
+    except Exception as e:
+        print(f"ERROR: Conversion failed: {e}")
+        return
+
+    # ========================================================================
+    # STEP 3: Load glacial boundaries
+    # ========================================================================
+
+    print("\n" + "-" * 80)
+    print("STEP 3: Loading glacial boundaries")
     print("-" * 80)
 
     boundaries = {}
@@ -131,28 +148,36 @@ def main():
         print("Please check your configuration and ensure the boundary shapefiles exist.")
         return
 
-    # Classify lakes by glacial extent
-    print("\nClassifying lakes by glacial stage...")
-    lakes = classify_lakes_by_glacial_extent(lakes, boundaries, verbose=True)
-
-    # Print classification summary
-    print("\nGlacial stage classification:")
-    stage_counts = lakes['glacial_stage'].value_counts()
-    for stage, count in stage_counts.items():
-        pct = 100 * count / len(lakes)
-        print(f"  {stage:15s}: {count:8,} lakes ({pct:5.1f}%)")
-
     # ========================================================================
-    # STEP 3: Filter lakes for analysis
+    # STEP 4: Classify lakes by glacial extent
     # ========================================================================
 
     print("\n" + "-" * 80)
-    print("STEP 3: Filtering lakes for analysis")
+    print("STEP 4: Classifying lakes by glacial stage")
+    print("-" * 80)
+
+    # Classify using the GeoDataFrame
+    print("Running spatial classification...")
+    lakes_classified = classify_lakes_by_glacial_extent(lakes_gdf, boundaries, verbose=True)
+
+    # Print classification summary
+    print("\nGlacial stage classification:")
+    stage_counts = lakes_classified['glacial_stage'].value_counts()
+    for stage, count in stage_counts.items():
+        pct = 100 * count / len(lakes_classified)
+        print(f"  {stage:15s}: {count:8,} lakes ({pct:5.1f}%)")
+
+    # ========================================================================
+    # STEP 5: Filter lakes for analysis
+    # ========================================================================
+
+    print("\n" + "-" * 80)
+    print("STEP 5: Filtering lakes for analysis")
     print("-" * 80)
 
     # Filter to relevant glacial stages
     relevant_stages = ['Wisconsin', 'Illinoian', 'Driftless']
-    lakes_filtered = lakes[lakes['glacial_stage'].isin(relevant_stages)].copy()
+    lakes_filtered = lakes_classified[lakes_classified['glacial_stage'].isin(relevant_stages)].copy()
 
     print(f"Filtered to {len(lakes_filtered):,} lakes in Wisconsin, Illinoian, or Driftless areas")
 
@@ -170,11 +195,11 @@ def main():
     print(f"After max area filter (<{max_lake_area} km²): {len(lakes_filtered):,} lakes")
 
     # ========================================================================
-    # STEP 4: Calculate landscape areas (optional - can use defaults)
+    # STEP 6: Calculate landscape areas (optional - can use defaults)
     # ========================================================================
 
     print("\n" + "-" * 80)
-    print("STEP 4: Landscape areas")
+    print("STEP 6: Landscape areas")
     print("-" * 80)
 
     # You can calculate actual landscape areas from boundaries if desired
@@ -186,11 +211,11 @@ def main():
         print(f"  {stage:12s}: {area:10,.0f} km²")
 
     # ========================================================================
-    # STEP 5: Run size-stratified analysis
+    # STEP 7: Run size-stratified analysis
     # ========================================================================
 
     print("\n" + "-" * 80)
-    print("STEP 5: Running size-stratified analysis")
+    print("STEP 7: Running size-stratified analysis")
     print("-" * 80)
 
     # Configuration
@@ -224,7 +249,7 @@ def main():
     )
 
     # ========================================================================
-    # STEP 6: Summarize results
+    # STEP 8: Summarize results
     # ========================================================================
 
     print("\n" + "=" * 80)
