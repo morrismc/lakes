@@ -2015,9 +2015,17 @@ def analyze_bayesian_halflife(
             if verbose:
                 print("\nComputing lake density by glacial stage...")
 
+            # Use default landscape areas from config
+            from .config import SIZE_STRATIFIED_LANDSCAPE_AREAS
+            zone_areas = {
+                'wisconsin': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Wisconsin'),
+                'illinoian': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Illinoian'),
+                'driftless': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Driftless')
+            }
+
             density_by_stage = compute_lake_density_by_glacial_stage(
                 lakes,
-                zone_areas=None,  # Will use default areas
+                zone_areas=zone_areas,
                 verbose=verbose
             )
 
