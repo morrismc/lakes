@@ -830,7 +830,7 @@ def plot_bayesian_halflife_results(results_df, density_df, traces, output_dir=No
                            np.log10(results_df['size_geom'].max()), 50)
         y_fit = 10**(slope * np.log10(x_fit) + intercept)
         ax1.plot(x_fit, y_fit, 'r--', linewidth=2, alpha=0.7,
-                label=f't½ ∝ Size^{slope:.2f} (R²={r**2:.2f}, p={p:.3f})')
+                label=f't½ ∝ Size^{slope:.2f} (R²={r**2:.2f})')
         ax1.legend(loc='lower right')
 
     ax1.set_xscale('log')
@@ -844,21 +844,31 @@ def plot_bayesian_halflife_results(results_df, density_df, traces, output_dir=No
     ax2 = fig.add_subplot(2, 2, 2)
     colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(traces)))
 
+    # Collect all samples to determine reasonable xlim
+    all_samples = []
     for (size_class, trace), color in zip(traces.items(), colors):
         samples = trace.posterior['halflife'].values.flatten()
+        all_samples.extend(samples)
         ax2.hist(samples, bins=50, alpha=0.4, color=color, density=True, label=size_class)
         ax2.axvline(np.median(samples), color=color, linestyle='--', linewidth=2)
 
-    ax2.set_xlabel('Half-life (ka)')
-    ax2.set_ylabel('Posterior Density')
+    # Set xlim to 99th percentile to avoid extreme outliers stretching axis
+    xlim_max = np.percentile(all_samples, 99)
+    ax2.set_xlim(0, xlim_max)
+
+    ax2.set_xlabel('Half-life (ka)', fontsize=11)
+    ax2.set_ylabel('Posterior Density', fontsize=11)
     ax2.set_title('B) Posterior Distributions')
-    ax2.legend(fontsize=8)
+    ax2.legend(fontsize=8, loc='upper right')
     ax2.grid(True, alpha=0.3)
 
     # Panel C: Fitted decay curves
     ax3 = fig.add_subplot(2, 2, 3)
 
     ages_plot = np.linspace(1, 3000, 200)
+
+    # Collect density values to determine reasonable ylim
+    all_densities = []
 
     for (size_class, trace), color in zip(traces.items(), colors):
         D0_samples = trace.posterior['D0'].values.flatten()
@@ -867,24 +877,40 @@ def plot_bayesian_halflife_results(results_df, density_df, traces, output_dir=No
         # Median fit
         D0_med = np.median(D0_samples)
         k_med = np.median(k_samples)
-        ax3.plot(ages_plot, D0_med * np.exp(-k_med * ages_plot),
+        decay_values = D0_med * np.exp(-k_med * ages_plot)
+        all_densities.extend(decay_values[decay_values > 0])
+        ax3.plot(ages_plot, decay_values,
                 color=color, linewidth=2, label=size_class)
 
         # Uncertainty band (30 draws)
         for _ in range(30):
             idx = np.random.randint(len(D0_samples))
-            ax3.plot(ages_plot, D0_samples[idx] * np.exp(-k_samples[idx] * ages_plot),
+            unc_values = D0_samples[idx] * np.exp(-k_samples[idx] * ages_plot)
+            all_densities.extend(unc_values[unc_values > 0])
+            ax3.plot(ages_plot, unc_values,
                     color=color, alpha=0.03, linewidth=0.5)
 
         # Data points
         class_data = density_df[density_df['size_class'] == size_class]
-        ax3.scatter(class_data['age_mean_ka'], class_data['density_per_1000km2'],
+        data_densities = class_data['density_per_1000km2'].values
+        all_densities.extend(data_densities[data_densities > 0])
+        ax3.scatter(class_data['age_mean_ka'], data_densities,
                    color=color, s=100, edgecolor='black', zorder=5)
 
     ax3.set_xscale('log')
     ax3.set_yscale('log')
-    ax3.set_xlabel('Landscape Age (ka)')
-    ax3.set_ylabel('Lake Density (per 1000 km²)')
+
+    # Set reasonable ylim based on data (avoid extreme values)
+    if len(all_densities) > 0:
+        y_min = np.percentile(all_densities, 1)  # 1st percentile
+        y_max = np.percentile(all_densities, 99)  # 99th percentile
+        # Add some padding
+        y_min = y_min / 10
+        y_max = y_max * 10
+        ax3.set_ylim(y_min, y_max)
+
+    ax3.set_xlabel('Landscape Age (ka)', fontsize=11)
+    ax3.set_ylabel('Lake Density (per 1000 km²)', fontsize=11)
     ax3.set_title('C) Fitted Decay Curves')
     ax3.legend(fontsize=8, loc='upper right')
     ax3.grid(True, alpha=0.3)
@@ -895,18 +921,20 @@ def plot_bayesian_halflife_results(results_df, density_df, traces, output_dir=No
 
     table_data = []
     for _, row in results_df.iterrows():
+        # Convergence indicator - use text instead of unicode symbols
+        conv_text = 'OK' if row['max_rhat'] < 1.05 else 'WARN'
         table_data.append([
             row['size_class'],
             f"{row['size_min']:.2f}–{row['size_max']:.1f}" if row['size_max'] < 100 else f">{row['size_min']:.0f}",
             f"{row['n_lakes_total']:,}",
             f"{row['halflife_median']:.0f}",
             f"[{row['halflife_ci_low']:.0f}, {row['halflife_ci_high']:.0f}]",
-            f"{'✓' if row['max_rhat'] < 1.05 else '⚠'}"
+            conv_text
         ])
 
     table = ax4.table(
         cellText=table_data,
-        colLabels=['Size Class', 'Range (km²)', 'n Lakes', 't½ (ka)', '95% CI', 'Conv.'],
+        colLabels=['Size Class', 'Range (km²)', 'n Lakes', 't½ (ka)', '95% CI', 'Conv'],
         loc='center',
         cellLoc='center'
     )
