@@ -867,8 +867,8 @@ def plot_bayesian_halflife_results(results_df, density_df, traces, output_dir=No
 
     ages_plot = np.linspace(1, 3000, 200)
 
-    # Collect density values to determine reasonable ylim
-    all_densities = []
+    # Collect only DATA POINT densities (not decay curves which go to zero)
+    data_densities = []
 
     for (size_class, trace), color in zip(traces.items(), colors):
         D0_samples = trace.posterior['D0'].values.flatten()
@@ -878,7 +878,6 @@ def plot_bayesian_halflife_results(results_df, density_df, traces, output_dir=No
         D0_med = np.median(D0_samples)
         k_med = np.median(k_samples)
         decay_values = D0_med * np.exp(-k_med * ages_plot)
-        all_densities.extend(decay_values[decay_values > 0])
         ax3.plot(ages_plot, decay_values,
                 color=color, linewidth=2, label=size_class)
 
@@ -886,27 +885,26 @@ def plot_bayesian_halflife_results(results_df, density_df, traces, output_dir=No
         for _ in range(30):
             idx = np.random.randint(len(D0_samples))
             unc_values = D0_samples[idx] * np.exp(-k_samples[idx] * ages_plot)
-            all_densities.extend(unc_values[unc_values > 0])
             ax3.plot(ages_plot, unc_values,
                     color=color, alpha=0.03, linewidth=0.5)
 
-        # Data points
+        # Data points - collect for ylim calculation
         class_data = density_df[density_df['size_class'] == size_class]
-        data_densities = class_data['density_per_1000km2'].values
-        all_densities.extend(data_densities[data_densities > 0])
-        ax3.scatter(class_data['age_mean_ka'], data_densities,
+        densities_vals = class_data['density_per_1000km2'].values
+        data_densities.extend(densities_vals[densities_vals > 0])
+        ax3.scatter(class_data['age_mean_ka'], densities_vals,
                    color=color, s=100, edgecolor='black', zorder=5)
 
     ax3.set_xscale('log')
     ax3.set_yscale('log')
 
-    # Set reasonable ylim based on data (avoid extreme values)
-    if len(all_densities) > 0:
-        y_min = np.percentile(all_densities, 1)  # 1st percentile
-        y_max = np.percentile(all_densities, 99)  # 99th percentile
-        # Add some padding
-        y_min = y_min / 10
-        y_max = y_max * 10
+    # Set reasonable ylim based ONLY on data points (not decay predictions)
+    if len(data_densities) > 0:
+        y_min = min(data_densities) / 10  # Minimum data point / 10
+        y_max = max(data_densities) * 10   # Maximum data point * 10
+        # Enforce reasonable bounds for log scale
+        y_min = max(y_min, 1e-12)  # Don't go below 10^-12
+        y_max = min(y_max, 1e3)    # Don't go above 10^3
         ax3.set_ylim(y_min, y_max)
 
     ax3.set_xlabel('Landscape Age (ka)', fontsize=11)
