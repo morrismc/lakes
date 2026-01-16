@@ -1992,15 +1992,24 @@ def analyze_bayesian_halflife(
     from .glacial_chronosequence import compute_lake_density_by_glacial_stage
     from .config import COLS
 
-    # Filter by max_lake_area if needed (to exclude Great Lakes)
+    # Filter by lake area to match size-stratified analysis
     area_col = COLS.get('area', 'AREASQKM')
-    if max_lake_area is not None and area_col in lakes.columns:
+    if area_col in lakes.columns:
         n_original = len(lakes)
-        lakes = lakes[lakes[area_col] <= max_lake_area].copy()
+
+        # Apply min and max filters
+        lakes = lakes[
+            (lakes[area_col] >= min_lake_area) &
+            (lakes[area_col] <= max_lake_area)
+        ].copy()
+
         n_filtered = len(lakes)
         if verbose and n_original > n_filtered:
-            print(f"\nFiltered out {n_original - n_filtered:,} lakes larger than {max_lake_area} km²")
-            print(f"Remaining: {n_filtered:,} lakes")
+            print(f"\nFiltered lakes by size:")
+            print(f"  Minimum area: {min_lake_area} km²")
+            print(f"  Maximum area: {max_lake_area} km²")
+            print(f"  Removed: {n_original - n_filtered:,} lakes")
+            print(f"  Remaining: {n_filtered:,} lakes")
 
     # ---------------------------------------------------------------------
     # OVERALL HALF-LIFE ANALYSIS
