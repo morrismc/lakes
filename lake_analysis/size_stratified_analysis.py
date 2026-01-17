@@ -1418,28 +1418,37 @@ def plot_overall_bayesian_halflife(results, output_dir=None, verbose=True):
         from .config import OUTPUT_DIR, ensure_output_dir
         output_dir = ensure_output_dir()
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    fig.suptitle('Overall Bayesian Half-Life Analysis', fontsize=14, fontweight='bold')
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig.suptitle('Bayesian Analysis of Lake Density Decay', fontsize=14, fontweight='bold')
 
     # Panel A: Decay curve with uncertainty
     ax = axes[0]
 
     ages_plot = np.linspace(1, max(results['ages']) * 1.5, 200)
 
-    # Plot posterior samples (uncertainty band)
+    # Plot posterior credible intervals
     D0_samples = results['D0']['samples']
     k_samples = results['k']['samples']
 
-    for _ in range(50):
-        idx = np.random.randint(len(D0_samples))
-        ax.plot(ages_plot, D0_samples[idx] * np.exp(-k_samples[idx] * ages_plot),
-                color='steelblue', alpha=0.05, linewidth=0.5)
+    # Calculate credible intervals
+    decay_curves = np.array([D0_samples[i] * np.exp(-k_samples[i] * ages_plot)
+                             for i in range(len(D0_samples))])
+
+    median_curve = np.median(decay_curves, axis=0)
+    ci_95_lower = np.percentile(decay_curves, 2.5, axis=0)
+    ci_95_upper = np.percentile(decay_curves, 97.5, axis=0)
+    ci_50_lower = np.percentile(decay_curves, 25, axis=0)
+    ci_50_upper = np.percentile(decay_curves, 75, axis=0)
+
+    # Plot credible intervals
+    ax.fill_between(ages_plot, ci_95_lower, ci_95_upper,
+                    color='steelblue', alpha=0.3, label='95% CI')
+    ax.fill_between(ages_plot, ci_50_lower, ci_50_upper,
+                    color='steelblue', alpha=0.5, label='50% CI')
 
     # Plot median fit
-    D0_med = results['D0']['mean']
-    k_med = results['k']['mean']
-    ax.plot(ages_plot, D0_med * np.exp(-k_med * ages_plot),
-            color='darkblue', linewidth=2, label='Median fit')
+    ax.plot(ages_plot, median_curve,
+            color='darkblue', linewidth=2, label='Median')
 
     # Plot data points
     ax.scatter(results['ages'], results['densities'],
@@ -1452,13 +1461,47 @@ def plot_overall_bayesian_halflife(results, output_dir=None, verbose=True):
     ax.axvline(halflife, color='green', linestyle='--', linewidth=2,
               label=f't½ = {halflife:.0f} ka [{halflife_ci[0]:.0f}, {halflife_ci[1]:.0f}]')
 
-    ax.set_xscale('log')
-    ax.set_yscale('log')
+    # Use LINEAR y-axis to show dramatic exponential decay curve
+    # (log y-axis makes exponential decay look like a boring straight line)
     ax.set_xlabel('Landscape Age (ka)', fontsize=11)
     ax.set_ylabel('Lake Density (per 1000 km²)', fontsize=11)
-    ax.set_title('A) Exponential Decay Fit')
+    ax.set_title('A) Bayesian Decay Model')
     ax.legend(loc='upper right')
     ax.grid(True, alpha=0.3)
+
+    # Set reasonable axis limits
+    ax.set_xlim(0, max(results['ages']) * 1.2)
+    max_density = max(results['densities']) * 1.1
+    ax.set_ylim(0, max_density)
+
+    # Add model summary box
+    D0_mean = results['D0']['mean']
+    D0_ci_low = results['D0']['ci_low']
+    D0_ci_high = results['D0']['ci_high']
+    k_mean = results['k']['mean']
+    k_ci_low = results['k']['ci_low']
+    k_ci_high = results['k']['ci_high']
+
+    summary_text = (
+        "BAYESIAN DECAY MODEL SUMMARY\n"
+        "="*35 + "\n\n"
+        f"Posterior Estimates (mean [95% CI]):\n"
+        f"  D₀: {D0_mean:.1f} [{D0_ci_low:.1f}, {D0_ci_high:.1f}]\n"
+        f"  k:  {k_mean:.6f} [{k_ci_low:.6f}, {k_ci_high:.6f}] /ka\n"
+        f"  Half-life: {halflife:.0f} [{halflife_ci[0]:.0f}, {halflife_ci[1]:.0f}] ka\n\n"
+        f"Model:\n"
+        f"  D(t) = D₀ × exp(-k × t)\n\n"
+        f"Interpretation:\n"
+        f"  Lake density decays by 50% every\n"
+        f"  ~{halflife:.0f} thousand years."
+    )
+
+    # Add text box
+    ax.text(0.98, 0.97, summary_text,
+           transform=ax.transAxes,
+           fontsize=8, family='monospace',
+           verticalalignment='top', horizontalalignment='right',
+           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
     # Panel B: Posterior distributions
     ax = axes[1]
@@ -1472,7 +1515,40 @@ def plot_overall_bayesian_halflife(results, output_dir=None, verbose=True):
 
     ax.set_xlabel('Half-life (ka)', fontsize=11)
     ax.set_ylabel('Posterior Density', fontsize=11)
-    ax.set_title('B) Half-Life Posterior Distribution')
+    ax.set_title('B) Half-life Posterior')
+
+    # Add mean line and CI annotation
+    halflife_mean = results['halflife_median']
+    halflife_ci_low = results['halflife_ci_low']
+    halflife_ci_high = results['halflife_ci_high']
+    ax.axvline(halflife_mean, color='red', linestyle='--', linewidth=2,
+              label=f'Mean: {halflife_mean:.0f} ka')
+    ax.axvline(halflife_ci_low, color='red', linestyle=':', linewidth=1, alpha=0.7)
+    ax.axvline(halflife_ci_high, color='red', linestyle=':', linewidth=1, alpha=0.7)
+
+    # Add text annotation for 95% CI
+    y_pos = ax.get_ylim()[1] * 0.9
+    ax.text(halflife_mean, y_pos, f'95% CI: [{halflife_ci_low:.0f}, {halflife_ci_high:.0f}]',
+           ha='center', fontsize=9, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3)
+
+    # Panel C: Initial Density Posterior
+    ax = axes[2]
+
+    # D0 posterior
+    D0_samples = results['D0']['samples']
+    ax.hist(D0_samples, bins=50, alpha=0.6, color='steelblue',
+           density=True)
+
+    D0_mean = results['D0']['mean']
+    ax.axvline(D0_mean, color='red', linestyle='--', linewidth=2,
+              label=f'Mean: {D0_mean:.1f}')
+
+    ax.set_xlabel('D₀ (initial density)', fontsize=11)
+    ax.set_ylabel('Posterior Density', fontsize=11)
+    ax.set_title('C) Initial Density Posterior')
     ax.legend()
     ax.grid(True, alpha=0.3)
 
