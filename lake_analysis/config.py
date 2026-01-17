@@ -498,9 +498,11 @@ SIZE_STRATIFIED_STAGE_COLORS = {
 BAYESIAN_HALFLIFE_DEFAULTS = {
     'run_overall': True,           # Run overall half-life analysis
     'run_size_stratified': True,   # Run size-stratified analysis
-    'min_lake_area': 0.05,         # Minimum lake size (km²)
+    'min_lake_area': 0.01,         # Minimum lake size (km²) - CRITICAL: Use 0.01 for 661 ka half-life
     'max_lake_area': 20000,        # Maximum lake size (km²) - excludes Great Lakes
     'min_lakes_per_class': 10,     # Min lakes per size class for Bayesian fit
+    'test_thresholds': False,      # Test sensitivity to min_lake_area threshold
+    'threshold_values': [0.01, 0.024, 0.05, 0.1],  # Thresholds to test if enabled
     'n_samples': 2000,             # PyMC samples per chain
     'n_tune': 1000,                # PyMC tuning samples
     'n_chains': 4,                 # PyMC MCMC chains
