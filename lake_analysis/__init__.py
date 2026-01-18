@@ -109,6 +109,7 @@ from .glacial_chronosequence import (
     load_wisconsin_extent,
     load_illinoian_extent,
     load_driftless_area,
+    load_southern_appalachian_lakes,  # New: S. Appalachian comparison region
     convert_lakes_to_gdf,
     classify_lakes_by_glacial_extent,
     compute_lake_density_by_glacial_stage,

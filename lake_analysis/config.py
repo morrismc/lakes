@@ -178,6 +178,17 @@ GLACIAL_BOUNDARIES = {
         'description': 'Larger Driftless Area - may have pre-Illinoian till',
         'age_ka': (300, None),  # Possibly >300,000 years BP if glaciated
     },
+
+    # Southern Appalachians - never glaciated, mountainous region
+    # CRS: UNKNOWN - will be detected and reprojected on load
+    # Note: This is a comparison region with different hypsometry than glaciated lowlands
+    'southern_appalachians': {
+        'path': r"F:\Lakes\GIS\rasters\S_App_Lakes.dbf",
+        'crs': None,  # Will be auto-detected from .prj file if available
+        'description': 'Southern Appalachian lakes - never glaciated highlands',
+        'age_ka': None,  # Never glaciated (Paleozoic, >250 Ma)
+        'notes': 'Different lake formation processes (fluvial, structural) vs. glacial'
+    },
 }
 
 # ============================================================================

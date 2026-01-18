@@ -1919,6 +1919,8 @@ def analyze_bayesian_halflife(
     min_lakes_per_class=10,
     test_thresholds=False,
     save_figures=True,
+    generate_map=True,
+    include_sapp=False,
     verbose=True
 ):
     """
@@ -1954,6 +1956,10 @@ def analyze_bayesian_halflife(
         If True, test sensitivity to min_lake_area threshold
     save_figures : bool
         Generate and save visualizations
+    generate_map : bool
+        If True, generate map showing glacial regions and lake distributions
+    include_sapp : bool
+        If True, include Southern Appalachian lakes on the map (requires S. Apps dataset)
     verbose : bool
         Print progress messages
 
@@ -2199,6 +2205,59 @@ def analyze_bayesian_halflife(
             best_match = min(threshold_results, key=lambda x: abs(x['halflife_approx_ka'] - 661))
             print(f"\n  Closest to 661 ka: min_lake_area = {best_match['threshold']} km²")
             print(f"    Half-life: {best_match['halflife_approx_ka']:.0f} ka")
+
+    # ---------------------------------------------------------------------
+    # MAP VISUALIZATION (Optional)
+    # ---------------------------------------------------------------------
+    if generate_map and save_figures:
+        print("\n" + "-" * 70)
+        print("GENERATING MAP VISUALIZATION")
+        print("-" * 70)
+
+        try:
+            from .glacial_chronosequence import (
+                load_all_glacial_boundaries,
+                convert_lakes_to_gdf
+            )
+            from .visualization import plot_glacial_extent_map
+            from .config import OUTPUT_DIR
+            import os
+
+            print("\nLoading glacial boundaries...")
+            boundaries = load_all_glacial_boundaries(
+                include_dalton=False,
+                include_sapp=include_sapp
+            )
+
+            # Convert lakes to GeoDataFrame if needed
+            if not hasattr(lakes, 'geometry'):
+                print("  Converting lakes to GeoDataFrame...")
+                lakes_gdf = convert_lakes_to_gdf(lakes)
+            else:
+                lakes_gdf = lakes
+
+            # Generate map
+            print("  Generating map...")
+            map_path = os.path.join(OUTPUT_DIR, 'bayesian_glacial_extent_map.png')
+
+            fig, ax = plot_glacial_extent_map(
+                lakes_gdf,
+                boundaries,
+                figsize=(16, 12),
+                include_sapp=include_sapp,
+                save_path=map_path
+            )
+
+            if fig:
+                plt.close(fig)
+
+            print(f"  ✓ Map saved to: {map_path}")
+
+        except Exception as e:
+            print(f"\n  WARNING: Could not generate map: {e}")
+            if verbose:
+                import traceback
+                traceback.print_exc()
 
     # ---------------------------------------------------------------------
     # SUMMARY

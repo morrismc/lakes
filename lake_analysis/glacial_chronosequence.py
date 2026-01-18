@@ -340,7 +340,58 @@ def load_driftless_area(use_definite=True, target_crs=None):
     return gdf
 
 
-def load_all_glacial_boundaries(target_crs=None, include_dalton=True):
+def load_southern_appalachian_lakes(target_crs=None):
+    """
+    Load Southern Appalachian lakes from DBF file.
+
+    This dataset represents lakes in the Southern Appalachian highlands - a never
+    glaciated region with different hypsometry (mountainous) compared to glaciated
+    lowlands. These lakes formed through different processes (fluvial, structural)
+    and serve as a contrast case to glacial lakes.
+
+    Parameters
+    ----------
+    target_crs : str, optional
+        Target CRS for reprojection (defaults to GLACIAL_TARGET_CRS)
+
+    Returns
+    -------
+    GeoDataFrame
+        Southern Appalachian lake features
+
+    Notes
+    -----
+    The CRS is auto-detected from the .prj file if available. If the .prj file
+    is missing or the CRS is unknown, it will assume EPSG:4326 (WGS84).
+    """
+    if target_crs is None:
+        target_crs = get_target_crs()
+
+    config = GLACIAL_BOUNDARIES.get('southern_appalachians')
+    if config is None:
+        raise ValueError("Southern Appalachians configuration not found in GLACIAL_BOUNDARIES")
+
+    print("\nLoading Southern Appalachian lakes...")
+
+    # The .dbf file is part of a shapefile - geopandas can read it directly
+    # It will automatically look for .shp, .shx, .prj files with the same base name
+    dbf_path = config['path']
+    base_path = dbf_path.replace('.dbf', '')
+
+    # Try to read as shapefile (geopandas handles DBF, SHP, SHX, PRJ together)
+    gdf = load_and_reproject(
+        base_path + '.shp',  # Use .shp extension for geopandas
+        layer=None,
+        target_crs=target_crs
+    )
+
+    print(f"  Loaded {len(gdf):,} Southern Appalachian lakes")
+    print(f"  Reprojected to: {gdf.crs}")
+
+    return gdf
+
+
+def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sapp=False):
     """
     Load all glacial boundary datasets and reproject to common CRS.
 
@@ -350,6 +401,8 @@ def load_all_glacial_boundaries(target_crs=None, include_dalton=True):
         Target CRS for reprojection
     include_dalton : bool
         If True, include Dalton 18ka (western alpine glaciation)
+    include_sapp : bool
+        If True, include Southern Appalachian lakes (non-glacial comparison region)
 
     Returns
     -------
@@ -359,6 +412,7 @@ def load_all_glacial_boundaries(target_crs=None, include_dalton=True):
         - 'illinoian': Illinoian glaciation extent
         - 'driftless': Driftless Area (never glaciated)
         - 'dalton_18ka': Dalton 18ka ice sheets (if include_dalton=True)
+        - 'southern_appalachians': S. Appalachian lakes (if include_sapp=True)
     """
     if target_crs is None:
         target_crs = get_target_crs()
@@ -395,6 +449,13 @@ def load_all_glacial_boundaries(target_crs=None, include_dalton=True):
         except Exception as e:
             print(f"  WARNING: Could not load Dalton 18ka: {e}")
             boundaries['dalton_18ka'] = None
+
+    if include_sapp:
+        try:
+            boundaries['southern_appalachians'] = load_southern_appalachian_lakes(target_crs)
+        except Exception as e:
+            print(f"  WARNING: Could not load Southern Appalachians: {e}")
+            boundaries['southern_appalachians'] = None
 
     # Summary
     print("\n" + "-" * 60)
