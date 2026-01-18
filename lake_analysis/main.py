@@ -2079,6 +2079,83 @@ def analyze_bayesian_halflife(
 
                 results['overall'] = overall_results
 
+                # Add S. Appalachians if requested
+                if include_sapp:
+                    try:
+                        print("\n" + "-" * 70)
+                        print("ADDING S. APPALACHIAN COMPARISON")
+                        print("-" * 70)
+
+                        from .glacial_chronosequence import (
+                            load_southern_appalachian_lakes,
+                            add_sapp_to_density_comparison,
+                            compute_sapp_hypsometry_normalized_density
+                        )
+
+                        # Load S. Apps lakes
+                        sapp_lakes = load_southern_appalachian_lakes()
+
+                        # Filter by same area threshold
+                        area_col = COLS.get('area', 'AREASQKM')
+                        if area_col in sapp_lakes.columns:
+                            sapp_lakes = sapp_lakes[
+                                (sapp_lakes[area_col] >= min_lake_area) &
+                                (sapp_lakes[area_col] <= max_lake_area)
+                            ]
+
+                        # Add to density comparison
+                        density_with_sapp = add_sapp_to_density_comparison(
+                            density_by_stage,
+                            sapp_lakes,
+                            verbose=verbose
+                        )
+
+                        # Store in results
+                        results['density_comparison'] = density_with_sapp
+
+                        # Compute hypsometry-normalized density
+                        if verbose:
+                            print("\nComputing hypsometry-normalized density...")
+                        sapp_hypsometry = compute_sapp_hypsometry_normalized_density(
+                            sapp_lakes,
+                            verbose=verbose
+                        )
+                        results['sapp_hypsometry'] = sapp_hypsometry
+
+                        # Generate comparison visualizations
+                        if save_figures:
+                            from .visualization import (
+                                plot_density_by_glacial_stage,
+                                plot_sapp_hypsometry_normalized_density
+                            )
+                            import os
+                            from .config import OUTPUT_DIR
+
+                            # Density comparison bar chart
+                            fig, ax = plot_density_by_glacial_stage(
+                                density_with_sapp,
+                                figsize=(14, 7),
+                                save_path=os.path.join(OUTPUT_DIR, 'density_comparison_with_sapp.png')
+                            )
+                            if fig:
+                                plt.close(fig)
+
+                            # Hypsometry-normalized density
+                            if sapp_hypsometry is not None:
+                                fig, axes = plot_sapp_hypsometry_normalized_density(
+                                    sapp_hypsometry,
+                                    figsize=(16, 6),
+                                    save_path=os.path.join(OUTPUT_DIR, 'sapp_hypsometry_normalized_density.png')
+                                )
+                                if fig:
+                                    plt.close(fig)
+
+                    except Exception as e:
+                        print(f"\n  WARNING: Could not add S. Appalachians: {e}")
+                        if verbose:
+                            import traceback
+                            traceback.print_exc()
+
                 # Generate visualization
                 if save_figures and overall_results is not None:
                     fig = plot_overall_bayesian_halflife(

@@ -37,6 +37,9 @@ RASTERS = {
     'slope': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_slope",
     'relief_5km': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_rlif_5k",
 
+    # Southern Appalachians DEM for hypsometry-normalized density
+    'sapp_dem': r"F:\Lakes\GIS\rasters\S_App_DEM",  # S. Appalachian elevation
+
     # Climate variables (Geographic CRS - different from topographic!)
     'PET': r"F:\Lakes\GIS\rasters\PET_he_annual\pet_he_yr",
     'precip_4km': r"F:\Lakes\GIS\rasters\PRISM_ppt_30yr_normal_4kmM2_annual_asc\PRISM_ppt_30yr_normal_4kmM2_annual_asc.asc",
@@ -470,9 +473,10 @@ SIZE_STRATIFIED_BINS = [
 # Default landscape areas (km²) for glacial stages
 # These are approximate values and should be recalculated from actual boundaries
 SIZE_STRATIFIED_LANDSCAPE_AREAS = {
-    'Wisconsin': 1225000,   # Adjust based on actual Wisconsin boundary area
-    'Illinoian': 145000,    # Adjust based on actual Illinoian boundary area
-    'Driftless': 25500      # Adjust based on actual Driftless boundary area
+    'Wisconsin': 1225000,           # Adjust based on actual Wisconsin boundary area
+    'Illinoian': 145000,            # Adjust based on actual Illinoian boundary area
+    'Driftless': 25500,             # Adjust based on actual Driftless boundary area
+    'Southern_Appalachians': None   # Will be computed from DEM or boundary
 }
 
 # Age estimates for glacial stages (ka = thousands of years before present)
@@ -495,10 +499,11 @@ SIZE_STRATIFIED_MIN_LAKES = 10
 
 # Color scheme for glacial stages in size-stratified plots
 SIZE_STRATIFIED_STAGE_COLORS = {
-    'Wisconsin': '#3498db',     # Blue
-    'Illinoian': '#e74c3c',     # Red
-    'Driftless': '#2ecc71',     # Green
-    'unclassified': '#95a5a6'   # Gray
+    'Wisconsin': '#3498db',             # Blue
+    'Illinoian': '#e74c3c',             # Red
+    'Driftless': '#2ecc71',             # Green
+    'Southern_Appalachians': '#8B4513', # Brown (non-glacial highlands)
+    'unclassified': '#95a5a6'           # Gray
 }
 
 # ============================================================================

@@ -3923,7 +3923,11 @@ def plot_density_by_glacial_stage(density_df, figsize=(12, 6), save_path=None):
         if pd.notna(row.age_ka):
             age_str = f'{row.age_ka:.0f} ka' if row.age_ka < 1000 else f'{row.age_ka/1000:.0f} Ma'
         else:
-            age_str = 'Never glaciated'
+            # Handle both Driftless (part of chronosequence) and S. Apps (comparison)
+            if 'Southern' in row.glacial_stage or 'Appalachian' in row.glacial_stage:
+                age_str = 'Non-glacial'
+            else:
+                age_str = 'Never glaciated'
         ax.text(i, -0.08, age_str, ha='center', va='top', fontsize=9,
                 transform=ax.get_xaxis_transform(), style='italic', color='gray')
 
@@ -8202,3 +8206,73 @@ if __name__ == "__main__":
     print("  - plot_glacial_vs_nonglacial_comparison()")
     print("  - plot_spatial_scaling_summary()")
     print("  - plot_colorful_hypothesis_table()")
+
+
+def plot_sapp_hypsometry_normalized_density(hypsometry_df, figsize=(14, 6), save_path=None):
+    """
+    Plot hypsometry-normalized lake density for S. Appalachians.
+
+    This shows whether lakes follow the landscape elevation distribution
+    (equilibrium) or show independent patterns (disequilibrium).
+
+    Parameters
+    ----------
+    hypsometry_df : DataFrame
+        Output from compute_sapp_hypsometry_normalized_density()
+        Columns: bin_lower, bin_upper, n_lakes, area_km2, normalized_density
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes)
+    """
+    setup_plot_style()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+
+    # Extract data
+    elev_mid = (hypsometry_df['bin_lower'] + hypsometry_df['bin_upper']) / 2
+    n_lakes = hypsometry_df['n_lakes']
+    area_km2 = hypsometry_df['area_km2']
+    normalized_density = hypsometry_df['normalized_density']
+
+    # Panel A: Landscape hypsometry (area vs elevation)
+    ax1.fill_between(elev_mid, 0, area_km2, color='#2ecc71', alpha=0.5, 
+                     label='Land area')
+    ax1.plot(elev_mid, area_km2, color='#27ae60', linewidth=2)
+    ax1.set_xlabel('Elevation (m)', fontsize=12)
+    ax1.set_ylabel('Land Area (km²)', fontsize=12)
+    ax1.set_title('A) Landscape Hypsometry\n(Available Land at Each Elevation)', 
+                  fontsize=13, fontweight='bold')
+    ax1.grid(axis='both', alpha=0.3)
+
+    # Panel B: Normalized lake density
+    ax2.bar(elev_mid, normalized_density, width=80, color='#8B4513', 
+            edgecolor='black', linewidth=1.2, alpha=0.7, label='Lake density')
+    ax2.set_xlabel('Elevation (m)', fontsize=12)
+    ax2.set_ylabel('Lake Density (per 1000 km²)', fontsize=12)
+    ax2.set_title('B) Hypsometry-Normalized Lake Density\n(Corrected for Available Land)', 
+                  fontsize=13, fontweight='bold')
+    ax2.grid(axis='y', alpha=0.3)
+
+    # Add annotations
+    peak_idx = normalized_density.idxmax()
+    peak_elev = elev_mid[peak_idx]
+    peak_density = normalized_density[peak_idx]
+    ax2.axvline(peak_elev, color='red', linestyle='--', linewidth=2, alpha=0.7)
+    ax2.text(0.95, 0.95, f'Peak: {peak_elev:.0f} m\n{peak_density:.2f} lakes/1000 km²',
+            transform=ax2.transAxes, fontsize=10, ha='right', va='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.9))
+
+    plt.suptitle('Southern Appalachian Lakes: Hypsometry-Normalized Analysis',
+                fontsize=15, fontweight='bold', y=1.00)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+
+    return fig, (ax1, ax2)

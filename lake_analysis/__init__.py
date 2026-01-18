@@ -110,6 +110,9 @@ from .glacial_chronosequence import (
     load_illinoian_extent,
     load_driftless_area,
     load_southern_appalachian_lakes,  # New: S. Appalachian comparison region
+    compute_sapp_land_area_from_dem,
+    add_sapp_to_density_comparison,
+    compute_sapp_hypsometry_normalized_density,
     convert_lakes_to_gdf,
     classify_lakes_by_glacial_extent,
     compute_lake_density_by_glacial_stage,
@@ -191,7 +194,8 @@ from .visualization import (
     plot_bayesian_posteriors,
     plot_bayesian_decay_curves,
     plot_bayesian_covariance,
-    plot_bayesian_summary
+    plot_bayesian_summary,
+    plot_sapp_hypsometry_normalized_density
 )
 
 # Size-stratified analysis

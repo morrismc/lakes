@@ -391,6 +391,247 @@ def load_southern_appalachian_lakes(target_crs=None):
     return gdf
 
 
+def compute_sapp_land_area_from_dem(dem_path=None, verbose=True):
+    """
+    Compute Southern Appalachian land area from DEM.
+
+    Parameters
+    ----------
+    dem_path : str, optional
+        Path to S. Apps DEM. If None, uses path from RASTERS config.
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    float
+        Land area in km²
+    """
+    try:
+        from .config import RASTERS
+        from .data_loading import get_raster_info
+    except ImportError:
+        from config import RASTERS
+        from data_loading import get_raster_info
+
+    if dem_path is None:
+        dem_path = RASTERS.get('sapp_dem')
+
+    if dem_path is None or not os.path.exists(dem_path):
+        if verbose:
+            print(f"WARNING: S. Apps DEM not found at {dem_path}")
+            print("  Using approximate area estimate")
+        # Approximate S. Apps area (rough estimate)
+        return 50000  # km² (placeholder)
+
+    if verbose:
+        print("\nComputing S. Appalachian land area from DEM...")
+
+    # Get raster info
+    info = get_raster_info(dem_path)
+    pixel_area_km2 = info['pixel_area_km2']
+
+    # Open and count valid pixels
+    import rasterio
+    with rasterio.open(dem_path) as src:
+        data = src.read(1)
+        nodata = src.nodata
+
+        if nodata is not None:
+            valid_pixels = np.sum(data != nodata)
+        else:
+            valid_pixels = data.size
+
+    area_km2 = valid_pixels * pixel_area_km2
+
+    if verbose:
+        print(f"  Valid pixels: {valid_pixels:,}")
+        print(f"  Pixel area: {pixel_area_km2:.6f} km²")
+        print(f"  Total land area: {area_km2:,.0f} km²")
+
+    return area_km2
+
+
+def add_sapp_to_density_comparison(density_df, sapp_lakes, sapp_area_km2=None, verbose=True):
+    """
+    Add Southern Appalachian lakes to density comparison.
+
+    Parameters
+    ----------
+    density_df : DataFrame
+        Existing density results from compute_lake_density_by_glacial_stage
+    sapp_lakes : GeoDataFrame
+        S. Appalachian lake data
+    sapp_area_km2 : float, optional
+        S. Apps land area. If None, computed from DEM.
+    verbose : bool
+        Print information
+
+    Returns
+    -------
+    DataFrame
+        Updated density dataframe with S. Apps row added
+    """
+    try:
+        from .config import COLS, SIZE_STRATIFIED_STAGE_COLORS
+    except ImportError:
+        from config import COLS, SIZE_STRATIFIED_STAGE_COLORS
+
+    if sapp_area_km2 is None:
+        sapp_area_km2 = compute_sapp_land_area_from_dem(verbose=verbose)
+
+    area_col = COLS.get('area', 'AREASQKM')
+
+    # Compute S. Apps statistics
+    n_lakes = len(sapp_lakes)
+    if area_col in sapp_lakes.columns:
+        total_lake_area = sapp_lakes[area_col].sum()
+        mean_lake_area = sapp_lakes[area_col].mean()
+        median_lake_area = sapp_lakes[area_col].median()
+    else:
+        total_lake_area = np.nan
+        mean_lake_area = np.nan
+        median_lake_area = np.nan
+
+    density = (n_lakes / sapp_area_km2) * 1000
+
+    # Create S. Apps row
+    sapp_row = pd.DataFrame([{
+        'glacial_stage': 'Southern_Appalachians',
+        'n_lakes': n_lakes,
+        'total_lake_area_km2': total_lake_area,
+        'mean_lake_area_km2': mean_lake_area,
+        'median_lake_area_km2': median_lake_area,
+        'zone_area_km2': sapp_area_km2,
+        'density_per_1000km2': density,
+        'age_ka': np.nan,  # Not part of glacial chronosequence
+        'color': SIZE_STRATIFIED_STAGE_COLORS.get('Southern_Appalachians', '#8B4513'),
+    }])
+
+    # Append to existing dataframe
+    result_df = pd.concat([density_df, sapp_row], ignore_index=True)
+
+    if verbose:
+        print("\n" + "-" * 60)
+        print("SOUTHERN APPALACHIAN LAKES (Non-glacial comparison)")
+        print("-" * 60)
+        print(f"  Land area: {sapp_area_km2:,.0f} km²")
+        print(f"  Lake count: {n_lakes:,}")
+        print(f"  Lake density: {density:.2f} per 1000 km²")
+        print(f"  Mean lake area: {mean_lake_area:.4f} km²")
+
+    return result_df
+
+
+def compute_sapp_hypsometry_normalized_density(sapp_lakes, dem_path=None,
+                                              elev_breaks=None, verbose=True):
+    """
+    Compute hypsometry-normalized lake density for S. Appalachians.
+
+    This reveals whether lakes follow the elevation distribution (equilibrium)
+    or show independent patterns (disequilibrium).
+
+    Parameters
+    ----------
+    sapp_lakes : GeoDataFrame
+        S. Appalachian lakes with elevation data
+    dem_path : str, optional
+        Path to S. Apps DEM. If None, uses path from RASTERS config.
+    elev_breaks : array-like, optional
+        Elevation bin edges. If None, uses default 100m bins from 0-2000m.
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    DataFrame
+        Results with columns:
+        - bin_lower, bin_upper: elevation range
+        - n_lakes: number of lakes in bin
+        - landscape_area_km2: land area at this elevation
+        - normalized_density: lakes per 1000 km² of available land
+    """
+    try:
+        from .config import RASTERS, COLS
+        from .data_loading import calculate_landscape_area_by_bin
+    except ImportError:
+        from config import RASTERS, COLS
+        from data_loading import calculate_landscape_area_by_bin
+
+    if verbose:
+        print("\n" + "=" * 60)
+        print("HYPSOMETRY-NORMALIZED DENSITY: SOUTHERN APPALACHIANS")
+        print("=" * 60)
+
+    # Default elevation bins
+    if elev_breaks is None:
+        elev_breaks = np.arange(0, 2001, 100)  # 0-2000m in 100m bins
+
+    # Get DEM path
+    if dem_path is None:
+        dem_path = RASTERS.get('sapp_dem')
+
+    if dem_path is None or not os.path.exists(dem_path):
+        print(f"ERROR: S. Apps DEM not found at {dem_path}")
+        return None
+
+    # Calculate landscape area by elevation bin
+    if verbose:
+        print("\nComputing landscape hypsometry...")
+
+    landscape_areas = calculate_landscape_area_by_bin(
+        dem_path,
+        elev_breaks,
+        use_chunked=True,
+        verbose=verbose
+    )
+
+    # Count lakes by elevation bin
+    elev_col = COLS.get('elevation', 'Elevation_')
+    if elev_col not in sapp_lakes.columns:
+        print(f"ERROR: Elevation column '{elev_col}' not found")
+        return None
+
+    if verbose:
+        print("\nComputing lake distribution...")
+
+    lake_counts = []
+    for i in range(len(elev_breaks) - 1):
+        bin_lower = elev_breaks[i]
+        bin_upper = elev_breaks[i + 1]
+
+        mask = (sapp_lakes[elev_col] >= bin_lower) & (sapp_lakes[elev_col] < bin_upper)
+        n_lakes = mask.sum()
+        lake_counts.append(n_lakes)
+
+    # Merge with landscape areas
+    landscape_areas['n_lakes'] = lake_counts
+
+    # Compute normalized density
+    landscape_areas['normalized_density'] = (
+        landscape_areas['n_lakes'] / landscape_areas['area_km2'] * 1000
+    )
+
+    # Handle division by zero
+    landscape_areas.loc[landscape_areas['area_km2'] == 0, 'normalized_density'] = 0
+
+    if verbose:
+        print("\nHypsometry-Normalized Density Results:")
+        print(landscape_areas[['bin_label', 'n_lakes', 'area_km2', 'normalized_density']].to_string(index=False))
+
+        # Summary statistics
+        total_lakes = landscape_areas['n_lakes'].sum()
+        peak_elev_idx = landscape_areas['normalized_density'].idxmax()
+        peak_elev_range = landscape_areas.loc[peak_elev_idx, 'bin_label']
+        peak_density = landscape_areas.loc[peak_elev_idx, 'normalized_density']
+
+        print(f"\n  Total lakes: {total_lakes:,}")
+        print(f"  Peak density elevation: {peak_elev_range}")
+        print(f"  Peak density: {peak_density:.2f} per 1000 km²")
+
+    return landscape_areas
+
+
 def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sapp=False):
     """
     Load all glacial boundary datasets and reproject to common CRS.
@@ -835,6 +1076,7 @@ def compute_lake_density_by_glacial_stage(lake_gdf, zone_areas=None, verbose=Tru
             'Wisconsin': 'wisconsin',
             'Illinoian': 'illinoian',
             'Driftless': 'driftless',
+            'Southern_Appalachians': 'southern_appalachians',
             'unclassified': 'unclassified',
         }
 
