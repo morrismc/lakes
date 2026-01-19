@@ -409,7 +409,24 @@ def load_southern_appalachian_lakes(target_crs=None):
 
     print(f"    Using coordinates: X={coord_cols['x']}, Y={coord_cols['y']}")
 
-    # Create point geometries
+    # Check if coordinates look swapped (common issue with mislabeled columns)
+    # For CONUS/Appalachian region:
+    # - Longitude should be negative (-125 to -65)
+    # - Latitude should be positive (25 to 50)
+    sample_x = df[coord_cols['x']].iloc[0]
+    sample_y = df[coord_cols['y']].iloc[0]
+
+    # If X looks like latitude and Y looks like longitude, they're swapped!
+    if 20 < sample_x < 55 and -130 < sample_y < -60:
+        print(f"    WARNING: Coordinates appear swapped!")
+        print(f"    Column '{coord_cols['x']}' contains lat-like values: {sample_x:.6f}")
+        print(f"    Column '{coord_cols['y']}' contains lon-like values: {sample_y:.6f}")
+        print(f"    → Swapping to correct order (lon, lat)")
+        # Swap the column references
+        coord_cols['x'], coord_cols['y'] = coord_cols['y'], coord_cols['x']
+        print(f"    Corrected: X={coord_cols['x']}, Y={coord_cols['y']}")
+
+    # Create point geometries (Point expects lon, lat order)
     geometry = [Point(xy) for xy in zip(df[coord_cols['x']], df[coord_cols['y']])]
 
     # Create GeoDataFrame
@@ -515,6 +532,75 @@ def compute_sapp_land_area_from_dem(dem_path=None, verbose=True):
         print(f"  Total land area: {area_km2:,.0f} km²")
 
     return area_km2
+
+
+def compute_sapp_area_from_lakes(sapp_lakes, method='convex_hull', buffer_km=5, verbose=True):
+    """
+    Compute Southern Appalachian study area from lake locations.
+
+    This is more accurate than using the full DEM when we want the area
+    actually containing lakes for density calculations.
+
+    Parameters
+    ----------
+    sapp_lakes : GeoDataFrame
+        Southern Appalachian lakes (must be in projected CRS with meters)
+    method : str
+        'convex_hull' - Minimum convex polygon containing all lakes
+        'buffer' - Buffered union of all lake locations
+        'envelope' - Rectangular bounding box
+    buffer_km : float
+        Buffer distance in km (used for 'buffer' method)
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    tuple
+        (area_km2, boundary_geometry)
+    """
+    if len(sapp_lakes) == 0:
+        return 0, None
+
+    # Ensure we're in projected CRS (meters)
+    if not sapp_lakes.crs.is_projected:
+        raise ValueError("Lakes must be in projected CRS (meters) for area calculation")
+
+    from shapely.ops import unary_union
+
+    if method == 'convex_hull':
+        # Create convex hull of all lake centroids
+        if 'geometry' in sapp_lakes.columns:
+            all_points = sapp_lakes.geometry.unary_union
+            boundary = all_points.convex_hull
+        else:
+            boundary = unary_union(sapp_lakes.geometry).convex_hull
+
+    elif method == 'buffer':
+        # Buffer each lake then union
+        buffer_m = buffer_km * 1000  # Convert to meters
+        buffered = sapp_lakes.geometry.buffer(buffer_m)
+        boundary = unary_union(buffered)
+
+    elif method == 'envelope':
+        # Simple bounding box
+        minx, miny, maxx, maxy = sapp_lakes.total_bounds
+        from shapely.geometry import box
+        boundary = box(minx, miny, maxx, maxy)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    # Calculate area in km²
+    area_m2 = boundary.area
+    area_km2 = area_m2 / 1e6
+
+    if verbose:
+        print(f"\nS. Appalachian study area ({method}):")
+        print(f"  Area: {area_km2:,.0f} km²")
+        if method == 'buffer':
+            print(f"  Buffer distance: {buffer_km} km")
+
+    return area_km2, boundary
 
 
 def add_sapp_to_density_comparison(density_df, sapp_lakes, sapp_area_km2=None, verbose=True):

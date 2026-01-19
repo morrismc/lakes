@@ -1,8 +1,16 @@
 # CLAUDE.md - Lake Analysis Project Context
 
+> **📚 For a complete inventory of ALL analyses (200+ functions), see [COMPLETE_ANALYSIS_GUIDE.md](COMPLETE_ANALYSIS_GUIDE.md)**
+
 ## Project Overview
 
 This project analyzes lake distribution patterns across the contiguous United States (CONUS) to test hypotheses about lake formation and persistence. The primary scientific question is **Davis's Lake Extinction Hypothesis**: Does lake density decrease with landscape "maturity" (time since glaciation)?
+
+**Key Results:**
+- ✅ **Half-life of lakes:** ~660 ka [95% CI: 418-1505 ka]
+- ✅ **16-step analysis pipeline** with optional specialized analyses
+- ✅ **200+ analysis functions** across 10 core modules
+- ✅ **Bayesian uncertainty quantification** for all major results
 
 ## Quick Start
 

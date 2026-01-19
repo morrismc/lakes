@@ -112,6 +112,7 @@ from .glacial_chronosequence import (
     load_driftless_area,
     load_southern_appalachian_lakes,  # New: S. Appalachian comparison region
     compute_sapp_land_area_from_dem,
+    compute_sapp_area_from_lakes,  # NEW: Compute area from convex hull/buffer
     add_sapp_to_density_comparison,
     compute_sapp_hypsometry_normalized_density,
     convert_lakes_to_gdf,
