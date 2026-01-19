@@ -563,18 +563,17 @@ def run_complete_multivariate_analysis(lakes_gdf, response_var='area',
     # 7. Generate figures
     if save_figures:
         try:
-            from .visualization import plot_multivariate_summary
+            from .multivariate_visualization import plot_multivariate_summary
             from .config import OUTPUT_DIR
         except ImportError:
-            from visualization import plot_multivariate_summary
+            from multivariate_visualization import plot_multivariate_summary
             from config import OUTPUT_DIR
 
         if output_dir is None:
             output_dir = OUTPUT_DIR
 
-        # This function will be created in visualization.py
         print(f"\nGenerating multivariate analysis figures...")
-        # plot_multivariate_summary(results, save_path=output_dir)
+        plot_multivariate_summary(results, output_dir=output_dir)
 
     if verbose:
         print("\n" + "=" * 70)
