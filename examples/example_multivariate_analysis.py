@@ -47,13 +47,14 @@ lakes_classified = classify_lakes_by_glacial_extent(lakes_gdf, boundaries)
 data_clean, column_mapping = prepare_multivariate_dataset(
     lakes_classified,
     response_var='area',
-    min_lake_area=0.01,
-    max_lake_area=20000,  # Exclude Great Lakes
+    min_lake_area=0.005,   # Match minimum threshold
+    max_lake_area=20000,   # Exclude Great Lakes
     verbose=True
 )
 
 print(f"\nCleaned dataset: {len(data_clean):,} lakes")
 print(f"Variables: {list(data_clean.columns)}")
+print(f"Column mapping: {column_mapping}")
 
 # ==============================================================================
 # EXAMPLE 2: Correlation analysis
