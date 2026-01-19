@@ -633,8 +633,7 @@ def compute_sapp_hypsometry_normalized_density(sapp_lakes, dem_path=None,
     landscape_areas = calculate_landscape_area_by_bin(
         dem_path,
         elev_breaks,
-        use_chunked=True,
-        verbose=verbose
+        use_chunked=True
     )
 
     # Count lakes by elevation bin
