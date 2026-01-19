@@ -17,6 +17,7 @@ Outputs:
 
 from lake_analysis import (
     load_conus_lake_data,
+    convert_lakes_to_gdf,
     load_all_glacial_boundaries,
     classify_lakes_by_glacial_extent,
     analyze_bayesian_halflife
@@ -27,24 +28,29 @@ print("S. APPALACHIAN COMPARISON ANALYSIS")
 print("=" * 70)
 
 # Step 1: Load CONUS lakes
-print("\n[STEP 1/3] Loading CONUS lake data...")
+print("\n[STEP 1/4] Loading CONUS lake data...")
 lakes = load_conus_lake_data()
 print(f"  Loaded {len(lakes):,} lakes")
 
-# Step 2: Load glacial boundaries and classify lakes
-print("\n[STEP 2/3] Classifying lakes by glacial extent...")
+# Step 2: Convert to GeoDataFrame
+print("\n[STEP 2/4] Converting to GeoDataFrame...")
+lakes_gdf = convert_lakes_to_gdf(lakes)
+print(f"  Created point geometries with CRS: {lakes_gdf.crs}")
+
+# Step 3: Load glacial boundaries and classify lakes
+print("\n[STEP 3/4] Classifying lakes by glacial extent...")
 boundaries = load_all_glacial_boundaries(
     include_dalton=False,
     include_sapp=False  # Don't load S. Apps here; loaded separately in analysis
 )
 lakes_classified = classify_lakes_by_glacial_extent(
-    lakes,
+    lakes_gdf,
     boundaries,
     verbose=True
 )
 
-# Step 3: Run Bayesian analysis WITH S. Appalachian comparison
-print("\n[STEP 3/3] Running Bayesian half-life analysis with S. Apps comparison...")
+# Step 4: Run Bayesian analysis WITH S. Appalachian comparison
+print("\n[STEP 4/4] Running Bayesian half-life analysis with S. Apps comparison...")
 results = analyze_bayesian_halflife(
     lakes_classified,
     run_overall=True,
