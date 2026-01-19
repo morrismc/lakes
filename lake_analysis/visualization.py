@@ -8276,3 +8276,114 @@ def plot_sapp_hypsometry_normalized_density(hypsometry_df, figsize=(14, 6), save
         print(f"Figure saved to: {save_path}")
 
     return fig, (ax1, ax2)
+
+
+def plot_halflife_threshold_sensitivity(threshold_results, figsize=(12, 8), save_path=None):
+    """
+    Plot how lake half-life varies with minimum lake area threshold.
+
+    This diagnostic reveals detection bias: smaller lakes are systematically
+    underrepresented in older landscapes due to preferential loss or mapping bias.
+
+    Parameters
+    ----------
+    threshold_results : dict
+        Output from analyze_bayesian_halflife with test_thresholds=True
+        Contains 'threshold_values' and 'results' list
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes)
+    """
+    setup_plot_style()
+    
+    threshold_values = threshold_results['threshold_values']
+    results = threshold_results['results']
+    
+    # Extract data
+    thresholds = [r['threshold'] for r in results]
+    halflives = [r['halflife_approx_ka'] for r in results]
+    wisc_counts = [r['wisc_count'] for r in results]
+    ill_counts = [r['ill_count'] for r in results]
+    wisc_densities = [r['wisc_density'] for r in results]
+    ill_densities = [r['ill_density'] for r in results]
+    
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig.suptitle('Lake Half-Life Sensitivity to Size Threshold', 
+                fontsize=15, fontweight='bold', y=0.995)
+    
+    # Panel A: Half-life vs threshold
+    ax = axes[0, 0]
+    ax.plot(thresholds, halflives, 'o-', linewidth=2, markersize=8, color='steelblue')
+    ax.axhline(661, color='red', linestyle='--', linewidth=2, alpha=0.7, label='Target: 661 ka')
+    ax.set_xlabel('Minimum Lake Area (km²)', fontsize=12)
+    ax.set_ylabel('Half-Life (ka)', fontsize=12)
+    ax.set_title('A) Half-Life vs Size Threshold', fontsize=13, fontweight='bold')
+    ax.set_xscale('log')
+    ax.grid(alpha=0.3)
+    ax.legend()
+    
+    # Add annotations for key thresholds
+    for thresh, hl in zip(thresholds, halflives):
+        if thresh in [0.01, 0.005]:
+            ax.annotate(f'{thresh:.3f} km²\n{hl:.0f} ka',
+                       xy=(thresh, hl), xytext=(10, 10), textcoords='offset points',
+                       fontsize=9, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                       arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+    
+    # Panel B: Lake counts vs threshold
+    ax = axes[0, 1]
+    ax.plot(thresholds, wisc_counts, 'o-', linewidth=2, markersize=8, 
+           color='#1f77b4', label='Wisconsin')
+    ax.plot(thresholds, ill_counts, 's-', linewidth=2, markersize=8,
+           color='#ff7f0e', label='Illinoian')
+    ax.set_xlabel('Minimum Lake Area (km²)', fontsize=12)
+    ax.set_ylabel('Number of Lakes', fontsize=12)
+    ax.set_title('B) Lake Counts vs Threshold', fontsize=13, fontweight='bold')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.grid(alpha=0.3)
+    ax.legend()
+    
+    # Panel C: Density vs threshold
+    ax = axes[1, 0]
+    ax.plot(thresholds, wisc_densities, 'o-', linewidth=2, markersize=8,
+           color='#1f77b4', label='Wisconsin')
+    ax.plot(thresholds, ill_densities, 's-', linewidth=2, markersize=8,
+           color='#ff7f0e', label='Illinoian')
+    ax.set_xlabel('Minimum Lake Area (km²)', fontsize=12)
+    ax.set_ylabel('Lake Density (per 1000 km²)', fontsize=12)
+    ax.set_title('C) Density vs Threshold', fontsize=13, fontweight='bold')
+    ax.set_xscale('log')
+    ax.grid(alpha=0.3)
+    ax.legend()
+    
+    # Panel D: Density ratio (Wisconsin/Illinoian) vs threshold
+    ax = axes[1, 1]
+    density_ratios = [w/i if i > 0 else np.nan for w, i in zip(wisc_densities, ill_densities)]
+    ax.plot(thresholds, density_ratios, 'o-', linewidth=2, markersize=8, color='purple')
+    ax.axhline(1.0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+    ax.set_xlabel('Minimum Lake Area (km²)', fontsize=12)
+    ax.set_ylabel('Density Ratio (Wisconsin/Illinoian)', fontsize=12)
+    ax.set_title('D) Relative Enrichment vs Threshold', fontsize=13, fontweight='bold')
+    ax.set_xscale('log')
+    ax.grid(alpha=0.3)
+    
+    # Add interpretation text
+    ratio_trend = 'increasing' if density_ratios[-1] > density_ratios[0] else 'decreasing'
+    ax.text(0.95, 0.05, f'Ratio is {ratio_trend}\nwith larger thresholds',
+           transform=ax.transAxes, fontsize=10, ha='right', va='bottom',
+           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.9))
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to: {save_path}")
+    
+    return fig, axes

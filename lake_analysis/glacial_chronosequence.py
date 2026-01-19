@@ -342,7 +342,7 @@ def load_driftless_area(use_definite=True, target_crs=None):
 
 def load_southern_appalachian_lakes(target_crs=None):
     """
-    Load Southern Appalachian lakes from DBF file.
+    Load Southern Appalachian lakes from standalone DBF file.
 
     This dataset represents lakes in the Southern Appalachian highlands - a never
     glaciated region with different hypsometry (mountainous) compared to glaciated
@@ -361,8 +361,9 @@ def load_southern_appalachian_lakes(target_crs=None):
 
     Notes
     -----
-    The CRS is auto-detected from the .prj file if available. If the .prj file
-    is missing or the CRS is unknown, it will assume EPSG:4326 (WGS84).
+    The DBF is a standalone file (not part of a shapefile). Geometry is created
+    from X/Y coordinates in the table. CRS is assumed to be NAD83 (EPSG:4269)
+    if not specified in a .prj file.
     """
     if target_crs is None:
         target_crs = get_target_crs()
@@ -373,20 +374,70 @@ def load_southern_appalachian_lakes(target_crs=None):
 
     print("\nLoading Southern Appalachian lakes...")
 
-    # The .dbf file is part of a shapefile - geopandas can read it directly
-    # It will automatically look for .shp, .shx, .prj files with the same base name
+    # The .dbf file is standalone (not part of a shapefile)
     dbf_path = config['path']
-    base_path = dbf_path.replace('.dbf', '')
 
-    # Try to read as shapefile (geopandas handles DBF, SHP, SHX, PRJ together)
-    gdf = load_and_reproject(
-        base_path + '.shp',  # Use .shp extension for geopandas
-        layer=None,
-        target_crs=target_crs
-    )
+    if not os.path.exists(dbf_path):
+        raise FileNotFoundError(f"File not found: {dbf_path}")
+
+    print(f"  Loading: {dbf_path}")
+
+    # Read DBF using geopandas (works with standalone DBF)
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    # Read the DBF table
+    df = gpd.read_file(dbf_path)
+    print(f"    Records: {len(df):,}")
+    print(f"    Columns: {list(df.columns[:10])}...")  # Show first 10 columns
+
+    # Check for coordinate columns (common names)
+    coord_cols = {
+        'x': None,
+        'y': None
+    }
+
+    for col in df.columns:
+        col_lower = col.lower()
+        if col_lower in ['x', 'lon', 'longitude', 'long']:
+            coord_cols['x'] = col
+        elif col_lower in ['y', 'lat', 'latitude']:
+            coord_cols['y'] = col
+
+    if coord_cols['x'] is None or coord_cols['y'] is None:
+        raise ValueError(f"Could not find X/Y coordinate columns in {df.columns}")
+
+    print(f"    Using coordinates: X={coord_cols['x']}, Y={coord_cols['y']}")
+
+    # Create point geometries
+    geometry = [Point(xy) for xy in zip(df[coord_cols['x']], df[coord_cols['y']])]
+
+    # Create GeoDataFrame
+    gdf = gpd.GeoDataFrame(df, geometry=geometry)
+
+    # Try to read CRS from .prj file if it exists
+    prj_path = dbf_path.replace('.dbf', '.prj')
+    if os.path.exists(prj_path):
+        try:
+            with open(prj_path, 'r') as f:
+                prj_text = f.read()
+            gdf.crs = prj_text
+            print(f"    Original CRS from .prj: {gdf.crs}")
+        except Exception as e:
+            print(f"    Could not read .prj file: {e}")
+            gdf.crs = 'EPSG:4269'  # Assume NAD83
+            print(f"    Assumed CRS: {gdf.crs}")
+    else:
+        # Assume NAD83 geographic (common for US data)
+        gdf.crs = 'EPSG:4269'
+        print(f"    No .prj file found, assumed CRS: {gdf.crs}")
+
+    # Reproject to target CRS
+    if gdf.crs != target_crs:
+        print(f"    Reprojecting to: {target_crs}")
+        gdf = gdf.to_crs(target_crs)
 
     print(f"  Loaded {len(gdf):,} Southern Appalachian lakes")
-    print(f"  Reprojected to: {gdf.crs}")
 
     return gdf
 
@@ -415,7 +466,7 @@ def compute_sapp_land_area_from_dem(dem_path=None, verbose=True):
         from data_loading import get_raster_info
 
     if dem_path is None:
-        dem_path = RASTERS.get('sapp_dem')
+        dem_path = RASTERS.get('s_app_dem')
 
     if dem_path is None or not os.path.exists(dem_path):
         if verbose:
@@ -569,7 +620,7 @@ def compute_sapp_hypsometry_normalized_density(sapp_lakes, dem_path=None,
 
     # Get DEM path
     if dem_path is None:
-        dem_path = RASTERS.get('sapp_dem')
+        dem_path = RASTERS.get('s_app_dem')
 
     if dem_path is None or not os.path.exists(dem_path):
         print(f"ERROR: S. Apps DEM not found at {dem_path}")

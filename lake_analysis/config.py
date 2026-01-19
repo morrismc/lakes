@@ -38,7 +38,7 @@ RASTERS = {
     'relief_5km': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_rlif_5k",
 
     # Southern Appalachians DEM for hypsometry-normalized density
-    'sapp_dem': r"F:\Lakes\GIS\rasters\S_App_DEM",  # S. Appalachian elevation
+    's_app_dem': r"F:\Lakes\GIS\rasters\s_app_dem.txt",  # S. Appalachian elevation (ASCII)
 
     # Climate variables (Geographic CRS - different from topographic!)
     'PET': r"F:\Lakes\GIS\rasters\PET_he_annual\pet_he_yr",

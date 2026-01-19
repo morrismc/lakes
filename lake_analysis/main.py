@@ -2283,6 +2283,24 @@ def analyze_bayesian_halflife(
             print(f"\n  Closest to 661 ka: min_lake_area = {best_match['threshold']} km²")
             print(f"    Half-life: {best_match['halflife_approx_ka']:.0f} ka")
 
+            # Generate threshold sensitivity visualization
+            if save_figures:
+                try:
+                    from .visualization import plot_halflife_threshold_sensitivity
+                    from .config import OUTPUT_DIR
+                    import os
+
+                    fig, axes = plot_halflife_threshold_sensitivity(
+                        results['threshold_sensitivity'],
+                        figsize=(14, 10),
+                        save_path=os.path.join(OUTPUT_DIR, 'halflife_threshold_sensitivity.png')
+                    )
+                    if fig:
+                        plt.close(fig)
+                    print(f"\n  ✓ Sensitivity plot saved")
+                except Exception as e:
+                    print(f"\n  WARNING: Could not generate sensitivity plot: {e}")
+
     # ---------------------------------------------------------------------
     # MAP VISUALIZATION (Optional)
     # ---------------------------------------------------------------------
