@@ -1474,34 +1474,23 @@ def plot_overall_bayesian_halflife(results, output_dir=None, verbose=True):
     max_density = max(results['densities']) * 1.1
     ax.set_ylim(0, max_density)
 
-    # Add model summary box
+    # Add model summary box (simplified, cleaner version)
     D0_mean = results['D0']['mean']
-    D0_ci_low = results['D0']['ci_low']
-    D0_ci_high = results['D0']['ci_high']
     k_mean = results['k']['mean']
-    k_ci_low = results['k']['ci_low']
-    k_ci_high = results['k']['ci_high']
 
     summary_text = (
-        "BAYESIAN DECAY MODEL SUMMARY\n"
-        "="*35 + "\n\n"
-        f"Posterior Estimates (mean [95% CI]):\n"
-        f"  D₀: {D0_mean:.1f} [{D0_ci_low:.1f}, {D0_ci_high:.1f}]\n"
-        f"  k:  {k_mean:.6f} [{k_ci_low:.6f}, {k_ci_high:.6f}] /ka\n"
-        f"  Half-life: {halflife:.0f} [{halflife_ci[0]:.0f}, {halflife_ci[1]:.0f}] ka\n\n"
-        f"Model:\n"
-        f"  D(t) = D₀ × exp(-k × t)\n\n"
-        f"Interpretation:\n"
-        f"  Lake density decays by 50% every\n"
-        f"  ~{halflife:.0f} thousand years."
+        f"Model: D(t) = D₀ × exp(-k × t)\n"
+        f"D₀ = {D0_mean:.1f}, k = {k_mean:.5f} /ka\n"
+        f"t½ = {halflife:.0f} ka [{halflife_ci[0]:.0f}-{halflife_ci[1]:.0f}]"
     )
 
-    # Add text box
-    ax.text(0.98, 0.97, summary_text,
+    # Add smaller text box in lower right
+    ax.text(0.95, 0.05, summary_text,
            transform=ax.transAxes,
-           fontsize=8, family='monospace',
-           verticalalignment='top', horizontalalignment='right',
-           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+           fontsize=9, family='monospace',
+           verticalalignment='bottom', horizontalalignment='right',
+           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.9,
+                    edgecolor='darkgoldenrod', linewidth=1.5))
 
     # Panel B: Posterior distributions
     ax = axes[1]
@@ -1521,17 +1510,15 @@ def plot_overall_bayesian_halflife(results, output_dir=None, verbose=True):
     halflife_mean = results['halflife_median']
     halflife_ci_low = results['halflife_ci_low']
     halflife_ci_high = results['halflife_ci_high']
-    ax.axvline(halflife_mean, color='red', linestyle='--', linewidth=2,
-              label=f'Mean: {halflife_mean:.0f} ka')
-    ax.axvline(halflife_ci_low, color='red', linestyle=':', linewidth=1, alpha=0.7)
-    ax.axvline(halflife_ci_high, color='red', linestyle=':', linewidth=1, alpha=0.7)
 
-    # Add text annotation for 95% CI
-    y_pos = ax.get_ylim()[1] * 0.9
-    ax.text(halflife_mean, y_pos, f'95% CI: [{halflife_ci_low:.0f}, {halflife_ci_high:.0f}]',
-           ha='center', fontsize=9, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    # Plot vertical lines for mean and CI
+    ax.axvline(halflife_mean, color='red', linestyle='--', linewidth=2)
+    ax.axvline(halflife_ci_low, color='red', linestyle=':', linewidth=1, alpha=0.5)
+    ax.axvline(halflife_ci_high, color='red', linestyle=':', linewidth=1, alpha=0.5)
 
-    ax.legend(loc='upper right')
+    # Add legend with mean and CI in text
+    ax.legend([f'Mean: {halflife_mean:.0f} ka\n95% CI: [{halflife_ci_low:.0f}, {halflife_ci_high:.0f}]'],
+             loc='upper right', framealpha=0.9)
     ax.grid(True, alpha=0.3)
 
     # Panel C: Initial Density Posterior
