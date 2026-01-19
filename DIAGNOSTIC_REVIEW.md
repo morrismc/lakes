@@ -125,58 +125,90 @@ The S. Appalachian hypsometry normalization should now work without errors.
 
 ---
 
-## Issue 4: S. Appalachian Projection
+## Issue 4: S. Appalachian Projection **[UPDATED]**
 
 ### User Observation
 - User stated: "Also the southern Appalachian Lakes. Projection is incorrect."
 - Console output showed: "No .prj file found, assumed CRS: EPSG:4269"
+- Map visualization shows S. Appalachian lakes appearing in wrong location (far right of plot)
+- User clarified: "looks like the projection error is just that the s app lakes are still in lat long? while the horizontal proj on the other datasets is in meters"
 
-### Current Implementation
-The code correctly handles S. Appalachian lake loading (glacial_chronosequence.py:390-442):
+### Problem Diagnosed
+The S. Appalachian lakes coordinates are NOT being properly reprojected from geographic (degrees) to Albers Equal Area (meters). This causes:
+1. **Map visualization error**: Lakes appear in wrong location
+2. **Potential hypsometry error**: If spatial joins are used with DEM
 
-**Coordinate Detection** (lines 400-410):
+### Fixes Applied
+
+**1. Added diagnostic output** (glacial_chronosequence.py:418-456):
 ```python
-for col in df.columns:
-    col_lower = col.lower()
-    if col_lower in ['x', 'lon', 'longitude', 'long']:
-        coord_cols['x'] = col
-    elif col_lower in ['y', 'lat', 'latitude']:
-        coord_cols['y'] = col
+# Print sample coordinates BEFORE setting CRS
+sample_coords = gdf.geometry.iloc[0]
+print(f"    Sample coords (raw): X={sample_coords.x:.6f}, Y={sample_coords.y:.6f}")
+
+# ... CRS handling ...
+
+# ALWAYS reproject to target CRS (don't rely on CRS comparison)
+print(f"    Reprojecting from {gdf.crs} to: {target_crs}")
+gdf_reprojected = gdf.to_crs(target_crs)
+
+# Verify reprojection worked
+sample_after = gdf_reprojected.geometry.iloc[0]
+print(f"    Sample coords (after): X={sample_after.x:.2f}, Y={sample_after.y:.2f} meters")
+
+# Sanity check: Albers coords for S. Appalachians should be roughly:
+# X (easting): 1,400,000 to 1,800,000 m
+# Y (northing): 1,300,000 to 1,900,000 m
+if abs(sample_after.x) > 1e7 or abs(sample_after.y) > 1e7:
+    print(f"    WARNING: Coordinates look wrong! May still be in degrees.")
+    print(f"             Expected Albers meters, got: X={sample_after.x:.2f}, Y={sample_after.y:.2f}")
 ```
-✅ Successfully detects: `X=Longitude, Y=Latitude`
 
-**CRS Handling** (lines 419-433):
+**2. Fixed reprojection logic** (glacial_chronosequence.py:439-441):
 ```python
-prj_path = dbf_path.replace('.dbf', '.prj')
-if os.path.exists(prj_path):
-    # Read from .prj file
-    with open(prj_path, 'r') as f:
-        prj_text = f.read()
-    gdf.crs = prj_text
-else:
-    # Assume NAD83 geographic (common for US data)
-    gdf.crs = 'EPSG:4269'  # NAD83 Geographic
-```
-
-**Reprojection** (lines 436-438):
-```python
+# BEFORE: Used conditional check that might skip reprojection
 if gdf.crs != target_crs:
-    gdf = gdf.to_crs(target_crs)  # ESRI:102039 (NAD83 Albers Equal Area)
+    gdf = gdf.to_crs(target_crs)
+
+# AFTER: Always reproject and use new variable
+print(f"    Reprojecting from {gdf.crs} to: {target_crs}")
+gdf_reprojected = gdf.to_crs(target_crs)
+return gdf_reprojected  # Ensure reprojected version is returned
 ```
 
-### What's Working
-✅ Coordinate columns correctly identified (Longitude, Latitude)
-✅ CRS assumed as EPSG:4269 (NAD83) when .prj missing
-✅ Reprojection to ESRI:102039 (Albers Equal Area) for area calculations
-✅ Successfully loaded 93,194 S. Appalachian lakes
+**3. Created test script** (test_sapp_projection.py):
+```python
+# Run this to diagnose projection issues
+python test_sapp_projection.py
+```
 
-### Potential Issue
-If the user has a `.prj` file with different CRS information, the code will use that instead of the assumed EPSG:4269. The user mentioned "here is the correct projection information" but this may not have been provided in the previous session.
+### Expected Output After Fix
+When loading S. Appalachian lakes, you should see:
+```
+Loading Southern Appalachian lakes...
+  Loading: F:\Lakes\GIS\rasters\S_App_Lakes.dbf
+    Records: 93,194
+    Sample coords (raw): X=-84.123456, Y=35.123456  (in degrees)
+    No .prj file found, assumed CRS: EPSG:4269
+    Reprojecting from EPSG:4269 to: ESRI:102039
+    Sample coords (after): X=1543210.12, Y=1456789.23 meters  (in meters)
+  ✓ Loaded 93,194 Southern Appalachian lakes
+```
 
-**Action needed**: If S. Appalachian lakes appear in wrong location on map, verify:
-1. Does `S_App_Lakes.prj` file exist?
-2. What CRS does it contain?
-3. Should we hardcode a specific CRS instead of assuming EPSG:4269?
+If you see WARNING about coordinates still in degrees, the reprojection failed.
+
+### Hypsometry Impact
+The hypsometry analysis uses the pre-existing `ELEVATION` column from the DBF file, NOT coordinates sampled from the DEM. So **hypsometry results are still valid** even if coordinates were wrong. However:
+- ✅ Lake density calculations: Correct (uses elevation column)
+- ✅ Normalized density: Correct (uses elevation binning)
+- ❌ Map visualization: Wrong (uses spatial coordinates)
+- ❌ Any spatial joins: Wrong (if using spatial coordinates)
+
+### Verification Steps
+1. **Run test script**: `python test_sapp_projection.py`
+2. **Check coordinate ranges**: Should be 1.4M-1.8M (X) and 1.3M-1.9M (Y) for S. Appalachians in Albers
+3. **Verify map**: S. Appalachian lakes should appear in southeastern US, not off the edge
+4. **Re-run analysis**: After fixes, hypsometry won't change but map will be correct
 
 ---
 

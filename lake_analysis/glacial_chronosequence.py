@@ -415,6 +415,10 @@ def load_southern_appalachian_lakes(target_crs=None):
     # Create GeoDataFrame
     gdf = gpd.GeoDataFrame(df, geometry=geometry)
 
+    # Print sample coordinates BEFORE setting CRS
+    sample_coords = gdf.geometry.iloc[0]
+    print(f"    Sample coords (raw): X={sample_coords.x:.6f}, Y={sample_coords.y:.6f}")
+
     # Try to read CRS from .prj file if it exists
     prj_path = dbf_path.replace('.dbf', '.prj')
     if os.path.exists(prj_path):
@@ -428,18 +432,28 @@ def load_southern_appalachian_lakes(target_crs=None):
             gdf.crs = 'EPSG:4269'  # Assume NAD83
             print(f"    Assumed CRS: {gdf.crs}")
     else:
-        # Assume NAD83 geographic (common for US data)
+        # Assume NAD83 geographic (common for US data with Longitude/Latitude columns)
         gdf.crs = 'EPSG:4269'
         print(f"    No .prj file found, assumed CRS: {gdf.crs}")
 
-    # Reproject to target CRS
-    if gdf.crs != target_crs:
-        print(f"    Reprojecting to: {target_crs}")
-        gdf = gdf.to_crs(target_crs)
+    # ALWAYS reproject to target CRS (don't rely on CRS comparison)
+    print(f"    Reprojecting from {gdf.crs} to: {target_crs}")
+    gdf_reprojected = gdf.to_crs(target_crs)
 
-    print(f"  Loaded {len(gdf):,} Southern Appalachian lakes")
+    # Verify reprojection worked
+    sample_after = gdf_reprojected.geometry.iloc[0]
+    print(f"    Sample coords (after): X={sample_after.x:.2f}, Y={sample_after.y:.2f} meters")
 
-    return gdf
+    # Sanity check: Albers coords for S. Appalachians should be roughly:
+    # X (easting): 1,400,000 to 1,800,000 m
+    # Y (northing): 1,300,000 to 1,900,000 m
+    if abs(sample_after.x) > 1e7 or abs(sample_after.y) > 1e7:
+        print(f"    WARNING: Coordinates look wrong! May still be in degrees.")
+        print(f"             Expected Albers meters, got: X={sample_after.x:.2f}, Y={sample_after.y:.2f}")
+
+    print(f"  Loaded {len(gdf_reprojected):,} Southern Appalachian lakes")
+
+    return gdf_reprojected
 
 
 def compute_sapp_land_area_from_dem(dem_path=None, verbose=True):
