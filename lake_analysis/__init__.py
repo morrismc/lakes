@@ -55,6 +55,7 @@ from .config import (
 from .data_loading import (
     load_lake_data_from_gdb,
     load_lake_data_from_parquet,
+    load_conus_lake_data,
     calculate_landscape_area_by_bin,
     quick_data_check,
     summarize_lake_data,
