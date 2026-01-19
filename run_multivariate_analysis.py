@@ -81,9 +81,9 @@ print()
 try:
     results = run_complete_multivariate_analysis(
         lakes_classified,
-        response_var='area',  # Use lake area as response
-        min_lake_area=0.01,   # Filter small lakes
-        max_lake_area=20000,  # Exclude Great Lakes
+        response_var='area',   # Use lake area as response
+        min_lake_area=0.005,   # Filter small lakes (match min threshold)
+        max_lake_area=20000,   # Exclude Great Lakes
         save_figures=True,
         verbose=True
     )

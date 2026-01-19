@@ -29,7 +29,9 @@ from sklearn.linear_model import LinearRegression
 import warnings
 
 
-def prepare_multivariate_dataset(lakes_gdf, include_glacial=True, min_samples=100, verbose=True):
+def prepare_multivariate_dataset(lakes_gdf, response_var='area', min_lake_area=0.01,
+                                max_lake_area=20000, include_glacial=True,
+                                min_samples=100, verbose=True):
     """
     Prepare dataset for multivariate analysis with all relevant variables.
 
@@ -37,6 +39,12 @@ def prepare_multivariate_dataset(lakes_gdf, include_glacial=True, min_samples=10
     ----------
     lakes_gdf : GeoDataFrame
         Lakes with attributes and glacial classification
+    response_var : str
+        Response variable name (e.g., 'area', 'log_area')
+    min_lake_area : float
+        Minimum lake area in km² (exclude small lakes)
+    max_lake_area : float
+        Maximum lake area in km² (exclude Great Lakes)
     include_glacial : bool
         Include glacial stage as categorical variable
     min_samples : int
@@ -46,8 +54,8 @@ def prepare_multivariate_dataset(lakes_gdf, include_glacial=True, min_samples=10
 
     Returns
     -------
-    DataFrame
-        Clean dataset with all variables, ready for analysis
+    tuple
+        (DataFrame with clean data, dict with column mapping)
     """
     try:
         from .config import COLS
@@ -80,14 +88,32 @@ def prepare_multivariate_dataset(lakes_gdf, include_glacial=True, min_samples=10
     if len(available_vars) < 3:
         raise ValueError(f"Need at least 3 variables for multivariate analysis, found {len(available_vars)}")
 
-    # Extract variables
+    # Filter lakes by area first (on original GeoDataFrame)
+    area_col = available_vars.get('area', 'AREASQKM')
+    if area_col in lakes_gdf.columns:
+        n_before_filter = len(lakes_gdf)
+        lakes_filtered = lakes_gdf[
+            (lakes_gdf[area_col] >= min_lake_area) &
+            (lakes_gdf[area_col] <= max_lake_area)
+        ].copy()
+        n_after_filter = len(lakes_filtered)
+        if verbose:
+            print(f"\nLake area filtering:")
+            print(f"  Range: {min_lake_area} - {max_lake_area} km²")
+            print(f"  Before: {n_before_filter:,} lakes")
+            print(f"  After: {n_after_filter:,} lakes")
+            print(f"  Removed: {n_before_filter - n_after_filter:,} lakes")
+    else:
+        lakes_filtered = lakes_gdf.copy()
+
+    # Extract variables from filtered data
     data = pd.DataFrame()
     for var_name, col_name in available_vars.items():
-        data[var_name] = lakes_gdf[col_name].values
+        data[var_name] = lakes_filtered[col_name].values
 
     # Add glacial stage if available and requested
-    if include_glacial and 'glacial_stage' in lakes_gdf.columns:
-        data['glacial_stage'] = lakes_gdf['glacial_stage'].values
+    if include_glacial and 'glacial_stage' in lakes_filtered.columns:
+        data['glacial_stage'] = lakes_filtered['glacial_stage'].values
 
         # Filter to well-represented stages
         stage_counts = data['glacial_stage'].value_counts()
@@ -112,7 +138,8 @@ def prepare_multivariate_dataset(lakes_gdf, include_glacial=True, min_samples=10
         print(f"  Removed: {n_before - n_after:,} lakes ({100*(n_before-n_after)/n_before:.1f}%)")
         print(f"\nVariables included: {list(available_vars.keys())}")
 
-    return data
+    # Return data and column mapping
+    return data, available_vars
 
 
 def compute_correlation_matrix(data, method='spearman', verbose=True):
@@ -444,7 +471,9 @@ def run_multivariate_regression(data, response_var='area', verbose=True):
     return results
 
 
-def run_complete_multivariate_analysis(lakes_gdf, save_figures=True, output_dir=None, verbose=True):
+def run_complete_multivariate_analysis(lakes_gdf, response_var='area',
+                                      min_lake_area=0.01, max_lake_area=20000,
+                                      save_figures=True, output_dir=None, verbose=True):
     """
     Complete multivariate analysis pipeline.
 
@@ -455,6 +484,12 @@ def run_complete_multivariate_analysis(lakes_gdf, save_figures=True, output_dir=
     ----------
     lakes_gdf : GeoDataFrame
         Lakes with attributes and glacial classification
+    response_var : str
+        Response variable name (default: 'area')
+    min_lake_area : float
+        Minimum lake area in km² (default: 0.01)
+    max_lake_area : float
+        Maximum lake area in km² (default: 20000, excludes Great Lakes)
     save_figures : bool
         Generate and save visualization figures
     output_dir : str, optional
@@ -476,8 +511,16 @@ def run_complete_multivariate_analysis(lakes_gdf, save_figures=True, output_dir=
     results = {}
 
     # 1. Prepare dataset
-    data = prepare_multivariate_dataset(lakes_gdf, include_glacial=True, verbose=verbose)
+    data, column_mapping = prepare_multivariate_dataset(
+        lakes_gdf,
+        response_var=response_var,
+        min_lake_area=min_lake_area,
+        max_lake_area=max_lake_area,
+        include_glacial=True,
+        verbose=verbose
+    )
     results['data'] = data
+    results['column_mapping'] = column_mapping
 
     # 2. Correlation matrix
     corr_matrix = compute_correlation_matrix(data, method='spearman', verbose=verbose)
@@ -488,11 +531,11 @@ def run_complete_multivariate_analysis(lakes_gdf, save_figures=True, output_dir=
     results['pca'] = pca_results
 
     # 4. Variance partitioning
-    vp_results = variance_partitioning(data, response_var='area', verbose=verbose)
+    vp_results = variance_partitioning(data, response_var=response_var, verbose=verbose)
     results['variance_partitioning'] = vp_results
 
     # 5. Multiple regression
-    reg_results = run_multivariate_regression(data, response_var='area', verbose=verbose)
+    reg_results = run_multivariate_regression(data, response_var=response_var, verbose=verbose)
     results['regression'] = reg_results
 
     # 6. Partial correlations
