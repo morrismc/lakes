@@ -196,7 +196,8 @@ from .visualization import (
     plot_bayesian_decay_curves,
     plot_bayesian_covariance,
     plot_bayesian_summary,
-    plot_sapp_hypsometry_normalized_density
+    plot_sapp_hypsometry_normalized_density,
+    plot_halflife_threshold_sensitivity
 )
 
 # Size-stratified analysis
