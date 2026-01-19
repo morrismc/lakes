@@ -9,8 +9,9 @@ This project analyzes lake distribution patterns across the contiguous United St
 **Key Results:**
 - ✅ **Half-life of lakes:** ~660 ka [95% CI: 418-1505 ka]
 - ✅ **16-step analysis pipeline** with optional specialized analyses
-- ✅ **200+ analysis functions** across 10 core modules
+- ✅ **210+ analysis functions** across 12 core modules
 - ✅ **Bayesian uncertainty quantification** for all major results
+- ✅ **Multivariate statistical analysis** to disentangle controls
 
 ## Quick Start
 
@@ -55,10 +56,15 @@ lakes/
 │   ├── spatial_scaling.py    # Geographic pattern analysis
 │   ├── glacial_chronosequence.py  # Glacial history analysis (Davis hypothesis)
 │   ├── size_stratified_analysis.py  # Size-stratified half-life analysis
+│   ├── multivariate_analysis.py    # Multivariate statistics (NEW)
+│   ├── multivariate_visualization.py  # Multivariate plots (NEW)
 │   ├── visualization.py   # Publication-quality plots
 │   └── main.py           # Entry point, orchestration
 ├── examples/
-│   └── example_size_stratified_analysis.py  # Size-stratified analysis example
+│   ├── example_size_stratified_analysis.py  # Size-stratified analysis example
+│   └── example_multivariate_analysis.py     # Multivariate analysis example (NEW)
+├── run_bayesian_with_sapp.py  # Standalone: Bayesian + S. Appalachian
+├── run_multivariate_analysis.py  # Standalone: Multivariate analysis (NEW)
 ├── data/                  # Data files (not in git)
 │   ├── NHD/              # National Hydrography Dataset
 │   ├── rasters/          # Elevation, slope, relief, climate
@@ -109,6 +115,39 @@ higher evaporative concentration, or larger catchment/lake area ratios.
 - `plot_nadi1_density_decay()`: Main decay plot with Bayesian credible intervals
 - `plot_bayesian_summary()`: 4-panel Bayesian analysis summary
 - `plot_density_with_uncertainty()`: Density with MIN/MAX uncertainty bands
+
+### multivariate_analysis.py (NEW)
+Disentangle glaciation vs climate vs topography effects. Key functions:
+- `prepare_multivariate_dataset()`: Clean data and prepare variables
+- `compute_correlation_matrix()`: Spearman rank correlations
+- `compute_partial_correlation()`: Correlation controlling for confounders
+- `run_pca_analysis()`: Principal Component Analysis
+- `variance_partitioning()`: Decompose R² into pure and shared effects
+- `run_multivariate_regression()`: Multiple regression with standardized coefficients
+- `run_complete_multivariate_analysis()`: Master pipeline
+
+**Key scientific question:** After controlling for elevation, slope, relief, aridity,
+and precipitation, does glaciation STILL significantly affect lake density?
+
+**Important parameters:**
+- `response_var='area'`: Response variable (lake area or density)
+- `min_lake_area=0.01`: Minimum lake size filter
+- `max_lake_area=20000`: Exclude Great Lakes
+- `save_figures=True`: Auto-save all plots
+
+**Outputs:**
+- Correlation matrix heatmap
+- PCA biplot (4-panel figure)
+- Variance partitioning bar plot
+- Variable importance plot from regression
+
+### multivariate_visualization.py (NEW)
+Publication-quality plots for multivariate results:
+- `plot_correlation_matrix()`: Heatmap with Spearman ρ values
+- `plot_pca_biplot()`: 4-panel PCA visualization (scores, loadings, scree, heatmap)
+- `plot_variance_partitioning()`: Bar plot showing pure and shared effects
+- `plot_variable_importance()`: Horizontal bar plot with significance markers
+- `plot_multivariate_summary()`: Generate complete figure set
 
 ### config.py
 Key constants:
@@ -258,6 +297,59 @@ results = run_full_analysis(
 overall = results['bayesian_halflife']['overall']
 size_stratified = results['bayesian_halflife']['size_stratified']
 ```
+
+### Multivariate Statistical Analysis
+Disentangle glaciation vs climate vs topography effects to answer the key question:
+**"Is glaciation the PRIMARY control, or just a proxy for climate/topography?"**
+
+1. **Load and classify**:
+   ```python
+   lakes = load_conus_lake_data()
+   lakes_gdf = convert_lakes_to_gdf(lakes)
+   boundaries = load_all_glacial_boundaries()
+   lakes_classified = classify_lakes_by_glacial_extent(lakes_gdf, boundaries)
+   ```
+
+2. **Run complete analysis**:
+   ```python
+   from lake_analysis import run_complete_multivariate_analysis
+
+   results = run_complete_multivariate_analysis(
+       lakes_classified,
+       response_var='area',
+       min_lake_area=0.01,
+       max_lake_area=20000,  # Exclude Great Lakes
+       save_figures=True,
+       verbose=True
+   )
+   ```
+
+3. **Interpret results**:
+   - **Correlation matrix**: Check if glaciation is correlated with climate/topography
+   - **PCA**: Identify dominant environmental gradient (PC1 loadings)
+   - **Variance partitioning**: Compare pure glaciation vs pure climate vs pure topography
+   - **Multiple regression**: Check standardized coefficients (β) and p-values
+
+4. **Key outputs**:
+   - `multivariate_correlation_matrix.png` - Spearman correlation heatmap
+   - `multivariate_pca_biplot.png` - 4-panel PCA visualization
+   - `multivariate_variance_partitioning.png` - Pure and shared effects
+   - `multivariate_variable_importance.png` - Regression coefficients
+
+5. **Standalone script**:
+   ```bash
+   python run_multivariate_analysis.py
+   ```
+
+6. **Example analyses**:
+   ```bash
+   python examples/example_multivariate_analysis.py
+   ```
+
+**Scientific interpretation:**
+- If **pure_glacial > pure_climate + pure_topo**: Glaciation is PRIMARY control
+- If **shared variance > 50%**: Strong collinearity (glaciation confounded with climate/topo)
+- If **|β_glacial| > |β_climate|** in regression: Glaciation has stronger independent effect
 
 **Requirements:**
 - Requires `glacial_stage` column (from glacial chronosequence analysis)

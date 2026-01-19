@@ -38,6 +38,20 @@ Do small lakes disappear faster than large lakes?
 - Small lakes systematically underrepresented in old landscapes
 - May reflect true geological process OR mapping limitations
 
+### 5. **Multivariate Controls** ⭐
+After controlling for climate and topography, is glaciation still the PRIMARY control on lake density?
+
+**Method:** Variance partitioning to decompose explained variance into:
+- Pure glaciation effect (after controlling for climate + topography)
+- Pure climate effect (after controlling for glaciation + topography)
+- Pure topography effect (after controlling for glaciation + climate)
+- Shared variance (collinearity between factors)
+
+**Variables:**
+- **Glaciation:** Wisconsin, Illinoian, Driftless, S. Appalachian
+- **Climate:** Aridity index, precipitation
+- **Topography:** Elevation, slope, relief
+
 ---
 
 ## Features
@@ -46,11 +60,12 @@ Do small lakes disappear faster than large lakes?
 ✅ **Bayesian half-life estimation** (PyMC with uncertainty quantification)
 ✅ **High-resolution chronosequence** (NADI-1: 0-25 ka at 0.5 ka intervals)
 ✅ **Size-stratified analysis** (7 lake size classes)
+✅ **Multivariate statistical analysis** (variance partitioning, PCA, multiple regression)
 ✅ **Power law fitting** (MLE with bootstrap confidence intervals)
 ✅ **Spatial scaling** (latitude, longitude, elevation patterns)
 ✅ **Aridity analysis** (climate effects on lake density)
-✅ **74+ visualization functions** (publication-quality figures)
-✅ **200+ analysis functions** across 10 core modules
+✅ **80+ visualization functions** (publication-quality figures)
+✅ **210+ analysis functions** across 12 core modules
 
 ---
 
@@ -355,8 +370,41 @@ These analyses exist as standalone functions but are **NOT** automatically run i
 5. **Half-Life Threshold Sensitivity** - Diagnostic for min_lake_area choice
 6. **Aridity-Conditional Half-Life** - Climate effects on persistence
 7. **Advanced Power Law Tests** - Comprehensive hypothesis testing
+8. **Multivariate Statistical Analysis** - Disentangle glaciation vs climate vs topography effects
 
 **Access:** See `COMPLETE_ANALYSIS_GUIDE.md` for usage examples.
+
+### Running Multivariate Analysis
+
+```python
+# Standalone script
+python run_multivariate_analysis.py
+
+# Or programmatically
+from lake_analysis import run_complete_multivariate_analysis
+
+results = run_complete_multivariate_analysis(
+    lakes_classified,
+    response_var='area',
+    min_lake_area=0.01,
+    max_lake_area=20000,
+    save_figures=True
+)
+
+# Access results
+corr_matrix = results['correlation_matrix']  # Spearman correlations
+pca = results['pca']  # Principal components
+vp = results['variance_partitioning']  # Pure and shared effects
+reg = results['regression']  # Multiple regression
+```
+
+**Key Question Answered:** Is glaciation the primary control, or is it confounded with climate/topography?
+
+**Method:** Variance partitioning decomposes R² into:
+- Pure glaciation (after controlling for climate + topography)
+- Pure climate (after controlling for glaciation + topography)
+- Pure topography (after controlling for glaciation + climate)
+- Shared variance (collinearity)
 
 ---
 

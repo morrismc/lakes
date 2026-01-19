@@ -229,3 +229,23 @@ from .config import (
     BAYESIAN_HALFLIFE_DEFAULTS,
     GLACIAL_STAGES_CONFIG
 )
+
+# Multivariate analysis
+from .multivariate_analysis import (
+    prepare_multivariate_dataset,
+    compute_correlation_matrix,
+    compute_partial_correlation,
+    run_pca_analysis,
+    variance_partitioning,
+    run_multivariate_regression,
+    run_complete_multivariate_analysis
+)
+
+# Multivariate visualization
+from .multivariate_visualization import (
+    plot_correlation_matrix,
+    plot_pca_biplot,
+    plot_variance_partitioning,
+    plot_variable_importance,
+    plot_multivariate_summary
+)
