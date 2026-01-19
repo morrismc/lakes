@@ -44,15 +44,18 @@ boundaries = load_all_glacial_boundaries()
 lakes_classified = classify_lakes_by_glacial_extent(lakes_gdf, boundaries)
 
 # Prepare multivariate dataset
+# IMPORTANT: Use 'density' to test controls on lake DENSITY (# lakes per landscape area)
+#            Use 'area' to test controls on individual lake SIZE
 data_clean, column_mapping = prepare_multivariate_dataset(
     lakes_classified,
-    response_var='area',
-    min_lake_area=0.005,   # Match minimum threshold
-    max_lake_area=20000,   # Exclude Great Lakes
+    response_var='density',  # RECOMMENDED: tests control on lake density
+    min_lake_area=0.005,     # Match minimum threshold
+    max_lake_area=20000,     # Exclude Great Lakes
+    grid_size_deg=0.5,       # Grid cell size for density calculation (≈50 km)
     verbose=True
 )
 
-print(f"\nCleaned dataset: {len(data_clean):,} lakes")
+print(f"\nCleaned dataset: {len(data_clean):,} observations")
 print(f"Variables: {list(data_clean.columns)}")
 print(f"Column mapping: {column_mapping}")
 

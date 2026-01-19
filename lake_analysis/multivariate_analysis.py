@@ -5,6 +5,7 @@ This module addresses the question: "Is glaciation the PRIMARY control on lake
 density, or are climate and topography equally/more important?"
 
 Methods:
+- Spatial binning to compute lake density per grid cell
 - Correlation matrix and network
 - Principal Component Analysis (PCA)
 - Multiple linear regression
@@ -15,6 +16,8 @@ Methods:
 Scientific Question:
 After controlling for elevation, slope, relief, aridity, and precipitation,
 does glaciation STILL significantly affect lake density?
+
+NOTE: Analysis uses GRIDDED DENSITY as response variable, not individual lake area.
 """
 
 import numpy as np
@@ -29,9 +32,153 @@ from sklearn.linear_model import LinearRegression
 import warnings
 
 
-def prepare_multivariate_dataset(lakes_gdf, response_var='area', min_lake_area=0.01,
+def create_gridded_density_dataset(lakes_gdf, grid_size_deg=0.5, min_lake_area=0.01,
+                                   max_lake_area=20000, min_lakes_per_cell=5, verbose=True):
+    """
+    Create gridded dataset with lake density as response variable.
+
+    This is the CORRECT approach for testing controls on lake density.
+    Each observation is a grid cell with:
+    - Lake density (count per unit area)
+    - Mean environmental conditions
+    - Glacial classification
+
+    Parameters
+    ----------
+    lakes_gdf : GeoDataFrame
+        Lakes with attributes and glacial classification
+    grid_size_deg : float
+        Grid cell size in degrees (default: 0.5° ≈ 50 km)
+    min_lake_area : float
+        Minimum lake area in km²
+    max_lake_area : float
+        Maximum lake area in km² (exclude Great Lakes)
+    min_lakes_per_cell : int
+        Minimum lakes per cell to include in analysis
+    verbose : bool
+        Print progress
+
+    Returns
+    -------
+    DataFrame
+        Gridded dataset with density and environmental variables
+    """
+    try:
+        from .config import COLS
+    except ImportError:
+        from config import COLS
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("CREATING GRIDDED DENSITY DATASET")
+        print("=" * 70)
+        print(f"Grid size: {grid_size_deg}° (≈{grid_size_deg * 111:.0f} km)")
+
+    # Filter by area
+    area_col = COLS.get('area', 'AREASQKM')
+    lakes_filtered = lakes_gdf[
+        (lakes_gdf[area_col] >= min_lake_area) &
+        (lakes_gdf[area_col] <= max_lake_area)
+    ].copy()
+
+    if verbose:
+        print(f"Filtered to {len(lakes_filtered):,} lakes ({min_lake_area}-{max_lake_area} km²)")
+
+    # Get geographic coordinates (need WGS84 for lat/lon binning)
+    if lakes_filtered.crs.to_epsg() != 4326:
+        lakes_geo = lakes_filtered.to_crs('EPSG:4326')
+    else:
+        lakes_geo = lakes_filtered
+
+    # Extract coordinates
+    coords = np.array([[geom.x, geom.y] for geom in lakes_geo.geometry])
+    lons = coords[:, 0]
+    lats = coords[:, 1]
+
+    # Create grid
+    lon_bins = np.arange(lons.min(), lons.max() + grid_size_deg, grid_size_deg)
+    lat_bins = np.arange(lats.min(), lats.max() + grid_size_deg, grid_size_deg)
+
+    if verbose:
+        print(f"Grid dimensions: {len(lon_bins)-1} x {len(lat_bins)-1} cells")
+
+    # Assign each lake to a grid cell
+    lon_idx = np.digitize(lons, lon_bins) - 1
+    lat_idx = np.digitize(lats, lat_bins) - 1
+    cell_id = lon_idx * len(lat_bins) + lat_idx
+
+    # Add to dataframe
+    lakes_filtered['cell_id'] = cell_id
+    lakes_filtered['cell_lon'] = lon_bins[lon_idx]
+    lakes_filtered['cell_lat'] = lat_bins[lat_idx]
+
+    # Variable columns
+    var_cols = {
+        'elevation': COLS.get('elevation', 'Elevation_'),
+        'slope': COLS.get('slope', 'Slope'),
+        'relief': COLS.get('relief', 'F5km_relief'),
+        'aridity': COLS.get('aridity', 'AI'),
+        'precipitation': COLS.get('precipitation', 'precip_mm'),
+        'area': area_col
+    }
+
+    # Aggregate by grid cell
+    grid_data = []
+
+    for cell_id_val, group in lakes_filtered.groupby('cell_id'):
+        n_lakes = len(group)
+
+        if n_lakes < min_lakes_per_cell:
+            continue
+
+        # Compute cell area (approximate using lat/lon)
+        cell_lat = group['cell_lat'].iloc[0]
+        cell_area_km2 = (grid_size_deg * 111) * (grid_size_deg * 111 * np.cos(np.radians(cell_lat)))
+
+        # Lake density (lakes per 1000 km²)
+        density = (n_lakes / cell_area_km2) * 1000
+
+        # Mean environmental conditions
+        cell_vars = {'density': density, 'n_lakes': n_lakes, 'cell_area_km2': cell_area_km2}
+
+        for var_name, col_name in var_cols.items():
+            if col_name in group.columns:
+                # Use median for robustness
+                cell_vars[var_name] = group[col_name].median()
+
+        # Glacial stage (most common in cell)
+        if 'glacial_stage' in group.columns:
+            glacial_counts = group['glacial_stage'].value_counts()
+            cell_vars['glacial_stage'] = glacial_counts.index[0]
+            cell_vars['glacial_purity'] = glacial_counts.iloc[0] / n_lakes
+
+        # Cell center coordinates
+        cell_vars['lon'] = group['cell_lon'].iloc[0] + grid_size_deg/2
+        cell_vars['lat'] = group['cell_lat'].iloc[0] + grid_size_deg/2
+
+        grid_data.append(cell_vars)
+
+    grid_df = pd.DataFrame(grid_data)
+
+    if verbose:
+        print(f"\nGridded dataset:")
+        print(f"  Total cells: {len(grid_df):,}")
+        print(f"  Density range: {grid_df['density'].min():.1f} - {grid_df['density'].max():.1f} lakes/1000 km²")
+        print(f"  Mean density: {grid_df['density'].mean():.1f} lakes/1000 km²")
+
+        if 'glacial_stage' in grid_df.columns:
+            print(f"\n  Cells by glacial stage:")
+            for stage, count in grid_df['glacial_stage'].value_counts().items():
+                mean_density = grid_df[grid_df['glacial_stage'] == stage]['density'].mean()
+                print(f"    {stage}: {count:,} cells (mean density: {mean_density:.1f})")
+
+    return grid_df
+
+
+
+def prepare_multivariate_dataset(lakes_gdf, response_var='density', min_lake_area=0.01,
                                 max_lake_area=20000, include_glacial=True,
-                                min_samples=100, verbose=True):
+                                grid_size_deg=0.5, min_samples=100, verbose=True):
     """
     Prepare dataset for multivariate analysis with all relevant variables.
 
@@ -40,15 +187,17 @@ def prepare_multivariate_dataset(lakes_gdf, response_var='area', min_lake_area=0
     lakes_gdf : GeoDataFrame
         Lakes with attributes and glacial classification
     response_var : str
-        Response variable name (e.g., 'area', 'log_area')
+        Response variable: 'density' (gridded lake density, RECOMMENDED) or 'area' (individual lake size)
     min_lake_area : float
         Minimum lake area in km² (exclude small lakes)
     max_lake_area : float
         Maximum lake area in km² (exclude Great Lakes)
     include_glacial : bool
         Include glacial stage as categorical variable
+    grid_size_deg : float
+        Grid cell size for density calculation (degrees, only used if response_var='density')
     min_samples : int
-        Minimum samples required per glacial stage
+        Minimum samples required per glacial stage (or min_lakes_per_cell if using density)
     verbose : bool
         Print progress
 
@@ -66,65 +215,87 @@ def prepare_multivariate_dataset(lakes_gdf, response_var='area', min_lake_area=0
         print("\n" + "=" * 70)
         print("PREPARING MULTIVARIATE DATASET")
         print("=" * 70)
+        print(f"Response variable: {response_var}")
 
-    # Required columns
-    vars_continuous = {
-        'elevation': COLS.get('elevation', 'Elevation_'),
-        'slope': COLS.get('slope', 'Slope'),
-        'relief': COLS.get('relief', 'F5km_relief'),
-        'aridity': COLS.get('aridity', 'AI'),
-        'precipitation': COLS.get('precipitation', 'precip_mm'),
-        'area': COLS.get('area', 'AREASQKM'),
-    }
+    # If using density as response, create gridded dataset
+    if response_var == 'density':
+        data = create_gridded_density_dataset(
+            lakes_gdf,
+            grid_size_deg=grid_size_deg,
+            min_lake_area=min_lake_area,
+            max_lake_area=max_lake_area,
+            min_lakes_per_cell=max(5, min_samples//100),  # Adaptive threshold
+            verbose=verbose
+        )
 
-    # Check which variables are available
-    available_vars = {}
-    for var_name, col_name in vars_continuous.items():
-        if col_name in lakes_gdf.columns:
-            available_vars[var_name] = col_name
-        elif verbose:
-            print(f"  WARNING: {var_name} column '{col_name}' not found")
+        # Variables already extracted in gridded dataset
+        available_vars = {k: k for k in ['elevation', 'slope', 'relief', 'aridity', 'precipitation']
+                          if k in data.columns}
+        available_vars['density'] = 'density'
 
-    if len(available_vars) < 3:
-        raise ValueError(f"Need at least 3 variables for multivariate analysis, found {len(available_vars)}")
+        # Remove area column if present (using density instead)
+        if 'area' in data.columns:
+            data = data.drop(columns=['area'])
 
-    # Filter lakes by area first (on original GeoDataFrame)
-    area_col = available_vars.get('area', 'AREASQKM')
-    if area_col in lakes_gdf.columns:
-        n_before_filter = len(lakes_gdf)
-        lakes_filtered = lakes_gdf[
-            (lakes_gdf[area_col] >= min_lake_area) &
-            (lakes_gdf[area_col] <= max_lake_area)
-        ].copy()
-        n_after_filter = len(lakes_filtered)
-        if verbose:
-            print(f"\nLake area filtering:")
-            print(f"  Range: {min_lake_area} - {max_lake_area} km²")
-            print(f"  Before: {n_before_filter:,} lakes")
-            print(f"  After: {n_after_filter:,} lakes")
-            print(f"  Removed: {n_before_filter - n_after_filter:,} lakes")
     else:
-        lakes_filtered = lakes_gdf.copy()
+        # Original approach: individual lakes as observations
+        vars_continuous = {
+            'elevation': COLS.get('elevation', 'Elevation_'),
+            'slope': COLS.get('slope', 'Slope'),
+            'relief': COLS.get('relief', 'F5km_relief'),
+            'aridity': COLS.get('aridity', 'AI'),
+            'precipitation': COLS.get('precipitation', 'precip_mm'),
+            'area': COLS.get('area', 'AREASQKM'),
+        }
 
-    # Extract variables from filtered data
-    data = pd.DataFrame()
-    for var_name, col_name in available_vars.items():
-        data[var_name] = lakes_filtered[col_name].values
+        # Check which variables are available
+        available_vars = {}
+        for var_name, col_name in vars_continuous.items():
+            if col_name in lakes_gdf.columns:
+                available_vars[var_name] = col_name
+            elif verbose:
+                print(f"  WARNING: {var_name} column '{col_name}' not found")
 
-    # Add glacial stage if available and requested
-    if include_glacial and 'glacial_stage' in lakes_filtered.columns:
-        data['glacial_stage'] = lakes_filtered['glacial_stage'].values
+        if len(available_vars) < 3:
+            raise ValueError(f"Need at least 3 variables for multivariate analysis, found {len(available_vars)}")
 
-        # Filter to well-represented stages
-        stage_counts = data['glacial_stage'].value_counts()
-        valid_stages = stage_counts[stage_counts >= min_samples].index
-        data = data[data['glacial_stage'].isin(valid_stages)].copy()
+        # Filter lakes by area first (on original GeoDataFrame)
+        area_col = available_vars.get('area', 'AREASQKM')
+        if area_col in lakes_gdf.columns:
+            n_before_filter = len(lakes_gdf)
+            lakes_filtered = lakes_gdf[
+                (lakes_gdf[area_col] >= min_lake_area) &
+                (lakes_gdf[area_col] <= max_lake_area)
+            ].copy()
+            n_after_filter = len(lakes_filtered)
+            if verbose:
+                print(f"\nLake area filtering:")
+                print(f"  Range: {min_lake_area} - {max_lake_area} km²")
+                print(f"  Before: {n_before_filter:,} lakes")
+                print(f"  After: {n_after_filter:,} lakes")
+                print(f"  Removed: {n_before_filter - n_after_filter:,} lakes")
+        else:
+            lakes_filtered = lakes_gdf.copy()
 
-        if verbose:
-            print(f"\nGlacial stages included:")
-            for stage in valid_stages:
-                n = (data['glacial_stage'] == stage).sum()
-                print(f"  {stage}: {n:,} lakes")
+        # Extract variables from filtered data
+        data = pd.DataFrame()
+        for var_name, col_name in available_vars.items():
+            data[var_name] = lakes_filtered[col_name].values
+
+        # Add glacial stage if available and requested
+        if include_glacial and 'glacial_stage' in lakes_filtered.columns:
+            data['glacial_stage'] = lakes_filtered['glacial_stage'].values
+
+            # Filter to well-represented stages
+            stage_counts = data['glacial_stage'].value_counts()
+            valid_stages = stage_counts[stage_counts >= min_samples].index
+            data = data[data['glacial_stage'].isin(valid_stages)].copy()
+
+            if verbose:
+                print(f"\nGlacial stages included:")
+                for stage in valid_stages:
+                    n = (data['glacial_stage'] == stage).sum()
+                    print(f"  {stage}: {n:,} {'cells' if response_var == 'density' else 'lakes'}")
 
     # Remove rows with missing data
     n_before = len(data)
@@ -132,11 +303,12 @@ def prepare_multivariate_dataset(lakes_gdf, response_var='area', min_lake_area=0
     n_after = len(data)
 
     if verbose:
-        print(f"\nData preparation:")
-        print(f"  Before cleaning: {n_before:,} lakes")
-        print(f"  After cleaning: {n_after:,} lakes")
-        print(f"  Removed: {n_before - n_after:,} lakes ({100*(n_before-n_after)/n_before:.1f}%)")
-        print(f"\nVariables included: {list(available_vars.keys())}")
+        print(f"\nData cleaning:")
+        print(f"  Before: {n_before:,} observations")
+        print(f"  After: {n_after:,} observations")
+        if n_before > n_after:
+            print(f"  Removed: {n_before - n_after:,} ({100*(n_before-n_after)/n_before:.1f}%)")
+        print(f"\nVariables: {list([k for k in available_vars.keys() if k in data.columns])}")
 
     # Return data and column mapping
     return data, available_vars
@@ -471,9 +643,10 @@ def run_multivariate_regression(data, response_var='area', verbose=True):
     return results
 
 
-def run_complete_multivariate_analysis(lakes_gdf, response_var='area',
-                                      min_lake_area=0.01, max_lake_area=20000,
-                                      save_figures=True, output_dir=None, verbose=True):
+def run_complete_multivariate_analysis(lakes_gdf, response_var='density',
+                                      min_lake_area=0.005, max_lake_area=20000,
+                                      grid_size_deg=0.5, save_figures=True,
+                                      output_dir=None, verbose=True):
     """
     Complete multivariate analysis pipeline.
 
@@ -485,11 +658,13 @@ def run_complete_multivariate_analysis(lakes_gdf, response_var='area',
     lakes_gdf : GeoDataFrame
         Lakes with attributes and glacial classification
     response_var : str
-        Response variable name (default: 'area')
+        Response variable: 'density' (RECOMMENDED, tests control on lake density) or 'area' (tests control on lake size)
     min_lake_area : float
-        Minimum lake area in km² (default: 0.01)
+        Minimum lake area in km² (default: 0.005)
     max_lake_area : float
         Maximum lake area in km² (default: 20000, excludes Great Lakes)
+    grid_size_deg : float
+        Grid cell size for density calculation in degrees (default: 0.5° ≈ 50 km)
     save_figures : bool
         Generate and save visualization figures
     output_dir : str, optional
@@ -516,11 +691,13 @@ def run_complete_multivariate_analysis(lakes_gdf, response_var='area',
         response_var=response_var,
         min_lake_area=min_lake_area,
         max_lake_area=max_lake_area,
+        grid_size_deg=grid_size_deg,
         include_glacial=True,
         verbose=verbose
     )
     results['data'] = data
     results['column_mapping'] = column_mapping
+    results['response_var'] = response_var
 
     # 2. Correlation matrix
     corr_matrix = compute_correlation_matrix(data, method='spearman', verbose=verbose)

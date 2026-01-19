@@ -232,6 +232,7 @@ from .config import (
 
 # Multivariate analysis
 from .multivariate_analysis import (
+    create_gridded_density_dataset,
     prepare_multivariate_dataset,
     compute_correlation_matrix,
     compute_partial_correlation,

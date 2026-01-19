@@ -64,9 +64,9 @@ def plot_correlation_matrix(corr_matrix, figsize=(10, 8), save_path=None):
     return fig, ax
 
 
-def plot_pca_biplot(pca_results, figsize=(12, 10), save_path=None):
+def plot_pca_biplot(pca_results, figsize=(14, 10), save_path=None):
     """
-    PCA biplot showing both scores (lakes) and loadings (variables).
+    PCA biplot showing both scores (observations) and loadings (variables).
 
     Parameters
     ----------
@@ -91,6 +91,9 @@ def plot_pca_biplot(pca_results, figsize=(12, 10), save_path=None):
     var_names = pca_results['variable_names']
     explained_var = pca_results['explained_variance']
 
+    # Determine observation type (grid cells or individual lakes)
+    obs_type = 'Grid Cells' if scores.shape[0] < 10000 else 'Individual Lakes'
+
     # Color by glacial stage if available
     if 'glacial_stage' in pca_results:
         stages = pca_results['glacial_stage']
@@ -103,18 +106,43 @@ def plot_pca_biplot(pca_results, figsize=(12, 10), save_path=None):
     # Panel A: PC1 vs PC2 scores
     ax = axes[0, 0]
     if stages is not None:
-        for stage in unique_stages:
+        # Plot in order: unclassified first (behind), then glaciated stages
+        plot_order = ['unclassified'] + [s for s in unique_stages if s != 'unclassified']
+
+        for stage in plot_order:
+            if stage not in unique_stages:
+                continue
+
             mask = stages == stage
-            ax.scatter(scores[mask, 0], scores[mask, 1],
-                      c=[stage_colors[stage]], label=stage,
-                      alpha=0.3, s=1, rasterized=True)
-        ax.legend(loc='best', markerscale=5)
+            n_points = np.sum(mask)
+
+            # Subsample unclassified points if too many
+            if stage == 'unclassified' and n_points > 5000:
+                indices = np.where(mask)[0]
+                subsample_idx = np.random.choice(indices, size=5000, replace=False)
+                mask_plot = np.zeros(len(mask), dtype=bool)
+                mask_plot[subsample_idx] = True
+                alpha_val = 0.05
+                label_str = f'{stage} (showing 5000/{n_points})'
+            else:
+                mask_plot = mask
+                alpha_val = 0.4 if stage != 'unclassified' else 0.1
+                label_str = stage
+
+            ax.scatter(scores[mask_plot, 0], scores[mask_plot, 1],
+                      c=[stage_colors[stage]], label=label_str,
+                      alpha=alpha_val, s=2 if stage != 'unclassified' else 1,
+                      rasterized=True, edgecolors='none')
+
+        # Legend outside plot area
+        ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), markerscale=3,
+                 frameon=True, fancybox=True, shadow=True)
     else:
         ax.scatter(scores[:, 0], scores[:, 1], alpha=0.3, s=1, rasterized=True)
 
     ax.set_xlabel(f'PC1 ({100*explained_var[0]:.1f}% var)')
     ax.set_ylabel(f'PC2 ({100*explained_var[1]:.1f}% var)')
-    ax.set_title('A) Sample Scores (Individual Lakes)', fontweight='bold', loc='left')
+    ax.set_title(f'A) Sample Scores ({obs_type})', fontweight='bold', loc='left')
     ax.grid(alpha=0.3)
     ax.axhline(0, color='k', linewidth=0.5)
     ax.axvline(0, color='k', linewidth=0.5)

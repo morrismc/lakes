@@ -81,9 +81,10 @@ print()
 try:
     results = run_complete_multivariate_analysis(
         lakes_classified,
-        response_var='area',   # Use lake area as response
-        min_lake_area=0.005,   # Filter small lakes (match min threshold)
-        max_lake_area=20000,   # Exclude Great Lakes
+        response_var='density',  # Use lake DENSITY as response (RECOMMENDED)
+        min_lake_area=0.005,     # Filter small lakes (match min threshold)
+        max_lake_area=20000,     # Exclude Great Lakes
+        grid_size_deg=0.5,       # Grid cell size (≈50 km)
         save_figures=True,
         verbose=True
     )
