@@ -332,8 +332,16 @@ def compute_correlation_matrix(data, method='spearman', verbose=True):
     DataFrame
         Correlation matrix
     """
-    # Select only continuous variables (exclude glacial_stage if present)
-    continuous_cols = [col for col in data.columns if col != 'glacial_stage']
+    # Select only environmental variables and response variable
+    # Exclude helper columns (n_lakes, cell_area_km2, glacial_purity, lon, lat, glacial_stage)
+    env_vars = ['elevation', 'slope', 'relief', 'aridity', 'precipitation']
+    response_vars = ['density', 'area']  # Possible response variables
+
+    continuous_cols = [col for col in data.columns
+                      if col in env_vars or col in response_vars]
+
+    if len(continuous_cols) == 0:
+        raise ValueError("No environmental or response variables found in dataset")
 
     if method == 'spearman':
         corr_matrix = data[continuous_cols].corr(method='spearman')
@@ -415,8 +423,17 @@ def run_pca_analysis(data, n_components=None, verbose=True):
     dict
         PCA results including scores, loadings, explained variance
     """
-    # Select continuous variables only
-    continuous_cols = [col for col in data.columns if col != 'glacial_stage']
+    # Select only environmental variables and response variable
+    # Exclude helper columns (n_lakes, cell_area_km2, glacial_purity, lon, lat, glacial_stage)
+    env_vars = ['elevation', 'slope', 'relief', 'aridity', 'precipitation']
+    response_vars = ['density', 'area']  # Possible response variables
+
+    continuous_cols = [col for col in data.columns
+                      if col in env_vars or col in response_vars]
+
+    if len(continuous_cols) == 0:
+        raise ValueError("No environmental or response variables found in dataset")
+
     X = data[continuous_cols].values
 
     # Standardize
@@ -728,11 +745,11 @@ def run_complete_multivariate_analysis(lakes_gdf, response_var='density',
     continuous_vars = [v for v in ['elevation', 'slope', 'relief', 'aridity', 'precipitation']
                       if v in data.columns]
 
-    # Example: aridity ~ area, controlling for elevation + slope
-    if 'aridity' in continuous_vars and 'elevation' in continuous_vars:
+    # Example: aridity ~ response_var, controlling for elevation + slope + relief
+    if 'aridity' in continuous_vars and 'elevation' in continuous_vars and response_var in data.columns:
         control_vars = [v for v in ['elevation', 'slope', 'relief'] if v in continuous_vars and v != 'aridity']
         if len(control_vars) > 0:
-            pc = compute_partial_correlation(data, 'aridity', 'area', control_vars, verbose=verbose)
+            pc = compute_partial_correlation(data, 'aridity', response_var, control_vars, verbose=verbose)
             partial_corrs.append(pc)
 
     results['partial_correlations'] = partial_corrs
