@@ -9,11 +9,15 @@ Creates a cleaner, more aesthetic multi-panel figure showing:
 5. Geographic scope of different tests
 """
 
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, FancyBboxPatch, FancyArrowPatch, Circle
 import matplotlib.patches as mpatches
 from matplotlib.patches import ConnectionPatch
+
+# Ensure output directory exists
+os.makedirs('/home/user/lakes/output', exist_ok=True)
 
 # Create figure with better layout
 fig = plt.figure(figsize=(22, 16))
