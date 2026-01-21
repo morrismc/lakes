@@ -16,6 +16,8 @@ Modules:
     powerlaw_analysis          - Power law fitting with MLE
     glacial_chronosequence     - Glacial chronosequence analysis (Davis's hypothesis)
     size_stratified_analysis   - Size-stratified lake half-life analysis
+    sensitivity_analysis       - Parameter sensitivity and robustness testing
+    detection_bias             - Detection bias modeling and correction
     main                       - Orchestration and pipeline
 
 Quick Start:
@@ -249,4 +251,24 @@ from .multivariate_visualization import (
     plot_variance_partitioning,
     plot_variable_importance,
     plot_multivariate_summary
+)
+
+# Sensitivity analysis
+from .sensitivity_analysis import (
+    test_threshold_sensitivity,
+    test_grid_size_sensitivity,
+    test_age_uncertainty_sensitivity,
+    plot_threshold_sensitivity,
+    plot_grid_size_sensitivity,
+    run_comprehensive_sensitivity_analysis
+)
+
+# Detection bias analysis
+from .detection_bias import (
+    estimate_detection_probability_logistic,
+    detect_size_distribution_truncation,
+    estimate_detection_curve_by_stage,
+    correct_density_for_detection_bias,
+    plot_detection_bias_diagnostic,
+    run_detection_bias_analysis
 )
