@@ -18,6 +18,11 @@ Modules:
     size_stratified_analysis   - Size-stratified lake half-life analysis
     sensitivity_analysis       - Parameter sensitivity and robustness testing
     detection_bias             - Detection bias modeling and correction
+    statistical_tests          - Multiple testing correction for hypothesis tests
+    spatial_statistics         - Spatial autocorrelation and spatial regression
+    model_validation           - Model comparison and validation
+    multivariate_analysis      - Multivariate statistical analysis
+    multivariate_visualization - Multivariate plotting
     main                       - Orchestration and pipeline
 
 Quick Start:
@@ -271,4 +276,29 @@ from .detection_bias import (
     correct_density_for_detection_bias,
     plot_detection_bias_diagnostic,
     run_detection_bias_analysis
+)
+
+# Statistical testing with multiple testing correction
+from .statistical_tests import (
+    test_davis_hypothesis_with_correction,
+    pairwise_comparisons_with_correction,
+    regression_with_multiple_testing,
+    apply_multiple_testing_correction
+)
+
+# Spatial statistics and autocorrelation
+from .spatial_statistics import (
+    compute_morans_i,
+    test_spatial_autocorrelation_grid,
+    fit_spatial_lag_model,
+    compare_ols_vs_spatial
+)
+
+# Model validation and comparison
+from .model_validation import (
+    fit_exponential_decay,
+    fit_linear_decay,
+    fit_power_law_decay,
+    compare_decay_models,
+    plot_model_comparison
 )
