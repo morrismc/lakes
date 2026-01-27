@@ -2009,14 +2009,23 @@ def analyze_bayesian_halflife(
 
     results = {}
 
-    # Import required functions
-    from .size_stratified_analysis import (
-        fit_overall_bayesian_halflife,
-        plot_overall_bayesian_halflife,
-        run_size_stratified_analysis
-    )
-    from .glacial_chronosequence import compute_lake_density_by_glacial_stage
-    from .config import COLS
+    # Import required functions (handle both package and direct execution)
+    try:
+        from .size_stratified_analysis import (
+            fit_overall_bayesian_halflife,
+            plot_overall_bayesian_halflife,
+            run_size_stratified_analysis
+        )
+        from .glacial_chronosequence import compute_lake_density_by_glacial_stage
+        from .config import COLS
+    except ImportError:
+        from size_stratified_analysis import (
+            fit_overall_bayesian_halflife,
+            plot_overall_bayesian_halflife,
+            run_size_stratified_analysis
+        )
+        from glacial_chronosequence import compute_lake_density_by_glacial_stage
+        from config import COLS
 
     # Save original unfiltered lakes for threshold sensitivity testing
     lakes_original = lakes.copy() if test_thresholds else None
@@ -2054,7 +2063,10 @@ def analyze_bayesian_halflife(
                 print("\nComputing lake density by glacial stage...")
 
             # Use default landscape areas from config
-            from .config import SIZE_STRATIFIED_LANDSCAPE_AREAS
+            try:
+                from .config import SIZE_STRATIFIED_LANDSCAPE_AREAS
+            except ImportError:
+                from config import SIZE_STRATIFIED_LANDSCAPE_AREAS
             zone_areas = {
                 'wisconsin': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Wisconsin'),
                 'illinoian': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Illinoian'),
@@ -2086,11 +2098,18 @@ def analyze_bayesian_halflife(
                         print("ADDING S. APPALACHIAN COMPARISON")
                         print("-" * 70)
 
-                        from .glacial_chronosequence import (
-                            load_southern_appalachian_lakes,
-                            add_sapp_to_density_comparison,
-                            compute_sapp_hypsometry_normalized_density
-                        )
+                        try:
+                            from .glacial_chronosequence import (
+                                load_southern_appalachian_lakes,
+                                add_sapp_to_density_comparison,
+                                compute_sapp_hypsometry_normalized_density
+                            )
+                        except ImportError:
+                            from glacial_chronosequence import (
+                                load_southern_appalachian_lakes,
+                                add_sapp_to_density_comparison,
+                                compute_sapp_hypsometry_normalized_density
+                            )
 
                         # Load S. Apps lakes
                         sapp_lakes = load_southern_appalachian_lakes()
@@ -2124,12 +2143,19 @@ def analyze_bayesian_halflife(
 
                         # Generate comparison visualizations
                         if save_figures:
-                            from .visualization import (
-                                plot_density_by_glacial_stage,
-                                plot_sapp_hypsometry_normalized_density
-                            )
+                            try:
+                                from .visualization import (
+                                    plot_density_by_glacial_stage,
+                                    plot_sapp_hypsometry_normalized_density
+                                )
+                                from .config import OUTPUT_DIR
+                            except ImportError:
+                                from visualization import (
+                                    plot_density_by_glacial_stage,
+                                    plot_sapp_hypsometry_normalized_density
+                                )
+                                from config import OUTPUT_DIR
                             import os
-                            from .config import OUTPUT_DIR
 
                             # Density comparison bar chart
                             fig, ax = plot_density_by_glacial_stage(
@@ -2207,7 +2233,10 @@ def analyze_bayesian_halflife(
         print("-" * 70)
         print("\nTesting how half-life varies with min_lake_area threshold...")
 
-        from .config import BAYESIAN_HALFLIFE_DEFAULTS
+        try:
+            from .config import BAYESIAN_HALFLIFE_DEFAULTS
+        except ImportError:
+            from config import BAYESIAN_HALFLIFE_DEFAULTS
         threshold_values = BAYESIAN_HALFLIFE_DEFAULTS.get('threshold_values', [0.01, 0.024, 0.05, 0.1])
 
         threshold_results = []
@@ -2224,7 +2253,10 @@ def analyze_bayesian_halflife(
             ].copy()
 
             # Compute density
-            from .config import SIZE_STRATIFIED_LANDSCAPE_AREAS
+            try:
+                from .config import SIZE_STRATIFIED_LANDSCAPE_AREAS
+            except ImportError:
+                from config import SIZE_STRATIFIED_LANDSCAPE_AREAS
             zone_areas_thresh = {
                 'wisconsin': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Wisconsin'),
                 'illinoian': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Illinoian'),
@@ -2286,8 +2318,12 @@ def analyze_bayesian_halflife(
             # Generate threshold sensitivity visualization
             if save_figures:
                 try:
-                    from .visualization import plot_halflife_threshold_sensitivity
-                    from .config import OUTPUT_DIR
+                    try:
+                        from .visualization import plot_halflife_threshold_sensitivity
+                        from .config import OUTPUT_DIR
+                    except ImportError:
+                        from visualization import plot_halflife_threshold_sensitivity
+                        from config import OUTPUT_DIR
                     import os
 
                     fig, axes = plot_halflife_threshold_sensitivity(
@@ -2310,12 +2346,20 @@ def analyze_bayesian_halflife(
         print("-" * 70)
 
         try:
-            from .glacial_chronosequence import (
-                load_all_glacial_boundaries,
-                convert_lakes_to_gdf
-            )
-            from .visualization import plot_glacial_extent_map
-            from .config import OUTPUT_DIR
+            try:
+                from .glacial_chronosequence import (
+                    load_all_glacial_boundaries,
+                    convert_lakes_to_gdf
+                )
+                from .visualization import plot_glacial_extent_map
+                from .config import OUTPUT_DIR
+            except ImportError:
+                from glacial_chronosequence import (
+                    load_all_glacial_boundaries,
+                    convert_lakes_to_gdf
+                )
+                from visualization import plot_glacial_extent_map
+                from config import OUTPUT_DIR
             import os
 
             print("\nLoading glacial boundaries...")
