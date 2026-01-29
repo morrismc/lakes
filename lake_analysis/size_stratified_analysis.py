@@ -1415,7 +1415,10 @@ def plot_overall_bayesian_halflife(results, output_dir=None, verbose=True):
         return None
 
     if output_dir is None:
-        from .config import OUTPUT_DIR, ensure_output_dir
+        try:
+            from .config import OUTPUT_DIR, ensure_output_dir
+        except ImportError:
+            from config import OUTPUT_DIR, ensure_output_dir
         output_dir = ensure_output_dir()
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
