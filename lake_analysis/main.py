@@ -2924,6 +2924,7 @@ def analyze_nadi1_chronosequence(lakes=None, data_source='conus', min_lake_area=
 def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                        include_glacial_analysis=True, include_spatial_scaling=True,
                        include_aridity_analysis=True, include_bayesian_halflife=True,
+                       include_multivariate_analysis=True,
                        min_lake_area=None, prompt_for_threshold=False):
     """
     Run complete analysis pipeline for all hypotheses.
@@ -2948,6 +2949,11 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
     include_bayesian_halflife : bool
         If True (default), run Bayesian half-life analysis (overall + size-stratified).
         Requires glacial_stage column from glacial chronosequence analysis.
+    include_multivariate_analysis : bool
+        If True (default), run multivariate/PCA analysis to disentangle glaciation
+        vs climate vs topography effects on lake density. Includes correlation matrix,
+        PCA biplot, variance partitioning, and multiple regression.
+        Requires glacial_stage column from glacial chronosequence analysis.
     min_lake_area : float, optional
         Minimum lake area (km²) for power law analyses. If None, uses config default.
         Lower values include more lakes but may violate power law assumptions.
@@ -2964,6 +2970,7 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
         - glacial_chronosequence: Davis's hypothesis results
         - spatial_scaling: Geographic pattern analysis
         - aridity_analysis: Aridity vs glacial stage comparison
+        - multivariate_analysis: PCA, variance partitioning, regression results
     """
     # Handle minimum lake area threshold
     if prompt_for_threshold:
@@ -3012,6 +3019,8 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
     if include_spatial_scaling:
         total_steps += 1
     if include_aridity_analysis:
+        total_steps += 1
+    if include_multivariate_analysis:
         total_steps += 1
 
     print("\n" + "=" * 70)
@@ -3200,7 +3209,43 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                 print("  Warning: Glacial analysis required for aridity comparison. Skipping.")
                 results['aridity_analysis'] = {'error': 'glacial_analysis_required'}
 
-    # Step 16/17: Generate additional figures
+    # Step 16/17/18: Multivariate analysis (if enabled)
+    if include_multivariate_analysis:
+        step += 1
+        print_step_header(step, total_steps, "Multivariate Analysis (PCA, Variance Partitioning)")
+        with timed_step(timer, "Multivariate analysis"):
+            # Import multivariate module
+            try:
+                from .multivariate_analysis import run_complete_multivariate_analysis
+            except ImportError:
+                from multivariate_analysis import run_complete_multivariate_analysis
+
+            # Use glacial GeoDataFrame if available (has glacial_stage column)
+            lake_gdf = None
+            if results.get('glacial_chronosequence'):
+                lake_gdf = results['glacial_chronosequence'].get('lake_gdf')
+
+            if lake_gdf is not None and 'glacial_stage' in lake_gdf.columns:
+                try:
+                    results['multivariate_analysis'] = run_complete_multivariate_analysis(
+                        lake_gdf,
+                        response_var='density',
+                        min_lake_area=min_lake_area if min_lake_area else 0.005,
+                        max_lake_area=20000,  # Exclude Great Lakes
+                        grid_size_deg=0.5,
+                        save_figures=True,
+                        output_dir=OUTPUT_DIR,
+                        verbose=True
+                    )
+                    print("  Multivariate analysis complete!")
+                except Exception as e:
+                    print(f"  Warning: Multivariate analysis failed: {e}")
+                    results['multivariate_analysis'] = {'error': str(e)}
+            else:
+                print("  Warning: Glacial analysis required for multivariate analysis. Skipping.")
+                results['multivariate_analysis'] = {'error': 'glacial_analysis_required'}
+
+    # Step 17/18/19: Generate additional figures
     step += 1
     print_step_header(step, total_steps, "Generating Summary Figures")
     with timed_step(timer, "Summary figures"):
@@ -3546,7 +3591,7 @@ def analyze_xmin_by_elevation(lakes, save_figures=True):
                     'alpha': band_data.get('optimal_alpha'),
                     'ks': band_data.get('optimal_ks'),
                 },
-                'sensitivity': band_data.get('sensitivity_df'),
+                'sensitivity': band_data.get('full_results'),
                 'fixed_xmin': {k: {'alpha': v.get('alpha'), 'n_tail': v.get('n_tail')}
                                for k, v in band_data.get('alpha_at_fixed_xmin', {}).items()},
                 'n_total': band_data.get('n_total', 0),
