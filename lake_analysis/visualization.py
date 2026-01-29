@@ -2375,18 +2375,27 @@ def plot_powerlaw_gof_summary(gof_results, figsize=(12, 8), save_path=None):
     ax4 = axes[1, 1]
     ax4.axis('off')
 
+    # Helper to format values that might be missing
+    def fmt(val, spec):
+        if val is None or val == 'N/A':
+            return 'N/A'
+        try:
+            return f"{val:{spec}}"
+        except (ValueError, TypeError):
+            return str(val)
+
     summary_lines = [
         f"POWER LAW FIT SUMMARY",
         f"{'='*40}",
         f"",
         f"Fitted Parameters:",
-        f"  x_min = {gof_results.get('xmin', 'N/A'):.4f}",
-        f"  α = {gof_results.get('alpha', 'N/A'):.3f}",
-        f"  n (tail) = {gof_results.get('n_tail', 'N/A'):,}",
+        f"  x_min = {fmt(gof_results.get('xmin'), '.4f')}",
+        f"  α = {fmt(gof_results.get('alpha'), '.3f')}",
+        f"  n (tail) = {fmt(gof_results.get('n_tail'), ',')}",
         f"",
         f"Goodness of Fit:",
-        f"  KS statistic = {gof_results.get('observed_ks', 'N/A'):.4f}",
-        f"  p-value = {gof_results.get('p_value', 'N/A'):.3f}",
+        f"  KS statistic = {fmt(gof_results.get('observed_ks'), '.4f')}",
+        f"  p-value = {fmt(gof_results.get('p_value'), '.3f')}",
         f"",
         f"Interpretation:",
         f"  {interp}",

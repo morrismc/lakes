@@ -3529,6 +3529,32 @@ def analyze_xmin_by_elevation(lakes, save_figures=True):
             show_progress=True
         )
 
+        # Transform results to structure expected by visualization functions
+        # The viz functions expect xmin_results['by_elevation'][band_name] with specific keys
+        skip_keys = {'method_comparison', 'robustness', 'summary_table',
+                     'hypothesis_tests', 'hypothesis_report', 'by_elevation'}
+        by_elevation = {}
+        for band_key, band_data in list(xmin_results.items()):
+            if band_key in skip_keys:
+                continue
+            if not isinstance(band_data, dict):
+                continue
+            # Transform structure for visualization compatibility
+            by_elevation[band_key] = {
+                'optimal': {
+                    'xmin': band_data.get('optimal_xmin'),
+                    'alpha': band_data.get('optimal_alpha'),
+                    'ks': band_data.get('optimal_ks'),
+                },
+                'sensitivity': band_data.get('sensitivity_df'),
+                'fixed_xmin': {k: {'alpha': v.get('alpha'), 'n_tail': v.get('n_tail')}
+                               for k, v in band_data.get('alpha_at_fixed_xmin', {}).items()},
+                'n_total': band_data.get('n_total', 0),
+                'acceptable_range': band_data.get('acceptable_range'),
+                'alpha_stability': band_data.get('alpha_stability'),
+            }
+        xmin_results['by_elevation'] = by_elevation
+
         print("\n[STEP 2/7] Comparing x_min methods...")
         method_comparison = compare_xmin_methods(xmin_results)
         xmin_results['method_comparison'] = method_comparison
