@@ -2950,9 +2950,11 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
         If True (default), run Bayesian half-life analysis (overall + size-stratified).
         Requires glacial_stage column from glacial chronosequence analysis.
     include_multivariate_analysis : bool
-        If True (default), run multivariate/PCA analysis to disentangle glaciation
-        vs climate vs topography effects on lake density. Includes correlation matrix,
-        PCA biplot, variance partitioning, and multiple regression.
+        If True (default), run TWO multivariate/PCA analyses:
+        1. ALL CONUS: Uses entire dataset to test glaciation vs climate vs topography
+        2. GLACIATED ONLY: Uses only Wisconsin/Illinoian/Driftless to analyze
+           within-glacial controls (what distinguishes glacial stages besides age?)
+        Both include correlation matrix, PCA biplot, variance partitioning, and regression.
         Requires glacial_stage column from glacial chronosequence analysis.
     min_lake_area : float, optional
         Minimum lake area (km²) for power law analyses. If None, uses config default.
@@ -2970,7 +2972,8 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
         - glacial_chronosequence: Davis's hypothesis results
         - spatial_scaling: Geographic pattern analysis
         - aridity_analysis: Aridity vs glacial stage comparison
-        - multivariate_analysis: PCA, variance partitioning, regression results
+        - multivariate_analysis: PCA, variance partitioning for ALL CONUS
+        - multivariate_glacial_only: PCA, variance partitioning for glaciated regions only
     """
     # Handle minimum lake area threshold
     if prompt_for_threshold:
@@ -3021,7 +3024,7 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
     if include_aridity_analysis:
         total_steps += 1
     if include_multivariate_analysis:
-        total_steps += 1
+        total_steps += 2  # One for CONUS-wide, one for glacial-only
 
     print("\n" + "=" * 70)
     print("LAKE DISTRIBUTION ANALYSIS - FULL PIPELINE")
@@ -3209,11 +3212,11 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                 print("  Warning: Glacial analysis required for aridity comparison. Skipping.")
                 results['aridity_analysis'] = {'error': 'glacial_analysis_required'}
 
-    # Step 16/17/18: Multivariate analysis (if enabled)
+    # Step 16/17/18: Multivariate analysis - ALL CONUS (if enabled)
     if include_multivariate_analysis:
         step += 1
-        print_step_header(step, total_steps, "Multivariate Analysis (PCA, Variance Partitioning)")
-        with timed_step(timer, "Multivariate analysis"):
+        print_step_header(step, total_steps, "Multivariate Analysis - ALL CONUS (PCA, Variance Partitioning)")
+        with timed_step(timer, "Multivariate analysis (CONUS)"):
             # Import multivariate module
             try:
                 from .multivariate_analysis import run_complete_multivariate_analysis
@@ -3237,15 +3240,51 @@ def run_full_analysis(data_source='conus', include_xmin_by_elevation=True,
                         output_dir=OUTPUT_DIR,
                         verbose=True
                     )
-                    print("  Multivariate analysis complete!")
+                    print("  CONUS-wide multivariate analysis complete!")
                 except Exception as e:
-                    print(f"  Warning: Multivariate analysis failed: {e}")
+                    print(f"  Warning: CONUS multivariate analysis failed: {e}")
                     results['multivariate_analysis'] = {'error': str(e)}
             else:
                 print("  Warning: Glacial analysis required for multivariate analysis. Skipping.")
                 results['multivariate_analysis'] = {'error': 'glacial_analysis_required'}
 
-    # Step 17/18/19: Generate additional figures
+    # Step 17/18/19: Multivariate analysis - GLACIATED REGIONS ONLY (if enabled)
+    if include_multivariate_analysis:
+        step += 1
+        print_step_header(step, total_steps, "Multivariate Analysis - GLACIATED ONLY (Within-Glacial Controls)")
+        with timed_step(timer, "Multivariate analysis (glacial-only)"):
+            # Import glacial-only multivariate function
+            try:
+                from .multivariate_analysis import run_glacial_only_multivariate_analysis
+            except ImportError:
+                from multivariate_analysis import run_glacial_only_multivariate_analysis
+
+            # Use glacial GeoDataFrame if available
+            lake_gdf = None
+            if results.get('glacial_chronosequence'):
+                lake_gdf = results['glacial_chronosequence'].get('lake_gdf')
+
+            if lake_gdf is not None and 'glacial_stage' in lake_gdf.columns:
+                try:
+                    results['multivariate_glacial_only'] = run_glacial_only_multivariate_analysis(
+                        lake_gdf,
+                        response_var='density',
+                        min_lake_area=min_lake_area if min_lake_area else 0.005,
+                        max_lake_area=20000,  # Exclude Great Lakes
+                        grid_size_deg=0.5,
+                        save_figures=True,
+                        output_dir=OUTPUT_DIR,
+                        verbose=True
+                    )
+                    print("  Glacial-only multivariate analysis complete!")
+                except Exception as e:
+                    print(f"  Warning: Glacial-only multivariate analysis failed: {e}")
+                    results['multivariate_glacial_only'] = {'error': str(e)}
+            else:
+                print("  Warning: Glacial analysis required. Skipping.")
+                results['multivariate_glacial_only'] = {'error': 'glacial_analysis_required'}
+
+    # Step 18/19/20: Generate additional figures
     step += 1
     print_step_header(step, total_steps, "Generating Summary Figures")
     with timed_step(timer, "Summary figures"):

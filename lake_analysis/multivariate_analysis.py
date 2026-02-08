@@ -664,7 +664,10 @@ def run_complete_multivariate_analysis(lakes_gdf, response_var='density',
                                       grid_size_deg=0.5, save_figures=True,
                                       output_dir=None, verbose=True):
     """
-    Complete multivariate analysis pipeline.
+    Complete multivariate analysis pipeline using ALL CONUS lakes.
+
+    NOTE: This analysis uses the ENTIRE CONUS dataset (glaciated + unglaciated).
+    For analysis restricted to glaciated regions only, use run_glacial_only_multivariate_analysis().
 
     This comprehensive analysis answers: "After controlling for elevation, slope,
     relief, aridity, and precipitation, does glaciation STILL matter?"
@@ -695,8 +698,9 @@ def run_complete_multivariate_analysis(lakes_gdf, response_var='density',
     """
     if verbose:
         print("\n" + "=" * 70)
-        print("COMPLETE MULTIVARIATE ANALYSIS")
+        print("COMPLETE MULTIVARIATE ANALYSIS (ALL CONUS)")
         print("Disentangling glaciation, climate, and topography effects")
+        print("Using entire CONUS dataset (glaciated + unglaciated regions)")
         print("=" * 70)
 
     results = {}
@@ -797,6 +801,204 @@ def run_complete_multivariate_analysis(lakes_gdf, response_var='density',
     return results
 
 
+def run_glacial_only_multivariate_analysis(lakes_gdf, response_var='density',
+                                           min_lake_area=0.005, max_lake_area=20000,
+                                           grid_size_deg=0.5, save_figures=True,
+                                           output_dir=None, verbose=True):
+    """
+    Multivariate analysis restricted to GLACIATED regions only.
+
+    This analysis examines what controls lake characteristics WITHIN glaciated terrain,
+    comparing Wisconsin vs Illinoian vs Driftless stages. It answers questions like:
+    - Do climate/topography effects vary across glacial stages?
+    - What distinguishes Wisconsin from Illinoian lakes besides age?
+    - Are there interactions between glacial stage and environmental factors?
+
+    Unlike run_complete_multivariate_analysis (which uses ALL CONUS lakes),
+    this function EXCLUDES unclassified/non-glaciated regions.
+
+    Parameters
+    ----------
+    lakes_gdf : GeoDataFrame
+        Lakes with glacial_stage column from glacial chronosequence analysis
+    response_var : str
+        Response variable: 'density' or 'area'
+    min_lake_area : float
+        Minimum lake area in km²
+    max_lake_area : float
+        Maximum lake area in km² (excludes Great Lakes)
+    grid_size_deg : float
+        Grid cell size for density calculation
+    save_figures : bool
+        Generate and save visualization figures
+    output_dir : str, optional
+        Output directory for figures
+    verbose : bool
+        Print progress
+
+    Returns
+    -------
+    dict
+        Multivariate analysis results for glaciated regions only
+    """
+    if verbose:
+        print("\n" + "=" * 70)
+        print("GLACIAL-ONLY MULTIVARIATE ANALYSIS")
+        print("Analyzing controls within glaciated terrain")
+        print("(Wisconsin vs Illinoian vs Driftless - excluding unclassified)")
+        print("=" * 70)
+
+    # Filter to glaciated regions only
+    if 'glacial_stage' not in lakes_gdf.columns:
+        print("  ERROR: glacial_stage column not found")
+        return {'error': 'glacial_stage_column_required'}
+
+    glaciated_stages = ['Wisconsin', 'Illinoian', 'Driftless']
+    glacial_mask = lakes_gdf['glacial_stage'].isin(glaciated_stages)
+    glaciated_lakes = lakes_gdf[glacial_mask].copy()
+
+    n_total = len(lakes_gdf)
+    n_glaciated = len(glaciated_lakes)
+
+    if verbose:
+        print(f"\n  Filtering to glaciated regions only:")
+        print(f"    Total lakes: {n_total:,}")
+        print(f"    Glaciated lakes: {n_glaciated:,} ({100*n_glaciated/n_total:.1f}%)")
+        for stage in glaciated_stages:
+            n_stage = (glaciated_lakes['glacial_stage'] == stage).sum()
+            print(f"      {stage}: {n_stage:,}")
+
+    if n_glaciated < 100:
+        print("  ERROR: Insufficient glaciated lakes for analysis")
+        return {'error': 'insufficient_data', 'n_glaciated': n_glaciated}
+
+    results = {'n_glaciated': n_glaciated, 'glaciated_stages': glaciated_stages}
+
+    # Run the same multivariate analysis but on glaciated data only
+    try:
+        # 1. Prepare dataset (glaciated only)
+        data, column_mapping = prepare_multivariate_dataset(
+            glaciated_lakes,
+            response_var=response_var,
+            min_lake_area=min_lake_area,
+            max_lake_area=max_lake_area,
+            grid_size_deg=grid_size_deg,
+            include_glacial=True,
+            verbose=verbose
+        )
+
+        if data is None or len(data) < 10:
+            print("  ERROR: Insufficient data after gridding")
+            return {'error': 'insufficient_gridded_data'}
+
+        results['data'] = data
+        results['column_mapping'] = column_mapping
+        results['response_var'] = response_var
+
+        # 2. Correlation matrix
+        if verbose:
+            print("\n  Computing correlation matrix (glaciated only)...")
+        corr_matrix = compute_correlation_matrix(data, method='spearman', verbose=False)
+        results['correlation_matrix'] = corr_matrix
+
+        if verbose:
+            print(f"\n  Spearman correlations with {response_var}:")
+            for col in corr_matrix.columns:
+                if col != response_var and response_var in corr_matrix.index:
+                    rho = corr_matrix.loc[response_var, col]
+                    print(f"    {col}: ρ = {rho:.3f}")
+
+        # 3. PCA
+        if verbose:
+            print("\n  Running PCA (glaciated only)...")
+        pca_results = run_pca_analysis(data, n_components=3, verbose=False)
+        results['pca'] = pca_results
+
+        if pca_results and verbose:
+            print(f"    PC1 explains {100*pca_results['explained_variance'][0]:.1f}% of variance")
+            print(f"    PC2 explains {100*pca_results['explained_variance'][1]:.1f}% of variance")
+
+        # 4. Variance partitioning (within glaciated data)
+        if verbose:
+            print("\n  Variance partitioning (glaciated only)...")
+        vp_results = variance_partitioning(data, response_var=response_var, verbose=False)
+        results['variance_partitioning'] = vp_results
+
+        if vp_results and verbose:
+            print(f"    Total R²: {vp_results['r2_total']:.3f}")
+            print(f"    Pure glacial effect: {100*vp_results['pure_glacial']:.1f}%")
+            print(f"    Pure climate effect: {100*vp_results['pure_climate']:.1f}%")
+            print(f"    Pure topography effect: {100*vp_results['pure_topo']:.1f}%")
+
+        # 5. Multiple regression
+        if verbose:
+            print("\n  Multiple regression (glaciated only)...")
+        reg_results = run_multivariate_regression(data, response_var=response_var, verbose=False)
+        results['regression'] = reg_results
+
+        if reg_results and verbose:
+            print(f"    R² = {reg_results['r2']:.3f}")
+            print("    Top predictors (by |β|):")
+            if 'coefficients' in reg_results:
+                coefs = reg_results['coefficients']
+                sorted_coefs = sorted(coefs.items(), key=lambda x: abs(x[1]['beta']), reverse=True)
+                for var, stats in sorted_coefs[:3]:
+                    sig = "***" if stats['p_value'] < 0.001 else "**" if stats['p_value'] < 0.01 else "*" if stats['p_value'] < 0.05 else ""
+                    print(f"      {var}: β = {stats['beta']:.3f} {sig}")
+
+    except Exception as e:
+        print(f"  ERROR in glacial-only analysis: {e}")
+        results['error'] = str(e)
+        import traceback
+        traceback.print_exc()
+
+    # 6. Generate figures with glacial-only prefix
+    if save_figures and 'error' not in results:
+        try:
+            from .multivariate_visualization import plot_multivariate_summary
+            from .config import OUTPUT_DIR
+        except ImportError:
+            from multivariate_visualization import plot_multivariate_summary
+            from config import OUTPUT_DIR
+
+        if output_dir is None:
+            output_dir = OUTPUT_DIR
+
+        print(f"\n  Generating glacial-only figures...")
+        # Use a prefix to distinguish from CONUS-wide figures
+        plot_multivariate_summary(results, output_dir=output_dir, prefix='glacial_only_')
+        print(f"  Figures saved with 'glacial_only_' prefix")
+
+    # Summary interpretation
+    if verbose and 'variance_partitioning' in results:
+        vp = results['variance_partitioning']
+        print("\n" + "=" * 70)
+        print("GLACIAL-ONLY ANALYSIS: KEY FINDINGS")
+        print("=" * 70)
+
+        if vp:
+            total = vp['r2_total']
+            if total > 0:
+                pure_glac_pct = 100 * vp['pure_glacial'] / total
+                pure_clim_pct = 100 * vp['pure_climate'] / total
+                pure_topo_pct = 100 * vp['pure_topo'] / total
+
+                print(f"\n  Within glaciated terrain (excluding unclassified):")
+                print(f"    Total variance explained: {100*total:.1f}%")
+                print(f"    Glacial stage effect: {pure_glac_pct:.1f}% of explained variance")
+                print(f"    Climate effect: {pure_clim_pct:.1f}% of explained variance")
+                print(f"    Topography effect: {pure_topo_pct:.1f}% of explained variance")
+
+                if pure_glac_pct > pure_clim_pct and pure_glac_pct > pure_topo_pct:
+                    print("\n  → Glacial STAGE (age) is the dominant factor within glaciated terrain")
+                elif pure_topo_pct > pure_clim_pct:
+                    print("\n  → Topography is the dominant factor even within glaciated terrain")
+                else:
+                    print("\n  → Climate is the dominant factor even within glaciated terrain")
+
+    return results
+
+
 # Export key functions
 __all__ = [
     'prepare_multivariate_dataset',
@@ -806,4 +1008,5 @@ __all__ = [
     'variance_partitioning',
     'run_multivariate_regression',
     'run_complete_multivariate_analysis',
+    'run_glacial_only_multivariate_analysis',
 ]

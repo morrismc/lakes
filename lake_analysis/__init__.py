@@ -246,7 +246,8 @@ from .multivariate_analysis import (
     run_pca_analysis,
     variance_partitioning,
     run_multivariate_regression,
-    run_complete_multivariate_analysis
+    run_complete_multivariate_analysis,
+    run_glacial_only_multivariate_analysis
 )
 
 # Multivariate visualization
