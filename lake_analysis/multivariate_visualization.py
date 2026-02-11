@@ -363,7 +363,7 @@ def plot_variable_importance(reg_results, figsize=(10, 6), save_path=None):
     return fig, ax
 
 
-def plot_multivariate_summary(results, output_dir=None):
+def plot_multivariate_summary(results, output_dir=None, prefix=''):
     """
     Generate complete multivariate analysis figure set.
 
@@ -373,6 +373,8 @@ def plot_multivariate_summary(results, output_dir=None):
         Complete multivariate analysis results
     output_dir : str
         Output directory for figures
+    prefix : str
+        Prefix for output filenames (e.g., 'glacial_only_' for glacial-only analysis)
 
     Returns
     -------
@@ -393,25 +395,25 @@ def plot_multivariate_summary(results, output_dir=None):
 
     # 1. Correlation matrix
     if 'correlation_matrix' in results:
-        save_path = os.path.join(output_dir, 'multivariate_correlation_matrix.png')
+        save_path = os.path.join(output_dir, f'{prefix}multivariate_correlation_matrix.png')
         fig, ax = plot_correlation_matrix(results['correlation_matrix'], save_path=save_path)
         figures['correlation_matrix'] = (fig, ax)
 
     # 2. PCA biplot
     if 'pca' in results:
-        save_path = os.path.join(output_dir, 'multivariate_pca_biplot.png')
+        save_path = os.path.join(output_dir, f'{prefix}multivariate_pca_biplot.png')
         fig, axes = plot_pca_biplot(results['pca'], save_path=save_path)
         figures['pca'] = (fig, axes)
 
     # 3. Variance partitioning
     if 'variance_partitioning' in results and results['variance_partitioning'] is not None:
-        save_path = os.path.join(output_dir, 'multivariate_variance_partitioning.png')
+        save_path = os.path.join(output_dir, f'{prefix}multivariate_variance_partitioning.png')
         fig, ax = plot_variance_partitioning(results['variance_partitioning'], save_path=save_path)
         figures['variance_partitioning'] = (fig, ax)
 
     # 4. Variable importance
     if 'regression' in results:
-        save_path = os.path.join(output_dir, 'multivariate_variable_importance.png')
+        save_path = os.path.join(output_dir, f'{prefix}multivariate_variable_importance.png')
         fig, ax = plot_variable_importance(results['regression'], save_path=save_path)
         figures['variable_importance'] = (fig, ax)
 
