@@ -939,12 +939,16 @@ def run_glacial_only_multivariate_analysis(lakes_gdf, response_var='density',
         if reg_results and verbose:
             print(f"    R² = {reg_results['r2']:.3f}")
             print("    Top predictors (by |β|):")
-            if 'coefficients' in reg_results:
+            if 'coefficients' in reg_results and 'predictors' in reg_results:
                 coefs = reg_results['coefficients']
-                sorted_coefs = sorted(coefs.items(), key=lambda x: abs(x[1]['beta']), reverse=True)
-                for var, stats in sorted_coefs[:3]:
-                    sig = "***" if stats['p_value'] < 0.001 else "**" if stats['p_value'] < 0.01 else "*" if stats['p_value'] < 0.05 else ""
-                    print(f"      {var}: β = {stats['beta']:.3f} {sig}")
+                predictors = reg_results['predictors']
+                p_values = reg_results.get('p_values', np.ones(len(predictors)))
+                # Create list of (predictor, beta, p_value) and sort by |beta|
+                coef_list = [(predictors[i], coefs[i], p_values[i]) for i in range(len(predictors))]
+                sorted_coefs = sorted(coef_list, key=lambda x: abs(x[1]), reverse=True)
+                for var, beta, p_val in sorted_coefs[:3]:
+                    sig = "***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else ""
+                    print(f"      {var}: β = {beta:.3f} {sig}")
 
     except Exception as e:
         print(f"  ERROR in glacial-only analysis: {e}")
