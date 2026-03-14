@@ -166,11 +166,12 @@ def detection_limit_diagnostics(df, area_col='AREASQKM', stage_col='glacial_stag
     if output_dir is None:
         output_dir = ensure_output_dir()
 
-    stages = ['Wisconsin', 'Illinoian', 'Driftless']
+    stages = ['Wisconsin', 'Illinoian', 'Pre-Illinoian', 'Driftless']
     colors = STAGE_COLORS
 
-    # Filter to relevant stages
+    # Filter to relevant stages (only include stages that have data)
     df_filtered = df[df[stage_col].isin(stages)].copy()
+    stages = [s for s in stages if len(df_filtered[df_filtered[stage_col] == s]) > 0]
 
     if verbose:
         print("\n" + "=" * 70)

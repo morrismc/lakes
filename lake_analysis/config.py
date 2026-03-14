@@ -182,6 +182,16 @@ GLACIAL_BOUNDARIES = {
         'age_ka': (300, None),  # Possibly >300,000 years BP if glaciated
     },
 
+    # Pre-Illinoian glaciation extent (oldest glaciation)
+    # CRS: USA Contiguous Albers (WKID:102039)
+    'pre_illinoian': {
+        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'layer': 'Pre_illinoisan_glacial_extent',
+        'crs': 'ESRI:102039',
+        'description': 'Pre-Illinoian glaciation maximum extent',
+        'age_ka': (300, 700),  # ~300,000-700,000+ years BP
+    },
+
     # Southern Appalachians - never glaciated, mountainous region
     # CRS: UNKNOWN - will be detected and reprojected on load
     # Note: This is a comparison region with different hypsometry than glaciated lowlands
@@ -475,6 +485,7 @@ SIZE_STRATIFIED_BINS = [
 SIZE_STRATIFIED_LANDSCAPE_AREAS = {
     'Wisconsin': 1225000,           # Adjust based on actual Wisconsin boundary area
     'Illinoian': 145000,            # Adjust based on actual Illinoian boundary area
+    'Pre-Illinoian': None,          # Will be computed from actual boundary area
     'Driftless': 25500,             # Adjust based on actual Driftless boundary area
     'Southern_Appalachians': None   # Will be computed from DEM or boundary
 }
@@ -483,6 +494,7 @@ SIZE_STRATIFIED_LANDSCAPE_AREAS = {
 SIZE_STRATIFIED_AGE_ESTIMATES = {
     'Wisconsin': {'mean': 20, 'std': 5},       # ~15-25 ka
     'Illinoian': {'mean': 160, 'std': 30},     # ~130-190 ka
+    'Pre-Illinoian': {'mean': 500, 'std': 100},  # ~300-700+ ka
     'Driftless': {'mean': 1500, 'std': 500}    # >1500 ka (never glaciated)
 }
 
@@ -501,7 +513,8 @@ SIZE_STRATIFIED_MIN_LAKES = 10
 SIZE_STRATIFIED_STAGE_COLORS = {
     'Wisconsin': '#3498db',             # Blue
     'Illinoian': '#e74c3c',             # Red
-    'Driftless': '#2ecc71',             # Green
+    'Pre-Illinoian': '#2ca02c',         # Green (matches GLACIAL_CHRONOLOGY)
+    'Driftless': '#9b59b6',             # Purple (shifted from green to avoid clash)
     'Southern_Appalachians': '#8B4513', # Brown (non-glacial highlands)
     'unclassified': '#95a5a6'           # Gray
 }
@@ -545,7 +558,7 @@ GLACIAL_STAGES_CONFIG = {
         'age_mean_ka': 500,
         'age_std_ka': 100,
         'boundary_key': 'pre_illinoian',
-        'required': False,  # Not yet available - placeholder for future
+        'required': True,
         'description': 'Pre-Illinoian glaciation (>~500 ka)'
     },
     'Driftless': {

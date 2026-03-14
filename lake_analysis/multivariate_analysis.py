@@ -853,7 +853,7 @@ def run_glacial_only_multivariate_analysis(lakes_gdf, response_var='density',
         print("  ERROR: glacial_stage column not found")
         return {'error': 'glacial_stage_column_required'}
 
-    glaciated_stages = ['Wisconsin', 'Illinoian', 'Driftless']
+    glaciated_stages = ['Wisconsin', 'Illinoian', 'Pre-Illinoian', 'Driftless']
     glacial_mask = lakes_gdf['glacial_stage'].isin(glaciated_stages)
     glaciated_lakes = lakes_gdf[glacial_mask].copy()
 

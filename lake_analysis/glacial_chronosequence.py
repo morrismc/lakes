@@ -301,6 +301,36 @@ def load_illinoian_extent(target_crs=None):
     return gdf
 
 
+def load_pre_illinoian_extent(target_crs=None):
+    """
+    Load Pre-Illinoian glaciation extent from geodatabase.
+
+    Returns
+    -------
+    GeoDataFrame
+        Pre-Illinoian glaciation maximum extent polygon(s)
+    """
+    if target_crs is None:
+        target_crs = get_target_crs()
+
+    config = GLACIAL_BOUNDARIES.get('pre_illinoian')
+    if config is None:
+        raise ValueError("Pre-Illinoian configuration not found in GLACIAL_BOUNDARIES")
+
+    print("\nLoading Pre-Illinoian glaciation extent...")
+    gdf = load_and_reproject(
+        config['path'],
+        layer=config.get('layer'),
+        target_crs=target_crs
+    )
+
+    # Calculate area
+    total_area_km2 = gdf.geometry.area.sum() / 1e6
+    print(f"    Total area: {total_area_km2:,.0f} km²")
+
+    return gdf
+
+
 def load_driftless_area(use_definite=True, target_crs=None):
     """
     Load Driftless Area (never glaciated) from geodatabase.
@@ -801,6 +831,7 @@ def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sa
         Dictionary mapping glacial stage names to GeoDataFrames:
         - 'wisconsin': Wisconsin glaciation extent
         - 'illinoian': Illinoian glaciation extent
+        - 'pre_illinoian': Pre-Illinoian glaciation extent
         - 'driftless': Driftless Area (never glaciated)
         - 'dalton_18ka': Dalton 18ka ice sheets (if include_dalton=True)
         - 'southern_appalachians': S. Appalachian lakes (if include_sapp=True)
@@ -827,6 +858,12 @@ def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sa
     except Exception as e:
         print(f"  WARNING: Could not load Illinoian extent: {e}")
         boundaries['illinoian'] = None
+
+    try:
+        boundaries['pre_illinoian'] = load_pre_illinoian_extent(target_crs)
+    except Exception as e:
+        print(f"  WARNING: Could not load Pre-Illinoian extent: {e}")
+        boundaries['pre_illinoian'] = None
 
     try:
         boundaries['driftless'] = load_driftless_area(use_definite=True, target_crs=target_crs)
@@ -962,6 +999,7 @@ def classify_lakes_by_glacial_extent(lake_gdf, boundaries, verbose=True):
     classification_order = [
         ('wisconsin', 'Wisconsin', (15, 25)),
         ('illinoian', 'Illinoian', (130, 190)),
+        ('pre_illinoian', 'Pre-Illinoian', (300, 700)),
         ('driftless', 'Driftless', None),
     ]
 
@@ -1064,11 +1102,13 @@ def classify_lakes_by_glacial_extent(lake_gdf, boundaries, verbose=True):
 
 def create_pre_illinoian_classification(lake_gdf, boundaries, verbose=True):
     """
-    Create Pre-Illinoian classification for lakes in Illinoian extent
-    but NOT in Wisconsin extent.
+    Create Pre-Illinoian classification for lakes within the Pre-Illinoian
+    glacial extent but NOT in Wisconsin or Illinoian extents.
 
-    The Illinoian extent polygon likely represents maximum ice extent,
-    so lakes in Illinoian but not Wisconsin may be on Pre-Illinoian terrain.
+    Note: With the dedicated Pre-Illinoian boundary now available, this
+    classification is handled automatically by classify_lakes_by_glacial_extent()
+    in the hierarchical classification order. This function is retained for
+    backward compatibility and manual reclassification scenarios.
 
     Parameters
     ----------
@@ -1089,20 +1129,15 @@ def create_pre_illinoian_classification(lake_gdf, boundaries, verbose=True):
 
     result = lake_gdf.copy()
 
-    # Lakes classified as Illinoian are in Illinoian extent but NOT Wisconsin
-    # Check which of these are beyond both extents (Pre-Illinoian terrain)
-
-    # This requires more detailed boundary analysis or additional data
-    # For now, we'll note that "Illinoian" includes both Illinoian and
-    # Pre-Illinoian terrain
-
-    # Alternative approach: If we have information about ice margins
-    # or till deposits, we could refine this classification
+    # With the dedicated Pre-Illinoian boundary, classification is now
+    # handled automatically in classify_lakes_by_glacial_extent().
+    # This function reports the classification status.
 
     if verbose:
+        pre_ill_count = (result['glacial_stage'] == 'Pre-Illinoian').sum()
         illinoian_count = (result['glacial_stage'] == 'Illinoian').sum()
-        print(f"  Lakes in Illinoian (not Wisconsin): {illinoian_count:,}")
-        print(f"  Note: Illinoian extent may include Pre-Illinoian terrain")
+        print(f"  Lakes in Pre-Illinoian extent: {pre_ill_count:,}")
+        print(f"  Lakes in Illinoian (not Wisconsin or Pre-Illinoian): {illinoian_count:,}")
 
     return result
 
@@ -1152,7 +1187,7 @@ def calculate_glacial_zone_areas(boundaries, verbose=True):
 
         # Sum only the main glacial classification zones (not dalton which overlaps)
         classified_area = sum(
-            areas.get(zone, 0) for zone in ['wisconsin', 'illinoian', 'driftless']
+            areas.get(zone, 0) for zone in ['wisconsin', 'illinoian', 'pre_illinoian', 'driftless']
         )
         unclassified_area = conus_area_km2 - classified_area
 
@@ -1167,7 +1202,7 @@ def calculate_glacial_zone_areas(boundaries, verbose=True):
         # Use approximate CONUS area as fallback
         conus_approx = 8_080_000  # km² (approximate CONUS land area)
         classified_area = sum(
-            areas.get(zone, 0) for zone in ['wisconsin', 'illinoian', 'driftless']
+            areas.get(zone, 0) for zone in ['wisconsin', 'illinoian', 'pre_illinoian', 'driftless']
         )
         areas['unclassified'] = conus_approx - classified_area
 
@@ -1225,6 +1260,7 @@ def compute_lake_density_by_glacial_stage(lake_gdf, zone_areas=None, verbose=Tru
         stage_key_map = {
             'Wisconsin': 'wisconsin',
             'Illinoian': 'illinoian',
+            'Pre-Illinoian': 'pre_illinoian',
             'Driftless': 'driftless',
             'Southern_Appalachians': 'southern_appalachians',
             'unclassified': 'unclassified',
@@ -1464,7 +1500,7 @@ def compare_adjacent_stages(lake_gdf, verbose=True):
     area_col = COLS.get('area', 'AREASQKM')
 
     # Define stage order (youngest to oldest)
-    stage_order = ['Wisconsin', 'Illinoian', 'Driftless']
+    stage_order = ['Wisconsin', 'Illinoian', 'Pre-Illinoian', 'Driftless']
 
     results = []
 
@@ -2947,13 +2983,14 @@ def compute_per_stage_hypsometry(lake_gdf, zone_areas, elev_breaks=None, verbose
 
     results = []
 
-    for stage in ['Wisconsin', 'Illinoian', 'Driftless', 'unclassified']:
+    for stage in ['Wisconsin', 'Illinoian', 'Pre-Illinoian', 'Driftless', 'unclassified']:
         stage_lakes = lake_gdf[lake_gdf['glacial_stage'] == stage]
 
         if len(stage_lakes) == 0:
             continue
 
-        total_stage_area = zone_areas.get(stage.lower(), 0)
+        stage_key_map = {'Pre-Illinoian': 'pre_illinoian'}
+        total_stage_area = zone_areas.get(stage_key_map.get(stage, stage.lower()), 0)
         if total_stage_area == 0:
             continue
 
@@ -3442,7 +3479,7 @@ def run_aridity_glacial_comparison(lake_gdf, zone_areas=None, verbose=True):
         # Get lake counts by glacial stage
         groups = [
             bin_lakes[bin_lakes['glacial_stage'] == stage][area_col].values
-            for stage in ['Wisconsin', 'Illinoian', 'Driftless', 'unclassified']
+            for stage in ['Wisconsin', 'Illinoian', 'Pre-Illinoian', 'Driftless', 'unclassified']
             if len(bin_lakes[bin_lakes['glacial_stage'] == stage]) > 5
         ]
 
@@ -5203,11 +5240,12 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
 
             # Compute densities by glacial stage
             stage_densities = {}
-            for stage in ['Wisconsin', 'Illinoian', 'Driftless']:
+            stage_zone_key_map = {'Pre-Illinoian': 'pre_illinoian'}
+            for stage in ['Wisconsin', 'Illinoian', 'Pre-Illinoian', 'Driftless']:
                 stage_lakes = lake_gdf_staged[lake_gdf_staged['glacial_stage'] == stage]
                 n_lakes = len(stage_lakes)
 
-                zone_key = stage.lower()
+                zone_key = stage_zone_key_map.get(stage, stage.lower())
                 zone_area = zone_areas.get(zone_key, 0)
 
                 if zone_area > 0:
@@ -5252,6 +5290,16 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                     'n_lakes': stage_densities['Illinoian']['n_lakes'],
                 })
 
+            if stage_densities.get('Pre-Illinoian', {}).get('density') and not np.isnan(stage_densities['Pre-Illinoian']['density']):
+                end_member_data.append({
+                    'stage': 'Pre-Illinoian',
+                    'age_ka': 500.0,
+                    'age_lower_ka': 300.0,
+                    'age_upper_ka': 700.0,
+                    'density': stage_densities['Pre-Illinoian']['density'],
+                    'n_lakes': stage_densities['Pre-Illinoian']['n_lakes'],
+                })
+
             if stage_densities.get('Driftless', {}).get('density') and not np.isnan(stage_densities['Driftless']['density']):
                 end_member_data.append({
                     'stage': 'Driftless',
@@ -5285,7 +5333,8 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
 
     if len(end_member_data) >= 3:
         if verbose:
-            print("  Using deep time end members (Wisconsin, Illinoian, Driftless)")
+            stage_names = ', '.join(em['stage'] for em in end_member_data)
+            print(f"  Using deep time end members ({stage_names})")
             print("  This provides the full time range needed for exponential decay fitting")
 
         # Extract data from end members

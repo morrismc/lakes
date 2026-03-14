@@ -5644,6 +5644,7 @@ def plot_glacial_geographic_lakes(lake_gdf, boundaries=None, figsize=(16, 12),
         boundary_colors = {
             'wisconsin': '#1f77b4',
             'illinoian': '#ff7f0e',
+            'pre_illinoian': '#2ca02c',
             'driftless': '#d62728',
             'dalton_18ka': '#9467bd',
         }

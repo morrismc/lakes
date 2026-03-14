@@ -116,6 +116,7 @@ from .glacial_chronosequence import (
     load_all_glacial_boundaries,
     load_wisconsin_extent,
     load_illinoian_extent,
+    load_pre_illinoian_extent,
     load_driftless_area,
     load_southern_appalachian_lakes,  # New: S. Appalachian comparison region
     compute_sapp_land_area_from_dem,
