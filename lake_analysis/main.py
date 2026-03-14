@@ -2070,6 +2070,7 @@ def analyze_bayesian_halflife(
             zone_areas = {
                 'wisconsin': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Wisconsin'),
                 'illinoian': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Illinoian'),
+                'pre_illinoian': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Pre-Illinoian'),
                 'driftless': SIZE_STRATIFIED_LANDSCAPE_AREAS.get('Driftless')
             }
 

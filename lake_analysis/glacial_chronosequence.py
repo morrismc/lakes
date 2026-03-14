@@ -1267,8 +1267,8 @@ def compute_lake_density_by_glacial_stage(lake_gdf, zone_areas=None, verbose=Tru
         }
 
         zone_key = stage_key_map.get(stage, stage.lower())
-        if zone_areas and zone_key in zone_areas:
-            zone_area = zone_areas[zone_key]
+        zone_area = zone_areas.get(zone_key) if zone_areas else None
+        if zone_area is not None and zone_area > 0:
             density = (n_lakes / zone_area) * 1000
         else:
             zone_area = np.nan
@@ -2120,7 +2120,7 @@ def decompose_bimodal_by_glacial_status(lake_gdf, elev_breaks=None, verbose=True
 
     # Classify as glaciated vs non-glaciated
     lake_gdf = lake_gdf.copy()
-    glaciated_stages = ['Wisconsin', 'Illinoian']
+    glaciated_stages = ['Wisconsin', 'Illinoian', 'Pre-Illinoian']
     lake_gdf['is_glaciated'] = lake_gdf['glacial_stage'].isin(glaciated_stages)
 
     # Also flag alpine glaciation
@@ -3713,6 +3713,7 @@ def analyze_aridity_lake_halflife(lake_gdf, verbose=True):
     stage_ages = {
         'Wisconsin': 20,
         'Illinoian': 160,
+        'Pre-Illinoian': 500,
         'Driftless': None,  # Never glaciated
         'unclassified': None
     }
@@ -3721,7 +3722,7 @@ def analyze_aridity_lake_halflife(lake_gdf, verbose=True):
     density_data = []
 
     for aridity_cls in lake_gdf['aridity_class'].dropna().unique():
-        for stage in ['Wisconsin', 'Illinoian']:
+        for stage in ['Wisconsin', 'Illinoian', 'Pre-Illinoian']:
             mask = (lake_gdf['aridity_class'] == aridity_cls) & (lake_gdf['glacial_stage'] == stage)
             n_lakes = mask.sum()
 
@@ -3823,7 +3824,7 @@ def analyze_aridity_lake_halflife(lake_gdf, verbose=True):
 
         # Prepare data - only glacial stages with known ages
         test_data = lake_gdf[
-            (lake_gdf['glacial_stage'].isin(['Wisconsin', 'Illinoian'])) &
+            (lake_gdf['glacial_stage'].isin(['Wisconsin', 'Illinoian', 'Pre-Illinoian'])) &
             (lake_gdf['aridity_class'].notna())
         ].copy()
 
@@ -5246,7 +5247,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                 n_lakes = len(stage_lakes)
 
                 zone_key = stage_zone_key_map.get(stage, stage.lower())
-                zone_area = zone_areas.get(zone_key, 0)
+                zone_area = zone_areas.get(zone_key, 0) or 0
 
                 if zone_area > 0:
                     density = (n_lakes / zone_area) * 1000  # per 1000 km²
