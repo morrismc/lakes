@@ -31,10 +31,11 @@ results = analyze_nadi1_chronosequence(lakes, max_lake_area=20000)
 W.M. Davis proposed that landscapes evolve through stages, and lakes are "youthful" features that fill in over time. This predicts:
 - **Wisconsin glaciation (~20 ka)**: Highest lake density (youngest landscape)
 - **Illinoian glaciation (~160 ka)**: Intermediate density
+- **Pre-Illinoian glaciation (~500 ka)**: Lower density (older landscape)
 - **Driftless Area (>1.5 Ma)**: Lowest density (never glaciated, oldest)
 
 ### Glacial Chronosequence
-The analysis uses three "deep time end members" to fit an exponential decay model:
+The analysis uses four "deep time end members" to fit an exponential decay model:
 - D(t) = D₀ × exp(-k × t)
 - Half-life (t½) = ln(2) / k ≈ 500-1000 ka (estimated)
 
@@ -78,7 +79,7 @@ lakes/
 Main analysis for Davis's hypothesis. Key functions:
 - `run_nadi1_chronosequence_analysis()`: Complete analysis pipeline
 - `fit_bayesian_decay_model()`: PyMC Bayesian exponential decay
-- `load_wisconsin_extent()`, `load_illinoian_extent()`, `load_driftless_area()`: Load glacial boundaries
+- `load_wisconsin_extent()`, `load_illinoian_extent()`, `load_pre_illinoian_extent()`, `load_driftless_area()`: Load glacial boundaries
 - `assign_deglaciation_age()`: Assign ages using NADI-1 time slices
 
 **Important parameters:**
@@ -356,10 +357,12 @@ Disentangle glaciation vs climate vs topography effects to answer the key questi
 - PyMC and ArviZ for Bayesian inference
 - Runs after glacial chronosequence, before spatial scaling
 
-**Future Support:**
-Configuration includes placeholder for pre-Illinoian glacial boundaries:
-- `GLACIAL_STAGES_CONFIG['Pre-Illinoian']` with `required: False`
-- Will be automatically included when boundaries become available
+**Pre-Illinoian Support:**
+Pre-Illinoian glacial boundaries are now fully integrated:
+- `GLACIAL_STAGES_CONFIG['Pre-Illinoian']` with `required: True`
+- Boundary loaded from `Pre_illinoisan_glacial_extent` layer in MyProject.gdb
+- Automatically included in classification, density, and Bayesian analyses
+- Age estimate: 500 ± 100 ka (mid-point of ~300-700 ka range)
 
 ## Git Workflow
 

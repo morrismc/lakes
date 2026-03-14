@@ -101,6 +101,7 @@ DEFAULT_SIZE_BINS = [
 DEFAULT_LANDSCAPE_AREAS = {
     'Wisconsin': 1225000,
     'Illinoian': 145000,
+    'Pre-Illinoian': None,  # Computed from actual boundary area
     'Driftless': 25500
 }
 
@@ -108,6 +109,7 @@ DEFAULT_LANDSCAPE_AREAS = {
 DEFAULT_AGE_ESTIMATES = {
     'Wisconsin': {'mean': 20, 'std': 5},
     'Illinoian': {'mean': 160, 'std': 30},
+    'Pre-Illinoian': {'mean': 500, 'std': 100},
     'Driftless': {'mean': 1500, 'std': 500}
 }
 
@@ -123,7 +125,8 @@ DEFAULT_BAYESIAN_PARAMS = {
 STAGE_COLORS = {
     'Wisconsin': '#3498db',     # Blue
     'Illinoian': '#e74c3c',     # Red
-    'Driftless': '#2ecc71',     # Green
+    'Pre-Illinoian': '#2ca02c', # Green
+    'Driftless': '#9b59b6',     # Purple
     'unclassified': '#95a5a6'   # Gray
 }
 
@@ -166,11 +169,12 @@ def detection_limit_diagnostics(df, area_col='AREASQKM', stage_col='glacial_stag
     if output_dir is None:
         output_dir = ensure_output_dir()
 
-    stages = ['Wisconsin', 'Illinoian', 'Driftless']
+    stages = ['Wisconsin', 'Illinoian', 'Pre-Illinoian', 'Driftless']
     colors = STAGE_COLORS
 
-    # Filter to relevant stages
+    # Filter to relevant stages (only include stages that have data)
     df_filtered = df[df[stage_col].isin(stages)].copy()
+    stages = [s for s in stages if len(df_filtered[df_filtered[stage_col] == s]) > 0]
 
     if verbose:
         print("\n" + "=" * 70)
@@ -412,6 +416,12 @@ def calculate_size_stratified_densities(df, landscape_areas, age_estimates,
         stage_df = df[df[stage_col] == stage]
         land_area = landscape_areas.get(stage, 1)
         ages = age_estimates.get(stage, {'mean': 100, 'std': 50})
+
+        # Skip stages with no landscape area defined
+        if land_area is None or land_area == 0:
+            if verbose:
+                print(f"\n{stage}: Skipped (no landscape area defined)")
+            continue
 
         if verbose:
             print(f"\n{stage}:")
