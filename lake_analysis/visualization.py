@@ -5159,6 +5159,13 @@ def plot_glacial_powerlaw_comparison(lake_gdf, area_col='AreaSqKm',
     setup_plot_style()
     fig, axes = plt.subplots(2, 2, figsize=figsize)
 
+    # Fix area column name if needed
+    if area_col not in lake_gdf.columns:
+        for alt_col in ['AREASQKM', 'AreaSqKm', 'area_km2', 'Area', 'AREA']:
+            if alt_col in lake_gdf.columns:
+                area_col = alt_col
+                break
+
     if lake_gdf is None or 'glacial_stage' not in lake_gdf.columns:
         for ax in axes.flat:
             ax.text(0.5, 0.5, 'No glacial classification available',
@@ -5311,6 +5318,13 @@ def plot_glacial_lake_size_histograms(lake_gdf, area_col='AreaSqKm',
     setup_plot_style()
     fig, axes = plt.subplots(2, 2, figsize=figsize)
 
+    # Fix area column name if needed
+    if area_col not in lake_gdf.columns:
+        for alt_col in ['AREASQKM', 'AreaSqKm', 'area_km2', 'Area', 'AREA']:
+            if alt_col in lake_gdf.columns:
+                area_col = alt_col
+                break
+
     if lake_gdf is None or 'glacial_stage' not in lake_gdf.columns:
         return fig, axes
 
@@ -5454,6 +5468,13 @@ def plot_glacial_xmin_sensitivity(lake_gdf, area_col='AreaSqKm',
     """
     setup_plot_style()
     fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    # Fix area column name if needed
+    if lake_gdf is not None and area_col not in lake_gdf.columns:
+        for alt_col in ['AREASQKM', 'AreaSqKm', 'area_km2', 'Area', 'AREA']:
+            if alt_col in lake_gdf.columns:
+                area_col = alt_col
+                break
 
     if lake_gdf is None or 'glacial_stage' not in lake_gdf.columns:
         return fig, axes
