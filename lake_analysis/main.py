@@ -1603,8 +1603,9 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                             # Get zone areas for proper normalization in Panel C
                             zone_areas = results.get('zone_areas', {})
                             # Add Dalton area if available
-                            if boundaries.get('dalton_18ka') is not None:
-                                dalton_area = boundaries['dalton_18ka'].geometry.area.sum() / 1e6
+                            glacial_boundaries = results.get('boundaries', {})
+                            if glacial_boundaries.get('dalton_18ka') is not None:
+                                dalton_area = glacial_boundaries['dalton_18ka'].geometry.area.sum() / 1e6
                                 zone_areas['dalton_18ka'] = dalton_area
 
                             fig, axes = plot_elevation_glacial_multipanel(

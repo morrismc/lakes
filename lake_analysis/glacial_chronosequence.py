@@ -118,7 +118,42 @@ def load_and_reproject(filepath, layer=None, target_crs=None):
 
     # Load the data
     if layer:
-        gdf = gpd.read_file(filepath, layer=layer)
+        try:
+            gdf = gpd.read_file(filepath, layer=layer)
+        except Exception as e:
+            # List available layers and try fuzzy matching
+            import fiona
+            try:
+                available = fiona.listlayers(filepath)
+                print(f"    ERROR: Layer '{layer}' not found.")
+                print(f"    Available layers ({len(available)}):")
+                for lyr in available:
+                    print(f"      - {lyr}")
+
+                # Normalize for comparison: lowercase, strip underscores/spaces/hyphens
+                def _normalize(s):
+                    return s.lower().replace('_', '').replace('-', '').replace(' ', '')
+
+                layer_norm = _normalize(layer)
+                # Try exact normalized match first, then substring match
+                matches = [l for l in available if _normalize(l) == layer_norm]
+                if not matches:
+                    matches = [l for l in available if layer_norm in _normalize(l)
+                               or _normalize(l) in layer_norm]
+                if not matches:
+                    # Try key terms: extract significant words from layer name
+                    key_terms = [t for t in layer.lower().replace('_', ' ').split()
+                                 if len(t) > 3]
+                    matches = [l for l in available
+                               if all(t in l.lower() for t in key_terms)]
+
+                if matches:
+                    print(f"    Trying fuzzy match: '{matches[0]}'")
+                    gdf = gpd.read_file(filepath, layer=matches[0])
+                else:
+                    raise
+            except ImportError:
+                raise e
     else:
         gdf = gpd.read_file(filepath)
 
@@ -2658,8 +2693,17 @@ def run_dalton_18ka_analysis(lake_df, save_results=True, verbose=True):
 
             # Save density comparison
             import json
+
+            def _json_default(obj):
+                """Handle numpy types for JSON serialization."""
+                if hasattr(obj, 'item'):
+                    return obj.item()  # numpy scalar to Python scalar
+                if hasattr(obj, 'tolist'):
+                    return obj.tolist()  # numpy array to list
+                raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
             with open(output_dir / 'dalton_18ka_density_comparison.json', 'w') as f:
-                json.dump(results['density_comparison'], f, indent=2)
+                json.dump(results['density_comparison'], f, indent=2, default=_json_default)
 
             if verbose:
                 print(f"\n  Results saved to: {output_dir}")
