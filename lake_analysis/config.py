@@ -281,7 +281,7 @@ GLACIAL_CHRONOLOGY = {
     },
     'pre_illinoian': {
         'name': 'Pre-Illinoian',
-        'age_ka': (300, None),
+        'age_ka': (300, 700),
         'color': '#2ca02c',  # Green
         'order': 3,
     },
