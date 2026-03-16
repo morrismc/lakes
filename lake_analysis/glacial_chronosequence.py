@@ -1321,7 +1321,12 @@ def compute_lake_density_by_glacial_stage(lake_gdf, zone_areas=None, verbose=Tru
         chrono = GLACIAL_CHRONOLOGY.get(zone_key.lower() if zone_key else stage.lower(), {})
         age_ka = chrono.get('age_ka')
         if isinstance(age_ka, tuple):
-            age_ka = (age_ka[0] + age_ka[1]) / 2  # Mean age
+            if age_ka[0] is not None and age_ka[1] is not None:
+                age_ka = (age_ka[0] + age_ka[1]) / 2  # Mean age
+            elif age_ka[0] is not None:
+                age_ka = age_ka[0]
+            else:
+                age_ka = age_ka[1]
 
         results.append({
             'glacial_stage': stage,
