@@ -141,11 +141,19 @@ def load_and_reproject(filepath, layer=None, target_crs=None):
                     matches = [l for l in available if layer_norm in _normalize(l)
                                or _normalize(l) in layer_norm]
                 if not matches:
+                    # Try case-insensitive exact match (handles capitalization differences)
+                    matches = [l for l in available if l.lower() == layer.lower()]
+                if not matches:
                     # Try key terms: extract significant words from layer name
                     key_terms = [t for t in layer.lower().replace('_', ' ').split()
                                  if len(t) > 3]
                     matches = [l for l in available
                                if all(t in l.lower() for t in key_terms)]
+                if not matches:
+                    # Relaxed key terms: require most (not all) terms to match
+                    if len(key_terms) > 1:
+                        matches = [l for l in available
+                                   if sum(t in l.lower() for t in key_terms) >= len(key_terms) - 1]
 
                 if matches:
                     print(f"    Trying fuzzy match: '{matches[0]}'")

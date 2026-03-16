@@ -186,7 +186,7 @@ GLACIAL_BOUNDARIES = {
     # CRS: USA Contiguous Albers (WKID:102039)
     'pre_illinoian': {
         'path': r"F:\Lakes\GIS\MyProject.gdb",
-        'layer': 'Pre_illinoisan_glacial_extent',
+        'layer': 'Pre_illinoian_glacial_extent',
         'crs': 'ESRI:102039',
         'description': 'Pre-Illinoian glaciation maximum extent',
         'age_ka': (300, 700),  # ~300,000-700,000+ years BP
