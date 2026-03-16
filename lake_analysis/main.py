@@ -3538,15 +3538,22 @@ def print_analysis_summary(results):
         if summary is not None and hasattr(summary, 'empty') and not summary.empty:
             print("\n  Optimal x_min by elevation band:")
             print("  " + "-" * 60)
-            print(f"  {'Elevation':<12} {'x_min':>10} {'α':>10} {'n_lakes':>12}")
+            print(f"  {'Elevation':<14} {'x_min':>10} {'α':>10} {'n_lakes':>12}")
             print("  " + "-" * 60)
-            # Handle DataFrame format
+            # Handle DataFrame format - column names from generate_xmin_summary_table
             for _, row in summary.head(6).iterrows():
-                band = row.get('elevation_band', row.get('band', 'Unknown'))
-                xmin_val = row.get('optimal_xmin', 0)
-                alpha = row.get('alpha', 0)
-                n = int(row.get('n_lakes', 0))
-                print(f"  {band:<12} {xmin_val:>10.3f} {alpha:>10.3f} {n:>12,}")
+                band = row.get('Elevation Band', row.get('elevation_band', 'Unknown'))
+                xmin_val = row.get('Optimal x_min (km²)', row.get('optimal_xmin', '0'))
+                alpha = row.get('α (optimal)', row.get('alpha', '0'))
+                n = int(row.get('n_total', row.get('n_lakes', 0)))
+                # Convert string values to float if needed
+                try:
+                    xmin_val = float(xmin_val)
+                    alpha = float(alpha)
+                except (ValueError, TypeError):
+                    xmin_val = 0.0
+                    alpha = 0.0
+                print(f"  {band:<14} {xmin_val:>10.3f} {alpha:>10.3f} {n:>12,}")
             print("  " + "-" * 60)
 
     print("\n" + "=" * 80)

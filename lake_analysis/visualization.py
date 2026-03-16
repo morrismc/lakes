@@ -3268,7 +3268,7 @@ def plot_xmin_elevation_summary(xmin_results, figsize=(16, 12), save_path=None):
             f"• Sensitive bands: {len(sensitive)}",
         ])
 
-    if comparison:
+    if isinstance(comparison, dict) and comparison:
         agreement = comparison.get('methods_agree', 'Unknown')
         summary_lines.append(f"• Methods agree: {agreement}")
 
