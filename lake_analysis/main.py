@@ -1350,12 +1350,12 @@ def analyze_domains(lakes, save_figures=True):
 # GLACIAL CHRONOSEQUENCE ANALYSIS
 # ============================================================================
 
-def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
+def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True, exclude_qal=True):
     """
     Run glacial chronosequence analysis to test Davis's hypothesis.
 
     Tests whether lake density decreases with landscape age:
-    Wisconsin (youngest) -> Illinoian -> Driftless (never glaciated)
+    Wisconsin (youngest) -> Illinoian -> Pre-Illinoian -> Driftless (never glaciated)
 
     Parameters
     ----------
@@ -1365,6 +1365,9 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
         If True, generate and save visualizations
     verbose : bool
         Print progress information
+    exclude_qal : bool
+        If True, exclude lakes within Quaternary Alluvium (floodplain) deposits
+        before glacial classification (recommended for isolating glacial signal)
 
     Returns
     -------
@@ -1375,10 +1378,13 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
         - density_by_stage: Lake density statistics
         - elevation_by_stage: Elevation distribution data
         - davis_test: Hypothesis test results
+        - qal_exclusion: Pre/post Qal exclusion stats (if exclude_qal=True)
     """
     print("\n" + "=" * 60)
     print("GLACIAL CHRONOSEQUENCE ANALYSIS")
     print("Testing Davis's Hypothesis: Lake density decreases with age")
+    if exclude_qal:
+        print("  (with Quaternary Alluvium exclusion)")
     print("=" * 60)
 
     try:
@@ -1386,7 +1392,8 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
         results = run_glacial_chronosequence_analysis(
             lakes,
             save_results=True,
-            verbose=verbose
+            verbose=verbose,
+            exclude_qal=exclude_qal
         )
 
         if results is None or 'error' in results:

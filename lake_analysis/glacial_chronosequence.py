@@ -374,6 +374,130 @@ def load_pre_illinoian_extent(target_crs=None):
     return gdf
 
 
+def load_quaternary_alluvium(target_crs=None):
+    """
+    Load Quaternary Alluvium (Qal) polygons for excluding floodplain lakes.
+
+    Source: Fullerton, Bush & Pennell (2003), USGS Map I-2789, 1:2,500,000.
+    Lakes within Qal are floodplain/alluvial features (oxbows, backwater pools)
+    that reflect fluvial processes rather than glacial geomorphic processes.
+
+    Returns
+    -------
+    GeoDataFrame
+        Quaternary Alluvium polygon(s)
+    """
+    if target_crs is None:
+        target_crs = get_target_crs()
+
+    config = GLACIAL_BOUNDARIES.get('quaternary_alluvium')
+    if config is None:
+        raise ValueError("Quaternary Alluvium configuration not found in GLACIAL_BOUNDARIES")
+
+    print("\nLoading Quaternary Alluvium (Qal) extent...")
+    gdf = load_and_reproject(
+        config['path'],
+        layer=config.get('layer'),
+        target_crs=target_crs
+    )
+
+    # Calculate area
+    total_area_km2 = gdf.geometry.area.sum() / 1e6
+    print(f"    Total area: {total_area_km2:,.0f} km²")
+
+    return gdf
+
+
+def exclude_qal_lakes(lake_gdf, qal_boundary, verbose=True):
+    """
+    Exclude lakes that fall within Quaternary Alluvium (Qal) deposits.
+
+    Floodplain lakes (oxbows, abandoned meanders, backwater pools) are created
+    by active fluvial deposition rather than glacial processes. Including them
+    confounds the glacial chronosequence signal.
+
+    Parameters
+    ----------
+    lake_gdf : GeoDataFrame
+        Lakes as points with geometry column
+    qal_boundary : GeoDataFrame
+        Quaternary Alluvium polygon(s)
+    verbose : bool
+        Print pre/post exclusion statistics
+
+    Returns
+    -------
+    GeoDataFrame
+        Lakes NOT within Qal deposits, with 'in_qal' column added
+    """
+    from shapely.ops import unary_union
+
+    target_crs = str(lake_gdf.crs)
+
+    # Ensure same CRS
+    if str(qal_boundary.crs) != target_crs:
+        qal_boundary = qal_boundary.to_crs(target_crs)
+
+    # Dissolve to single polygon for faster spatial test
+    if len(qal_boundary) > 1:
+        dissolved = unary_union(qal_boundary.geometry)
+        qal_single = gpd.GeoDataFrame(geometry=[dissolved], crs=target_crs)
+    else:
+        qal_single = qal_boundary
+
+    # Spatial join to find lakes within Qal
+    joined = gpd.sjoin(
+        lake_gdf[['geometry']].reset_index(),
+        qal_single,
+        how='inner',
+        predicate='within'
+    )
+
+    qal_indices = set(joined['index'].values)
+    n_before = len(lake_gdf)
+    n_in_qal = len(qal_indices)
+
+    # Mark lakes in Qal
+    lake_gdf = lake_gdf.copy()
+    lake_gdf['in_qal'] = lake_gdf.index.isin(qal_indices)
+
+    if verbose:
+        print(f"\n{'=' * 60}")
+        print("QUATERNARY ALLUVIUM (Qal) EXCLUSION")
+        print(f"{'=' * 60}")
+        print(f"  Lakes before exclusion: {n_before:,}")
+        print(f"  Lakes within Qal:       {n_in_qal:,} ({100 * n_in_qal / n_before:.1f}%)")
+        print(f"  Lakes after exclusion:  {n_before - n_in_qal:,}")
+
+        # Report by glacial stage if column exists
+        if 'glacial_stage' in lake_gdf.columns:
+            print(f"\n  Qal lakes by glacial stage:")
+            for stage in lake_gdf['glacial_stage'].unique():
+                stage_mask = lake_gdf['glacial_stage'] == stage
+                stage_total = stage_mask.sum()
+                stage_qal = (stage_mask & lake_gdf['in_qal']).sum()
+                if stage_total > 0:
+                    pct = 100 * stage_qal / stage_total
+                    print(f"    {stage}: {stage_qal:,} / {stage_total:,} ({pct:.1f}%)")
+
+        # Size distribution comparison
+        area_col = COLS.get('area', 'AREASQKM')
+        if area_col in lake_gdf.columns:
+            qal_areas = lake_gdf.loc[lake_gdf['in_qal'], area_col]
+            non_qal_areas = lake_gdf.loc[~lake_gdf['in_qal'], area_col]
+            print(f"\n  Size comparison:")
+            print(f"    Qal lakes     - median: {qal_areas.median():.4f} km², "
+                  f"mean: {qal_areas.mean():.4f} km²")
+            print(f"    Non-Qal lakes - median: {non_qal_areas.median():.4f} km², "
+                  f"mean: {non_qal_areas.mean():.4f} km²")
+        print(f"{'=' * 60}")
+
+    # Return only non-Qal lakes
+    result = lake_gdf[~lake_gdf['in_qal']].copy()
+
+    return result
+
+
 def load_driftless_area(use_definite=True, target_crs=None):
     """
     Load Driftless Area (never glaciated) from geodatabase.
@@ -855,7 +979,8 @@ def compute_sapp_hypsometry_normalized_density(sapp_lakes, dem_path=None,
     return landscape_areas
 
 
-def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sapp=False):
+def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sapp=False,
+                                include_qal=True):
     """
     Load all glacial boundary datasets and reproject to common CRS.
 
@@ -867,6 +992,8 @@ def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sa
         If True, include Dalton 18ka (western alpine glaciation)
     include_sapp : bool
         If True, include Southern Appalachian lakes (non-glacial comparison region)
+    include_qal : bool
+        If True, include Quaternary Alluvium (Qal) for excluding floodplain lakes
 
     Returns
     -------
@@ -878,6 +1005,7 @@ def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sa
         - 'driftless': Driftless Area (never glaciated)
         - 'dalton_18ka': Dalton 18ka ice sheets (if include_dalton=True)
         - 'southern_appalachians': S. Appalachian lakes (if include_sapp=True)
+        - 'quaternary_alluvium': Qal deposits (if include_qal=True)
     """
     if target_crs is None:
         target_crs = get_target_crs()
@@ -927,6 +1055,13 @@ def load_all_glacial_boundaries(target_crs=None, include_dalton=True, include_sa
         except Exception as e:
             print(f"  WARNING: Could not load Southern Appalachians: {e}")
             boundaries['southern_appalachians'] = None
+
+    if include_qal:
+        try:
+            boundaries['quaternary_alluvium'] = load_quaternary_alluvium(target_crs)
+        except Exception as e:
+            print(f"  WARNING: Could not load Quaternary Alluvium: {e}")
+            boundaries['quaternary_alluvium'] = None
 
     # Summary
     print("\n" + "-" * 60)
@@ -1609,17 +1744,19 @@ def compare_adjacent_stages(lake_gdf, verbose=True):
 # COMPREHENSIVE ANALYSIS FUNCTION
 # ============================================================================
 
-def run_glacial_chronosequence_analysis(lake_df, save_results=True, verbose=True):
+def run_glacial_chronosequence_analysis(lake_df, save_results=True, verbose=True,
+                                        exclude_qal=True):
     """
     Run the complete glacial chronosequence analysis.
 
     This is the main entry point that orchestrates all analysis steps:
-    1. Load glacial boundary datasets
+    1. Load glacial boundary datasets (including Qal if exclude_qal=True)
     2. Convert lakes to GeoDataFrame
-    3. Classify lakes by glacial extent
-    4. Calculate lake density by glacial stage
-    5. Test Davis's hypothesis
-    6. Generate summary statistics
+    3. Exclude lakes within Quaternary Alluvium (Qal) deposits
+    4. Classify lakes by glacial extent
+    5. Calculate lake density by glacial stage
+    6. Test Davis's hypothesis
+    7. Generate summary statistics
 
     Parameters
     ----------
@@ -1629,6 +1766,10 @@ def run_glacial_chronosequence_analysis(lake_df, save_results=True, verbose=True
         If True, save results to CSV files
     verbose : bool
         Print progress information
+    exclude_qal : bool
+        If True, exclude lakes within Quaternary Alluvium (floodplain) deposits
+        before glacial classification. This removes fluvial-origin lakes that
+        would confound the glacial chronosequence signal.
 
     Returns
     -------
@@ -1640,46 +1781,74 @@ def run_glacial_chronosequence_analysis(lake_df, save_results=True, verbose=True
         - elevation_by_stage: Elevation distribution data
         - davis_test: Hypothesis test results
         - pairwise_tests: Pairwise comparison results
+        - qal_exclusion: Pre/post exclusion statistics (if exclude_qal=True)
     """
+    n_steps = 6 if exclude_qal else 5
+    step = 0
+
     if verbose:
         print("\n" + "=" * 70)
         print("GLACIAL CHRONOSEQUENCE ANALYSIS")
         print("Testing Davis's Hypothesis: Lake density decreases with landscape age")
+        if exclude_qal:
+            print("  (with Quaternary Alluvium exclusion)")
         print("=" * 70)
 
     results = {}
 
     # Step 1: Load glacial boundaries
+    step += 1
     if verbose:
-        print("\n[STEP 1/5] Loading glacial boundary datasets...")
+        print(f"\n[STEP {step}/{n_steps}] Loading glacial boundary datasets...")
     try:
-        boundaries = load_all_glacial_boundaries(include_dalton=True)
+        boundaries = load_all_glacial_boundaries(include_dalton=True, include_qal=exclude_qal)
         results['boundaries'] = boundaries
     except Exception as e:
         print(f"  ERROR loading boundaries: {e}")
         return {'error': str(e)}
 
     # Step 2: Calculate zone areas
+    step += 1
     if verbose:
-        print("\n[STEP 2/5] Calculating glacial zone areas...")
+        print(f"\n[STEP {step}/{n_steps}] Calculating glacial zone areas...")
     zone_areas = calculate_glacial_zone_areas(boundaries, verbose=verbose)
     results['zone_areas'] = zone_areas
 
+    # Step 2.5: Exclude Quaternary Alluvium lakes (before classification)
+    qal_boundary = boundaries.get('quaternary_alluvium') if exclude_qal else None
+
     # Step 3: Convert lakes to GeoDataFrame and classify
+    step += 1
     if verbose:
-        print("\n[STEP 3/5] Classifying lakes by glacial extent...")
+        print(f"\n[STEP {step}/{n_steps}] Classifying lakes by glacial extent...")
     try:
         target_crs = get_target_crs()
         lake_gdf = convert_lakes_to_gdf(lake_df, target_crs=target_crs)
+
+        # Exclude Quaternary Alluvium lakes before classification
+        if qal_boundary is not None:
+            step += 1
+            if verbose:
+                print(f"\n[STEP {step}/{n_steps}] Excluding Quaternary Alluvium (Qal) lakes...")
+            n_before_qal = len(lake_gdf)
+            lake_gdf = exclude_qal_lakes(lake_gdf, qal_boundary, verbose=verbose)
+            results['qal_exclusion'] = {
+                'n_before': n_before_qal,
+                'n_excluded': n_before_qal - len(lake_gdf),
+                'n_after': len(lake_gdf),
+                'pct_excluded': 100 * (n_before_qal - len(lake_gdf)) / n_before_qal,
+            }
+
         lake_gdf = classify_lakes_by_glacial_extent(lake_gdf, boundaries, verbose=verbose)
         results['lake_gdf'] = lake_gdf
     except Exception as e:
         print(f"  ERROR classifying lakes: {e}")
         return results
 
-    # Step 4: Calculate lake density by glacial stage
+    # Step N: Calculate lake density by glacial stage
+    step += 1
     if verbose:
-        print("\n[STEP 4/5] Computing lake density by glacial stage...")
+        print(f"\n[STEP {step}/{n_steps}] Computing lake density by glacial stage...")
     density_df = compute_lake_density_by_glacial_stage(lake_gdf, zone_areas, verbose=verbose)
     results['density_by_stage'] = density_df
 
@@ -1687,9 +1856,10 @@ def run_glacial_chronosequence_analysis(lake_df, save_results=True, verbose=True
     elevation_df = compute_elevation_binned_density_by_stage(lake_gdf, verbose=verbose)
     results['elevation_by_stage'] = elevation_df
 
-    # Step 5: Test Davis's hypothesis
+    # Step N: Test Davis's hypothesis
+    step += 1
     if verbose:
-        print("\n[STEP 5/5] Testing Davis's hypothesis...")
+        print(f"\n[STEP {step}/{n_steps}] Testing Davis's hypothesis...")
     davis_results = test_davis_hypothesis(density_df, verbose=verbose)
     results['davis_test'] = davis_results
 
