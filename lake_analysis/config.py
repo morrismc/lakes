@@ -198,7 +198,7 @@ GLACIAL_BOUNDARIES = {
     # Lakes within Qal are floodplain/alluvial features (oxbows, backwater pools)
     # that reflect fluvial processes rather than glacial geomorphic processes
     'quaternary_alluvium': {
-        'path': r"F:\Lakes\GIS\shapefiles\Qal_soller_2004",
+        'path': r"F:\Lakes\GIS\shapefiles\Qal_comprehensive_plus_glacial_alluvial.shp",
         'layer': None,
         'crs': 'ESRI:102039',
         'description': 'Quaternary Alluvium deposits (Qal) - exclusion zone for glacial analysis',
