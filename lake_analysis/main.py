@@ -1350,17 +1350,24 @@ def analyze_domains(lakes, save_figures=True):
 # GLACIAL CHRONOSEQUENCE ANALYSIS
 # ============================================================================
 
-def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
+def _run_single_glacial_track(lakes, track_label, output_subdir, exclude_qal,
+                              save_figures=True, verbose=True):
     """
-    Run glacial chronosequence analysis to test Davis's hypothesis.
+    Run a single glacial chronosequence analysis track (with or without Qal exclusion).
 
-    Tests whether lake density decreases with landscape age:
-    Wisconsin (youngest) -> Illinoian -> Driftless (never glaciated)
+    This is the internal workhorse called by analyze_glacial_chronosequence()
+    for each track of the dual-track comparison.
 
     Parameters
     ----------
     lakes : DataFrame
         Lake data with lat/lon columns
+    track_label : str
+        Human-readable label for this track (e.g., "All Lakes", "Qal Excluded")
+    output_subdir : str
+        Subdirectory name under glacial_chronosequence/ for this track's outputs
+    exclude_qal : bool
+        Whether to exclude Quaternary Alluvium lakes
     save_figures : bool
         If True, generate and save visualizations
     verbose : bool
@@ -1368,29 +1375,24 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
 
     Returns
     -------
-    dict
-        Analysis results including:
-        - lake_gdf: Lakes with glacial classification
-        - boundaries: Glacial boundary GeoDataFrames
-        - density_by_stage: Lake density statistics
-        - elevation_by_stage: Elevation distribution data
-        - davis_test: Hypothesis test results
+    dict or None
+        Analysis results, or None if analysis failed
     """
-    print("\n" + "=" * 60)
-    print("GLACIAL CHRONOSEQUENCE ANALYSIS")
-    print("Testing Davis's Hypothesis: Lake density decreases with age")
-    print("=" * 60)
+    print(f"\n{'#' * 70}")
+    print(f"  TRACK: {track_label}")
+    print(f"  Qal exclusion: {'YES' if exclude_qal else 'NO'}")
+    print(f"{'#' * 70}")
 
     try:
-        # Run the full glacial chronosequence analysis
         results = run_glacial_chronosequence_analysis(
             lakes,
             save_results=True,
-            verbose=verbose
+            verbose=verbose,
+            exclude_qal=exclude_qal
         )
 
         if results is None or 'error' in results:
-            print(f"\n[WARNING] Glacial analysis could not be completed")
+            print(f"\n[WARNING] {track_label}: analysis could not be completed")
             if results and 'error' in results:
                 print(f"  Error: {results['error']}")
             return None
@@ -1398,10 +1400,10 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
         # Generate visualizations if requested
         if save_figures and results.get('density_by_stage') is not None:
             ensure_output_dir()
-            glacial_output = Path(OUTPUT_DIR) / 'glacial_chronosequence'
-            glacial_output.mkdir(exist_ok=True)
+            glacial_output = Path(OUTPUT_DIR) / 'glacial_chronosequence' / output_subdir
+            glacial_output.mkdir(parents=True, exist_ok=True)
 
-            print("\n  Generating glacial visualizations...")
+            print(f"\n  Generating glacial visualizations ({track_label})...")
 
             # Density by glacial stage bar chart
             try:
@@ -1469,12 +1471,11 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                     print(f"    Warning: Could not create geographic map: {e}")
 
             # === ENHANCED GLACIAL VISUALIZATIONS ===
-            print("\n  Generating enhanced glacial visualizations...")
+            print(f"\n  Generating enhanced glacial visualizations ({track_label})...")
 
             # Power law comparison across glacial stages
             if results.get('lake_gdf') is not None:
                 try:
-                    # Use lower threshold (0.01 km²) for more data
                     fig, axes = plot_glacial_powerlaw_comparison(
                         results['lake_gdf'],
                         min_area=0.01,
@@ -1490,7 +1491,7 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                 try:
                     fig, axes = plot_glacial_lake_size_histograms(
                         results['lake_gdf'],
-                        min_area=0.001,  # Lower threshold for comprehensive view
+                        min_area=0.001,
                         save_path=str(glacial_output / 'glacial_size_distributions.png')
                     )
                     if fig:
@@ -1538,7 +1539,6 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                     print(f"    Warning: Could not create comprehensive summary: {e}")
 
             # Normalized density with glacial overlay
-            # (uses lake_gdf with glacial_stage and elevation columns)
             if results.get('lake_gdf') is not None:
                 try:
                     fig, axes = plot_normalized_density_with_glacial_overlay(
@@ -1552,13 +1552,12 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                     print(f"    Warning: Could not create glacial overlay plot: {e}")
 
             # Dalton 18ka specific analysis
-            print("\n  Running Dalton 18ka (LGM) analysis...")
+            print(f"\n  Running Dalton 18ka (LGM) analysis ({track_label})...")
             try:
                 dalton_results = run_dalton_18ka_analysis(lakes, save_results=True, verbose=False)
                 if dalton_results and 'error' not in dalton_results:
                     results['dalton_18ka'] = dalton_results
 
-                    # Dalton 18ka comparison visualization
                     fig, axes = plot_dalton_18ka_comparison(
                         dalton_results,
                         save_path=str(glacial_output / 'dalton_18ka_analysis.png')
@@ -1600,9 +1599,7 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
                     if results.get('elevation_by_stage') is not None:
                         try:
                             dalton_elev = dalton_results.get('elevation_by_dalton')
-                            # Get zone areas for proper normalization in Panel C
                             zone_areas = results.get('zone_areas', {})
-                            # Add Dalton area if available
                             glacial_boundaries = results.get('boundaries', {})
                             if glacial_boundaries.get('dalton_18ka') is not None:
                                 dalton_area = glacial_boundaries['dalton_18ka'].geometry.area.sum() / 1e6
@@ -1623,23 +1620,352 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True):
             except Exception as e:
                 print(f"    Warning: Could not complete Dalton 18ka analysis: {e}")
 
-        # Print summary
-        print("\n[SUCCESS] Glacial chronosequence analysis complete!")
+        # Print track summary
+        print(f"\n[SUCCESS] {track_label} analysis complete!")
         davis_results = results.get('davis_test', {})
         if davis_results.get('supports_hypothesis'):
-            print("  CONCLUSION: Results SUPPORT Davis's hypothesis")
+            print(f"  CONCLUSION ({track_label}): Results SUPPORT Davis's hypothesis")
         elif davis_results.get('supports_hypothesis') is False:
-            print("  CONCLUSION: Results do NOT support Davis's hypothesis")
+            print(f"  CONCLUSION ({track_label}): Results do NOT support Davis's hypothesis")
         else:
-            print("  CONCLUSION: Insufficient data for hypothesis test")
+            print(f"  CONCLUSION ({track_label}): Insufficient data for hypothesis test")
 
         return results
 
     except Exception as e:
-        print(f"\n[ERROR] Glacial analysis failed: {e}")
+        print(f"\n[ERROR] {track_label} analysis failed: {e}")
         import traceback
         traceback.print_exc()
         return None
+
+
+def _plot_qal_comparison(results_all, results_qal_excluded, save_path=None):
+    """
+    Generate a side-by-side comparison figure showing the effect of Qal exclusion.
+
+    Creates a multi-panel figure comparing:
+    - Lake density by glacial stage (with vs without Qal)
+    - Davis hypothesis decay curves (with vs without Qal)
+    - Summary statistics table
+
+    Parameters
+    ----------
+    results_all : dict
+        Results from the all-lakes track (no Qal exclusion)
+    results_qal_excluded : dict
+        Results from the Qal-excluded track
+    save_path : str, optional
+        Path to save the figure
+
+    Returns
+    -------
+    tuple
+        (fig, axes) matplotlib figure and axes
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+    fig.suptitle('Effect of Quaternary Alluvium (Qal) Exclusion on Glacial Chronosequence',
+                 fontsize=16, fontweight='bold', y=0.98)
+
+    density_all = results_all.get('density_by_stage')
+    density_excl = results_qal_excluded.get('density_by_stage')
+
+    # --- Panel A: Density comparison (grouped bar chart) ---
+    ax = axes[0, 0]
+    if density_all is not None and density_excl is not None:
+        stages = density_all['glacial_stage'].values
+        x = np.arange(len(stages))
+        width = 0.35
+
+        bars1 = ax.bar(x - width/2, density_all['density_per_1000km2'].values,
+                       width, label='All Lakes', color='#7fcdbb', edgecolor='black', linewidth=0.5)
+        bars2 = ax.bar(x + width/2, density_excl['density_per_1000km2'].values,
+                       width, label='Qal Excluded', color='#2c7fb8', edgecolor='black', linewidth=0.5)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(stages, rotation=30, ha='right')
+        ax.set_ylabel('Lake Density (per 1,000 km²)')
+        ax.set_title('A. Lake Density by Glacial Stage')
+        ax.legend()
+
+        # Add value labels
+        for bar in bars1:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                    f'{bar.get_height():.1f}', ha='center', va='bottom', fontsize=8)
+        for bar in bars2:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                    f'{bar.get_height():.1f}', ha='center', va='bottom', fontsize=8)
+
+    # --- Panel B: Lake count comparison ---
+    ax = axes[0, 1]
+    if density_all is not None and density_excl is not None:
+        stages = density_all['glacial_stage'].values
+        x = np.arange(len(stages))
+        width = 0.35
+
+        bars1 = ax.bar(x - width/2, density_all['n_lakes'].values,
+                       width, label='All Lakes', color='#7fcdbb', edgecolor='black', linewidth=0.5)
+        bars2 = ax.bar(x + width/2, density_excl['n_lakes'].values,
+                       width, label='Qal Excluded', color='#2c7fb8', edgecolor='black', linewidth=0.5)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(stages, rotation=30, ha='right')
+        ax.set_ylabel('Number of Lakes')
+        ax.set_title('B. Lake Count by Glacial Stage')
+        ax.legend()
+
+        # Add count labels
+        for bar in bars1:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                    f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=7, rotation=45)
+        for bar in bars2:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                    f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=7, rotation=45)
+
+    # --- Panel C: Percent change in density ---
+    ax = axes[1, 0]
+    if density_all is not None and density_excl is not None:
+        stages = density_all['glacial_stage'].values
+        d_all = density_all['density_per_1000km2'].values
+        d_excl = density_excl['density_per_1000km2'].values
+
+        # Avoid division by zero
+        pct_change = np.where(d_all > 0, 100 * (d_excl - d_all) / d_all, 0)
+
+        colors = ['#d73027' if p < 0 else '#1a9850' for p in pct_change]
+        bars = ax.bar(stages, pct_change, color=colors, edgecolor='black', linewidth=0.5)
+        ax.axhline(y=0, color='black', linewidth=0.8, linestyle='-')
+        ax.set_ylabel('Change in Density (%)')
+        ax.set_title('C. Density Change After Qal Exclusion')
+        ax.set_xticklabels(stages, rotation=30, ha='right')
+
+        for bar, pct in zip(bars, pct_change):
+            va = 'bottom' if pct >= 0 else 'top'
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                    f'{pct:.1f}%', ha='center', va=va, fontsize=9, fontweight='bold')
+
+    # --- Panel D: Summary table ---
+    ax = axes[1, 1]
+    ax.axis('off')
+    ax.set_title('D. Summary Comparison', fontsize=12, fontweight='bold')
+
+    table_data = []
+    headers = ['Metric', 'All Lakes', 'Qal Excluded', 'Difference']
+
+    # Total lake counts
+    if density_all is not None and density_excl is not None:
+        n_all = density_all['n_lakes'].sum()
+        n_excl = density_excl['n_lakes'].sum()
+        table_data.append(['Total Lakes', f'{n_all:,}', f'{n_excl:,}',
+                          f'{n_excl - n_all:,} ({100*(n_excl-n_all)/n_all:.1f}%)'])
+
+    # Davis hypothesis results
+    davis_all = results_all.get('davis_test', {})
+    davis_excl = results_qal_excluded.get('davis_test', {})
+
+    if davis_all and davis_excl:
+        supports_all = 'Yes' if davis_all.get('supports_hypothesis') else 'No'
+        supports_excl = 'Yes' if davis_excl.get('supports_hypothesis') else 'No'
+        table_data.append(['Supports Davis?', supports_all, supports_excl, ''])
+
+        rho_all = davis_all.get('spearman_rho', davis_all.get('correlation', None))
+        rho_excl = davis_excl.get('spearman_rho', davis_excl.get('correlation', None))
+        if rho_all is not None and rho_excl is not None:
+            table_data.append(['Correlation (rho)',
+                              f'{rho_all:.3f}', f'{rho_excl:.3f}',
+                              f'{rho_excl - rho_all:+.3f}'])
+
+        p_all = davis_all.get('p_value', None)
+        p_excl = davis_excl.get('p_value', None)
+        if p_all is not None and p_excl is not None:
+            table_data.append(['p-value',
+                              f'{p_all:.4f}', f'{p_excl:.4f}', ''])
+
+    # Per-stage density comparison
+    if density_all is not None and density_excl is not None:
+        for i, stage in enumerate(density_all['glacial_stage'].values):
+            d_a = density_all.iloc[i]['density_per_1000km2']
+            d_e = density_excl.iloc[i]['density_per_1000km2']
+            if d_a > 0:
+                pct = 100 * (d_e - d_a) / d_a
+                table_data.append([f'{stage} density',
+                                  f'{d_a:.1f}', f'{d_e:.1f}', f'{pct:+.1f}%'])
+
+    if table_data:
+        table = ax.table(cellText=table_data, colLabels=headers,
+                        cellLoc='center', loc='center',
+                        colWidths=[0.28, 0.22, 0.22, 0.28])
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 1.4)
+
+        # Style header row
+        for j in range(len(headers)):
+            table[0, j].set_facecolor('#4a90d9')
+            table[0, j].set_text_props(color='white', fontweight='bold')
+
+        # Alternate row colors
+        for i in range(1, len(table_data) + 1):
+            color = '#f0f0f0' if i % 2 == 0 else 'white'
+            for j in range(len(headers)):
+                table[i, j].set_facecolor(color)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"  Figure saved to: {save_path}")
+
+    return fig, axes
+
+
+def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True, exclude_qal=True):
+    """
+    Run dual-track glacial chronosequence analysis to test Davis's hypothesis.
+
+    Automatically runs BOTH tracks (with and without Qal exclusion) and generates
+    a side-by-side comparison figure so you can see the effect of removing
+    floodplain lakes on the glacial signal.
+
+    Tests whether lake density decreases with landscape age:
+    Wisconsin (youngest) -> Illinoian -> Pre-Illinoian -> Driftless (never glaciated)
+
+    Output directory structure:
+        glacial_chronosequence/
+            all_lakes/           - Analysis with ALL lakes (no Qal filter)
+            qal_excluded/        - Analysis with Qal lakes removed
+            qal_comparison.png   - Side-by-side comparison figure
+
+    Parameters
+    ----------
+    lakes : DataFrame
+        Lake data with lat/lon columns
+    save_figures : bool
+        If True, generate and save visualizations
+    verbose : bool
+        Print progress information
+    exclude_qal : bool
+        If True (default), run dual-track comparison (both with and without Qal).
+        If False, run only the all-lakes track (no Qal exclusion).
+
+    Returns
+    -------
+    dict
+        Analysis results including:
+        - all_lakes: Results from the all-lakes track
+        - qal_excluded: Results from the Qal-excluded track (if exclude_qal=True)
+        - qal_comparison: Comparison statistics (if exclude_qal=True)
+        For backward compatibility, top-level keys (lake_gdf, density_by_stage, etc.)
+        point to the Qal-excluded results when exclude_qal=True.
+    """
+    print("\n" + "=" * 70)
+    print("GLACIAL CHRONOSEQUENCE ANALYSIS")
+    print("Testing Davis's Hypothesis: Lake density decreases with age")
+    if exclude_qal:
+        print("  Mode: DUAL-TRACK (All Lakes vs. Qal Excluded)")
+    else:
+        print("  Mode: SINGLE-TRACK (All Lakes)")
+    print("=" * 70)
+
+    combined_results = {}
+
+    # ======================================================================
+    # TRACK 1: All Lakes (no Qal exclusion)
+    # ======================================================================
+    results_all = _run_single_glacial_track(
+        lakes,
+        track_label='All Lakes (no Qal filter)',
+        output_subdir='all_lakes',
+        exclude_qal=False,
+        save_figures=save_figures,
+        verbose=verbose
+    )
+    combined_results['all_lakes'] = results_all
+
+    if not exclude_qal:
+        # Single-track mode: return all-lakes results directly
+        if results_all is not None:
+            combined_results.update(results_all)
+        return combined_results
+
+    # ======================================================================
+    # TRACK 2: Qal Excluded
+    # ======================================================================
+    results_excl = _run_single_glacial_track(
+        lakes,
+        track_label='Qal Excluded (glacial signal only)',
+        output_subdir='qal_excluded',
+        exclude_qal=True,
+        save_figures=save_figures,
+        verbose=verbose
+    )
+    combined_results['qal_excluded'] = results_excl
+
+    # ======================================================================
+    # COMPARISON FIGURE
+    # ======================================================================
+    if results_all is not None and results_excl is not None:
+        print("\n" + "=" * 70)
+        print("GENERATING QAL EXCLUSION COMPARISON")
+        print("=" * 70)
+
+        ensure_output_dir()
+        glacial_output = Path(OUTPUT_DIR) / 'glacial_chronosequence'
+        glacial_output.mkdir(exist_ok=True)
+
+        try:
+            fig, axes = _plot_qal_comparison(
+                results_all, results_excl,
+                save_path=str(glacial_output / 'qal_comparison.png')
+            )
+            if fig:
+                plt.close(fig)
+                print("  Qal comparison figure saved!")
+        except Exception as e:
+            print(f"  Warning: Could not create Qal comparison figure: {e}")
+
+        # Build comparison statistics
+        density_all = results_all.get('density_by_stage')
+        density_excl = results_excl.get('density_by_stage')
+        if density_all is not None and density_excl is not None:
+            comparison = {
+                'n_lakes_all': int(density_all['n_lakes'].sum()),
+                'n_lakes_excl': int(density_excl['n_lakes'].sum()),
+                'n_lakes_removed': int(density_all['n_lakes'].sum() - density_excl['n_lakes'].sum()),
+            }
+            if results_excl.get('qal_exclusion'):
+                comparison.update(results_excl['qal_exclusion'])
+            combined_results['qal_comparison'] = comparison
+
+        # Print side-by-side summary
+        print("\n" + "-" * 70)
+        print("DUAL-TRACK SUMMARY")
+        print("-" * 70)
+        if density_all is not None and density_excl is not None:
+            print(f"  {'Stage':<20} {'All Lakes':>15} {'Qal Excluded':>15} {'Change':>10}")
+            print(f"  {'-'*60}")
+            for i, stage in enumerate(density_all['glacial_stage'].values):
+                d_a = density_all.iloc[i]['density_per_1000km2']
+                try:
+                    row_excl = density_excl[density_excl['glacial_stage'] == stage]
+                    d_e = row_excl.iloc[0]['density_per_1000km2'] if len(row_excl) > 0 else float('nan')
+                except (IndexError, KeyError):
+                    d_e = float('nan')
+                if d_a > 0 and not np.isnan(d_e):
+                    pct = 100 * (d_e - d_a) / d_a
+                    print(f"  {stage:<20} {d_a:>12.1f}/Mk {d_e:>12.1f}/Mk {pct:>+9.1f}%")
+
+        davis_all = results_all.get('davis_test', {})
+        davis_excl = results_excl.get('davis_test', {})
+        print(f"\n  Davis hypothesis supported:")
+        print(f"    All Lakes:    {'YES' if davis_all.get('supports_hypothesis') else 'NO'}")
+        print(f"    Qal Excluded: {'YES' if davis_excl.get('supports_hypothesis') else 'NO'}")
+        print("-" * 70)
+
+    # For backward compatibility, top-level keys point to the Qal-excluded results
+    if results_excl is not None:
+        combined_results.update(results_excl)
+
+    return combined_results
 
 
 # ============================================================================

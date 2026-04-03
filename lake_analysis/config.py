@@ -192,6 +192,20 @@ GLACIAL_BOUNDARIES = {
         'age_ka': (300, 700),  # ~300,000-700,000+ years BP
     },
 
+    # Quaternary Alluvium (Qal) - EXCLUSION ZONE for lake analysis
+    # Source: Fullerton, Bush & Pennell (2003), USGS Map I-2789, 1:2,500,000
+    # CRS: USA Contiguous Albers Equal Area Conic USGS (ESRI:102039)
+    # Lakes within Qal are floodplain/alluvial features (oxbows, backwater pools)
+    # that reflect fluvial processes rather than glacial geomorphic processes
+    'quaternary_alluvium': {
+        'path': r"F:\Lakes\GIS\shapefiles\Qal_comprehensive_plus_glacial_alluvial.shp",
+        'layer': None,
+        'crs': 'ESRI:102039',
+        'description': 'Quaternary Alluvium deposits (Qal) - exclusion zone for glacial analysis',
+        'age_ka': None,
+        'exclusion_zone': True,
+    },
+
     # Southern Appalachians - never glaciated, mountainous region
     # CRS: UNKNOWN - will be detected and reprojected on load
     # Note: This is a comparison region with different hypsometry than glaciated lowlands

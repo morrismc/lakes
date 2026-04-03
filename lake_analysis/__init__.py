@@ -119,6 +119,8 @@ from .glacial_chronosequence import (
     load_pre_illinoian_extent,
     load_driftless_area,
     load_southern_appalachian_lakes,  # New: S. Appalachian comparison region
+    load_quaternary_alluvium,  # Qal exclusion zone
+    exclude_qal_lakes,  # Exclude floodplain lakes from glacial analysis
     compute_sapp_land_area_from_dem,
     compute_sapp_area_from_lakes,  # NEW: Compute area from convex hull/buffer
     add_sapp_to_density_comparison,
