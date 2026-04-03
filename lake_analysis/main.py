@@ -1351,7 +1351,7 @@ def analyze_domains(lakes, save_figures=True):
 # ============================================================================
 
 def _run_single_glacial_track(lakes, track_label, output_subdir, exclude_qal,
-                              save_figures=True, verbose=True):
+                              save_figures=True, verbose=True, min_lake_area=None):
     """
     Run a single glacial chronosequence analysis track (with or without Qal exclusion).
 
@@ -1372,6 +1372,8 @@ def _run_single_glacial_track(lakes, track_label, output_subdir, exclude_qal,
         If True, generate and save visualizations
     verbose : bool
         Print progress information
+    min_lake_area : float, optional
+        Minimum lake area in km². Lakes smaller than this are excluded.
 
     Returns
     -------
@@ -1381,7 +1383,20 @@ def _run_single_glacial_track(lakes, track_label, output_subdir, exclude_qal,
     print(f"\n{'#' * 70}")
     print(f"  TRACK: {track_label}")
     print(f"  Qal exclusion: {'YES' if exclude_qal else 'NO'}")
+    if min_lake_area is not None:
+        print(f"  Min lake area: {min_lake_area} km²")
     print(f"{'#' * 70}")
+
+    # Apply min_lake_area filter
+    if min_lake_area is not None:
+        area_col = COLS.get('area', 'AREASQKM')
+        n_before = len(lakes)
+        lakes = lakes[lakes[area_col] >= min_lake_area].copy()
+        if verbose:
+            print(f"\n  Applied min_lake_area filter: {min_lake_area} km²")
+            print(f"    Lakes before filter: {n_before:,}")
+            print(f"    Lakes after filter:  {len(lakes):,}")
+            print(f"    Removed: {n_before - len(lakes):,} lakes ({100*(n_before - len(lakes))/n_before:.1f}%)")
 
     try:
         results = run_glacial_chronosequence_analysis(
@@ -1818,7 +1833,8 @@ def _plot_qal_comparison(results_all, results_qal_excluded, save_path=None):
     return fig, axes
 
 
-def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True, exclude_qal=True):
+def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True, exclude_qal=True,
+                                   min_lake_area=None):
     """
     Run dual-track glacial chronosequence analysis to test Davis's hypothesis.
 
@@ -1846,6 +1862,9 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True, exclu
     exclude_qal : bool
         If True (default), run dual-track comparison (both with and without Qal).
         If False, run only the all-lakes track (no Qal exclusion).
+    min_lake_area : float, optional
+        Minimum lake area in km². Lakes smaller than this are excluded before
+        analysis. Common values: 0.005, 0.01, 0.024 km².
 
     Returns
     -------
@@ -1877,7 +1896,8 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True, exclu
         output_subdir='all_lakes',
         exclude_qal=False,
         save_figures=save_figures,
-        verbose=verbose
+        verbose=verbose,
+        min_lake_area=min_lake_area
     )
     combined_results['all_lakes'] = results_all
 
@@ -1896,7 +1916,8 @@ def analyze_glacial_chronosequence(lakes, save_figures=True, verbose=True, exclu
         output_subdir='qal_excluded',
         exclude_qal=True,
         save_figures=save_figures,
-        verbose=verbose
+        verbose=verbose,
+        min_lake_area=min_lake_area
     )
     combined_results['qal_excluded'] = results_excl
 
