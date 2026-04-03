@@ -301,7 +301,7 @@ GLACIAL_CHRONOLOGY = {
     },
     'driftless': {
         'name': 'Driftless (Never Glaciated)',
-        'age_ka': None,
+        'age_ka': 1500,  # >1.5 Ma proxy age for never-glaciated deep time end member
         'color': '#d62728',  # Red
         'order': 4,
     },
