@@ -1684,16 +1684,34 @@ def _plot_qal_comparison(results_all, results_qal_excluded, save_path=None):
     density_all = results_all.get('density_by_stage')
     density_excl = results_qal_excluded.get('density_by_stage')
 
+    # Align the two tracks BY STAGE NAME (not by row position). The density
+    # DataFrames are sorted by age_ka with NaN-age stages (e.g. unclassified)
+    # placed last in data-dependent order, so positional pairing can misalign
+    # stages (e.g. Driftless vs unclassified) between tracks.
+    merged = None
+    stages = []
+    if density_all is not None and density_excl is not None:
+        merged = density_all.merge(
+            density_excl, on='glacial_stage', how='outer',
+            suffixes=('_all', '_excl')
+        )
+        # Order stages by age (NaN last), matching the all-lakes ordering
+        merged = merged.sort_values('age_ka_all', na_position='last').reset_index(drop=True)
+        stages = merged['glacial_stage'].values
+        d_all_arr = merged['density_per_1000km2_all'].values
+        d_excl_arr = merged['density_per_1000km2_excl'].values
+        n_all_arr = merged['n_lakes_all'].values
+        n_excl_arr = merged['n_lakes_excl'].values
+
     # --- Panel A: Density comparison (grouped bar chart) ---
     ax = axes[0, 0]
-    if density_all is not None and density_excl is not None:
-        stages = density_all['glacial_stage'].values
+    if merged is not None:
         x = np.arange(len(stages))
         width = 0.35
 
-        bars1 = ax.bar(x - width/2, density_all['density_per_1000km2'].values,
+        bars1 = ax.bar(x - width/2, np.nan_to_num(d_all_arr),
                        width, label='All Lakes', color='#7fcdbb', edgecolor='black', linewidth=0.5)
-        bars2 = ax.bar(x + width/2, density_excl['density_per_1000km2'].values,
+        bars2 = ax.bar(x + width/2, np.nan_to_num(d_excl_arr),
                        width, label='Qal Excluded', color='#2c7fb8', edgecolor='black', linewidth=0.5)
 
         ax.set_xticks(x)
@@ -1712,14 +1730,13 @@ def _plot_qal_comparison(results_all, results_qal_excluded, save_path=None):
 
     # --- Panel B: Lake count comparison ---
     ax = axes[0, 1]
-    if density_all is not None and density_excl is not None:
-        stages = density_all['glacial_stage'].values
+    if merged is not None:
         x = np.arange(len(stages))
         width = 0.35
 
-        bars1 = ax.bar(x - width/2, density_all['n_lakes'].values,
+        bars1 = ax.bar(x - width/2, np.nan_to_num(n_all_arr),
                        width, label='All Lakes', color='#7fcdbb', edgecolor='black', linewidth=0.5)
-        bars2 = ax.bar(x + width/2, density_excl['n_lakes'].values,
+        bars2 = ax.bar(x + width/2, np.nan_to_num(n_excl_arr),
                        width, label='Qal Excluded', color='#2c7fb8', edgecolor='black', linewidth=0.5)
 
         ax.set_xticks(x)
@@ -1738,19 +1755,22 @@ def _plot_qal_comparison(results_all, results_qal_excluded, save_path=None):
 
     # --- Panel C: Percent change in density ---
     ax = axes[1, 0]
-    if density_all is not None and density_excl is not None:
-        stages = density_all['glacial_stage'].values
-        d_all = density_all['density_per_1000km2'].values
-        d_excl = density_excl['density_per_1000km2'].values
-
-        # Avoid division by zero
-        pct_change = np.where(d_all > 0, 100 * (d_excl - d_all) / d_all, 0)
+    if merged is not None:
+        # Compute percent change only where both densities are present and > 0
+        with np.errstate(divide='ignore', invalid='ignore'):
+            pct_change = np.where(
+                (d_all_arr > 0) & np.isfinite(d_excl_arr),
+                100 * (d_excl_arr - d_all_arr) / d_all_arr,
+                0.0
+            )
 
         colors = ['#d73027' if p < 0 else '#1a9850' for p in pct_change]
-        bars = ax.bar(stages, pct_change, color=colors, edgecolor='black', linewidth=0.5)
+        x = np.arange(len(stages))
+        bars = ax.bar(x, pct_change, color=colors, edgecolor='black', linewidth=0.5)
         ax.axhline(y=0, color='black', linewidth=0.8, linestyle='-')
         ax.set_ylabel('Change in Density (%)')
         ax.set_title('C. Density Change After Qal Exclusion')
+        ax.set_xticks(x)
         ax.set_xticklabels(stages, rotation=30, ha='right')
 
         for bar, pct in zip(bars, pct_change):
@@ -1782,8 +1802,8 @@ def _plot_qal_comparison(results_all, results_qal_excluded, save_path=None):
         supports_excl = 'Yes' if davis_excl.get('supports_hypothesis') else 'No'
         table_data.append(['Supports Davis?', supports_all, supports_excl, ''])
 
-        rho_all = davis_all.get('spearman_rho', davis_all.get('correlation', None))
-        rho_excl = davis_excl.get('spearman_rho', davis_excl.get('correlation', None))
+        rho_all = davis_all.get('spearman_corr', davis_all.get('correlation', None))
+        rho_excl = davis_excl.get('spearman_corr', davis_excl.get('correlation', None))
         if rho_all is not None and rho_excl is not None:
             table_data.append(['Correlation (rho)',
                               f'{rho_all:.3f}', f'{rho_excl:.3f}',
@@ -1795,12 +1815,12 @@ def _plot_qal_comparison(results_all, results_qal_excluded, save_path=None):
             table_data.append(['p-value',
                               f'{p_all:.4f}', f'{p_excl:.4f}', ''])
 
-    # Per-stage density comparison
-    if density_all is not None and density_excl is not None:
-        for i, stage in enumerate(density_all['glacial_stage'].values):
-            d_a = density_all.iloc[i]['density_per_1000km2']
-            d_e = density_excl.iloc[i]['density_per_1000km2']
-            if d_a > 0:
+    # Per-stage density comparison (aligned by stage name via merged frame)
+    if merged is not None:
+        for i, stage in enumerate(stages):
+            d_a = d_all_arr[i]
+            d_e = d_excl_arr[i]
+            if np.isfinite(d_a) and d_a > 0 and np.isfinite(d_e):
                 pct = 100 * (d_e - d_a) / d_a
                 table_data.append([f'{stage} density',
                                   f'{d_a:.1f}', f'{d_e:.1f}', f'{pct:+.1f}%'])

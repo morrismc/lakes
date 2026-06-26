@@ -628,24 +628,28 @@ def compare_distributions(data, xmin):
 
     results = {}
 
-    # Fit power law
+    # Power law vs exponential and lognormal are NON-NESTED model comparisons.
+    # The correct test is Vuong's normalized likelihood-ratio test
+    # (Clauset, Shalizi & Newman 2009, Appendix C) -- NOT a chi-squared test,
+    # which only applies to nested models. We compare pointwise log-likelihoods.
+
+    # Fit power law and compute pointwise log-densities
     alpha_pl = estimate_alpha_mle(tail, xmin)
-    ll_pl = powerlaw_loglikelihood(tail, xmin, alpha_pl)
+    logp_pl = pointwise_powerlaw_loglik(tail, xmin, alpha_pl)
+    ll_pl = float(np.sum(logp_pl))
 
     # Fit exponential: f(x) = λ exp(-λ(x - xmin))
     lambda_exp = 1 / (np.mean(tail) - xmin) if np.mean(tail) > xmin else 1
-    ll_exp = exponential_loglikelihood(tail, xmin, lambda_exp)
+    logp_exp = pointwise_exponential_loglik(tail, xmin, lambda_exp)
 
-    # Likelihood ratio
-    lr_exp = 2 * (ll_pl - ll_exp)
-    # p-value using chi-squared (1 df)
-    p_exp = 1 - stats.chi2.cdf(abs(lr_exp), 1)
+    lr_exp, z_exp, p_exp = vuong_test(logp_pl, logp_exp)
 
     results['exponential'] = {
         'lambda': lambda_exp,
-        'loglik': ll_exp,
-        'likelihood_ratio': lr_exp,
-        'p_value': p_exp,
+        'loglik': float(np.sum(logp_exp)),
+        'likelihood_ratio': lr_exp,        # R = sum of pointwise log-likelihood ratios
+        'normalized_lr': z_exp,            # Vuong normalized statistic (std normal)
+        'p_value': p_exp,                  # two-sided Vuong p-value
         'favors': 'power_law' if lr_exp > 0 else 'exponential',
     }
 
@@ -654,16 +658,16 @@ def compare_distributions(data, xmin):
         log_tail = np.log(tail)
         mu_ln = np.mean(log_tail)
         sigma_ln = np.std(log_tail)
-        ll_ln = lognormal_loglikelihood(tail, mu_ln, sigma_ln)
+        logp_ln = pointwise_lognormal_loglik(tail, mu_ln, sigma_ln)
 
-        lr_ln = 2 * (ll_pl - ll_ln)
-        p_ln = 1 - stats.chi2.cdf(abs(lr_ln), 1)
+        lr_ln, z_ln, p_ln = vuong_test(logp_pl, logp_ln)
 
         results['lognormal'] = {
             'mu': mu_ln,
             'sigma': sigma_ln,
-            'loglik': ll_ln,
+            'loglik': float(np.sum(logp_ln)),
             'likelihood_ratio': lr_ln,
+            'normalized_lr': z_ln,
             'p_value': p_ln,
             'favors': 'power_law' if lr_ln > 0 else 'lognormal',
         }
@@ -693,6 +697,66 @@ def lognormal_loglikelihood(data, mu, sigma):
     """Log-likelihood for lognormal distribution."""
     n = len(data)
     return -n/2 * np.log(2 * np.pi * sigma**2) - np.sum((np.log(data) - mu)**2) / (2 * sigma**2) - np.sum(np.log(data))
+
+
+def pointwise_powerlaw_loglik(data, xmin, alpha):
+    """Per-observation log-density for the (continuous) power law, x >= xmin."""
+    data = np.asarray(data, dtype=float)
+    return np.log(alpha - 1) - np.log(xmin) - alpha * np.log(data / xmin)
+
+
+def pointwise_exponential_loglik(data, xmin, lam):
+    """Per-observation log-density for the exponential shifted by xmin."""
+    data = np.asarray(data, dtype=float)
+    return np.log(lam) - lam * (data - xmin)
+
+
+def pointwise_lognormal_loglik(data, mu, sigma):
+    """Per-observation log-density for the lognormal."""
+    data = np.asarray(data, dtype=float)
+    return (-0.5 * np.log(2 * np.pi * sigma**2)
+            - (np.log(data) - mu)**2 / (2 * sigma**2)
+            - np.log(data))
+
+
+def vuong_test(logp1, logp2):
+    """
+    Vuong's normalized likelihood-ratio test for NON-NESTED models.
+
+    Compares two candidate distributions via their per-observation
+    log-likelihoods (Clauset, Shalizi & Newman 2009, Appendix C).
+
+    Parameters
+    ----------
+    logp1, logp2 : array-like
+        Per-observation log-densities under model 1 and model 2.
+
+    Returns
+    -------
+    tuple
+        (R, z, p) where:
+        - R = sum of pointwise log-likelihood ratios (sign: >0 favors model 1)
+        - z = normalized test statistic, ~ N(0, 1) under the null of
+          equally good fits
+        - p = two-sided p-value. A small p with R>0 means model 1 is
+          significantly preferred; a large p means the data cannot
+          distinguish the two models.
+    """
+    logp1 = np.asarray(logp1, dtype=float)
+    logp2 = np.asarray(logp2, dtype=float)
+    diff = logp1 - logp2
+    n = len(diff)
+    R = float(np.sum(diff))
+
+    sigma = float(np.std(diff))  # population std of pointwise ratios
+    if sigma <= 0 or n == 0:
+        # Identical fits (or degenerate); cannot distinguish
+        return R, 0.0, 1.0
+
+    z = R / (np.sqrt(n) * sigma)
+    # Two-sided p-value from the standard normal: 2 * P(Z > |z|)
+    p = float(2 * stats.norm.sf(abs(z)))
+    return R, float(z), p
 
 
 # ============================================================================
