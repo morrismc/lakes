@@ -5406,6 +5406,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
             # Load glacial boundary shapefiles
             wisconsin_gdf = load_wisconsin_extent()
             illinoian_gdf = load_illinoian_extent()
+            pre_illinoian_gdf = load_pre_illinoian_extent()
             driftless_gdf = load_driftless_area(use_definite=True)
 
             # Compute zone areas using equal-area projection
@@ -5435,6 +5436,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
             zone_areas = {}
             for name, gdf in [('wisconsin', wisconsin_gdf),
                              ('illinoian', illinoian_gdf),
+                             ('pre_illinoian', pre_illinoian_gdf),
                              ('driftless', driftless_gdf)]:
                 area = compute_zone_area(gdf)
                 zone_areas[name] = area
@@ -5460,6 +5462,15 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                 # Only mark as Illinoian if not already Wisconsin
                 in_illinoian_only = in_illinoian & (lake_gdf_staged['glacial_stage'] != 'Wisconsin')
                 lake_gdf_staged.loc[in_illinoian_only, 'glacial_stage'] = 'Illinoian'
+
+            if pre_illinoian_gdf is not None and len(pre_illinoian_gdf) > 0:
+                pre_illinoian_union = pre_illinoian_gdf.to_crs(lake_gdf_staged.crs).unary_union
+                in_pre_illinoian = lake_gdf_staged.geometry.within(pre_illinoian_union)
+                # Only mark as Pre-Illinoian if not already Wisconsin or Illinoian
+                in_pre_illinoian_only = in_pre_illinoian & (
+                    ~lake_gdf_staged['glacial_stage'].isin(['Wisconsin', 'Illinoian'])
+                )
+                lake_gdf_staged.loc[in_pre_illinoian_only, 'glacial_stage'] = 'Pre-Illinoian'
 
             if driftless_gdf is not None and len(driftless_gdf) > 0:
                 driftless_union = driftless_gdf.to_crs(lake_gdf_staged.crs).unary_union
@@ -5498,7 +5509,11 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
             # Ages from GLACIAL_CHRONOLOGY
             end_member_data = []
 
-            if stage_densities.get('Wisconsin', {}).get('density') and not np.isnan(stage_densities['Wisconsin']['density']):
+            def _has_density(stage):
+                d = stage_densities.get(stage, {}).get('density')
+                return d is not None and not np.isnan(d)
+
+            if _has_density('Wisconsin'):
                 end_member_data.append({
                     'stage': 'Wisconsin',
                     'age_ka': 20.0,
@@ -5508,7 +5523,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                     'n_lakes': stage_densities['Wisconsin']['n_lakes'],
                 })
 
-            if stage_densities.get('Illinoian', {}).get('density') and not np.isnan(stage_densities['Illinoian']['density']):
+            if _has_density('Illinoian'):
                 end_member_data.append({
                     'stage': 'Illinoian',
                     'age_ka': 160.0,
@@ -5518,7 +5533,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                     'n_lakes': stage_densities['Illinoian']['n_lakes'],
                 })
 
-            if stage_densities.get('Pre-Illinoian', {}).get('density') and not np.isnan(stage_densities['Pre-Illinoian']['density']):
+            if _has_density('Pre-Illinoian'):
                 end_member_data.append({
                     'stage': 'Pre-Illinoian',
                     'age_ka': 500.0,
@@ -5528,7 +5543,7 @@ def run_nadi1_chronosequence_analysis(lake_gdf, extent_type='OPTIMAL',
                     'n_lakes': stage_densities['Pre-Illinoian']['n_lakes'],
                 })
 
-            if stage_densities.get('Driftless', {}).get('density') and not np.isnan(stage_densities['Driftless']['density']):
+            if _has_density('Driftless'):
                 end_member_data.append({
                     'stage': 'Driftless',
                     'age_ka': 1500.0,  # >1.5 Ma never glaciated
