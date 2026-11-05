@@ -25,26 +25,28 @@ try:
     from .glacial_chronosequence import (
         classify_lakes_by_glacial_extent,
         compute_lake_density_by_glacial_stage,
-        fit_bayesian_decay_model
+        fit_bayesian_decay_model,
+        convert_lakes_to_gdf,
     )
     from .multivariate_analysis import (
         prepare_multivariate_dataset,
         run_multivariate_regression
     )
     from .config import OUTPUT_DIR, ensure_output_dir
-    from .data_loading import load_conus_lake_data, convert_lakes_to_gdf
+    from .data_loading import load_conus_lake_data
 except ImportError:
     from glacial_chronosequence import (
         classify_lakes_by_glacial_extent,
         compute_lake_density_by_glacial_stage,
-        fit_bayesian_decay_model
+        fit_bayesian_decay_model,
+        convert_lakes_to_gdf,
     )
     from multivariate_analysis import (
         prepare_multivariate_dataset,
         run_multivariate_regression
     )
     from config import OUTPUT_DIR, ensure_output_dir
-    from data_loading import load_conus_lake_data, convert_lakes_to_gdf
+    from data_loading import load_conus_lake_data
 
 
 def test_threshold_sensitivity(

@@ -1,0 +1,33 @@
+# Conda environment for the Lake Distribution Analysis.
+# Shared by Claude Code runs and Spyder so both produce identical results.
+#
+#   conda env create -f environment.yml        (first time)
+#   conda env update -f environment.yml --prune (after edits)
+#
+# pandas is pinned <3: the code was written against pandas 2.x
+# (copy-on-write and string-dtype defaults changed in 3.0).
+name: lakes
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas>=2.0,<3
+  - pyarrow
+  - geopandas>=0.14
+  - pyogrio
+  - fiona
+  - shapely>=2
+  - pyproj
+  - rasterio
+  - gdal
+  - scipy
+  - statsmodels
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - tqdm
+  - pymc>=5
+  - arviz
+  - ipykernel
+  - spyder-kernels

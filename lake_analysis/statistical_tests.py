@@ -399,7 +399,7 @@ def regression_with_multiple_testing(
         print(f"{'Predictor':<20} {'Coef':<12} {'SE':<12} {'t':<10} {'p (raw)':<12} {'p (adj)':<12} {'Sig?':<6}")
         print("-" * 90)
         print(f"{'(Intercept)':<20} {results['intercept']:<12.4f} "
-              f"{results['intercept_se']:<12.4f} {results['intercept']/<results['intercept_se']:<10.2f} "
+              f"{results['intercept_se']:<12.4f} {results['intercept']/results['intercept_se']:<10.2f} "
               f"{results['intercept_p']:<12.4f} {'--':<12} {'--':<6}")
 
         for coef_result in results['coefficients']:
