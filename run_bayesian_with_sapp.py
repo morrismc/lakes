@@ -111,7 +111,7 @@ if 'threshold_sensitivity' in results:
 print("\n" + "-" * 70)
 print("OUTPUTS")
 print("-" * 70)
-print("\nFigures saved to: F:\\Lakes\\Analysis\\outputs\\")
+from lake_analysis.config import OUTPUT_DIR; print(f"\nFigures saved to: {OUTPUT_DIR}")
 print("  - bayesian_overall_halflife.png")
 print("  - bayesian_glacial_extent_map.png")
 print("  - size_stratified_*.png (3 figures)")

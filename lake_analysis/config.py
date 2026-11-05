@@ -12,20 +12,25 @@ Author: [Your Name]
 import os
 from pathlib import Path
 
+# Root folder holding the Data, GIS and Analysis folders. Override without editing this
+# file by setting the LAKES_DATA_ROOT environment variable (e.g. if the drive
+# letter changes). Every path below is built from it.
+DATA_ROOT = os.environ.get("LAKES_DATA_ROOT", r"D:\Lakes")
+
 # ============================================================================
 # PATHS - USER MODIFIES THESE FOR THEIR SYSTEM
 # ============================================================================
 
 # Lake geodatabase path (File Geodatabase)
-LAKE_GDB_PATH = r"F:\Lakes\GIS\MyProject.gdb"
+LAKE_GDB_PATH = rf"{DATA_ROOT}\GIS\MyProject.gdb"
 LAKE_FEATURE_CLASS = "Lakes_with_all_details"
 
 # Alternative: If you export to parquet later for faster loading
-LAKE_PARQUET_PATH = r"F:\Lakes\Data\lakes.parquet"
+LAKE_PARQUET_PATH = rf"{DATA_ROOT}\Data\lakes.parquet"
 
 # CONUS-clipped lake dataset (created once via create_conus_lake_dataset())
 # This excludes Alaska, Hawaii, and territories for Lower 48 analysis
-LAKE_CONUS_PARQUET_PATH = r"F:\Lakes\Data\lakes_conus.parquet"
+LAKE_CONUS_PARQUET_PATH = rf"{DATA_ROOT}\Data\lakes_conus.parquet"
 
 # Raster paths
 # NOTE: For ESRI Grid rasters, point to the FOLDER (not the .adf file inside)
@@ -33,18 +38,18 @@ LAKE_CONUS_PARQUET_PATH = r"F:\Lakes\Data\lakes_conus.parquet"
 RASTERS = {
     # Topographic variables (NAD_1983_Albers projection, ~93.7m cells)
     # WARNING: These are LARGE (8GB each uncompressed) - use chunked processing!
-    'elevation': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_ea",
-    'slope': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_slope",
-    'relief_5km': r"F:\Lakes\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_rlif_5k",
+    'elevation': rf"{DATA_ROOT}\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_ea",
+    'slope': rf"{DATA_ROOT}\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_slope",
+    'relief_5km': rf"{DATA_ROOT}\GIS\rasters\Lower_48_DEM\lwr_48_cmplt\srtm_rlif_5k",
 
     # Southern Appalachians DEM for hypsometry-normalized density
-    's_app_dem': r"F:\Lakes\GIS\rasters\s_app_dem.txt",  # S. Appalachian elevation (ASCII)
+    's_app_dem': rf"{DATA_ROOT}\GIS\rasters\s_app_dem.txt",  # S. Appalachian elevation (ASCII)
 
     # Climate variables (Geographic CRS - different from topographic!)
-    'PET': r"F:\Lakes\GIS\rasters\PET_he_annual\pet_he_yr",
-    'precip_4km': r"F:\Lakes\GIS\rasters\PRISM_ppt_30yr_normal_4kmM2_annual_asc\PRISM_ppt_30yr_normal_4kmM2_annual_asc.asc",
-    'precip_800m': r"F:\Lakes\GIS\rasters\PRISM_ppt_30yr_normal_800mM2_annual_bil\PRISM_ppt_30yr_normal_800mM2_annual_bil.bil",
-    'aridity': r"F:\Lakes\GIS\rasters\AI_annual\ai_yr",
+    'PET': rf"{DATA_ROOT}\GIS\rasters\PET_he_annual\pet_he_yr",
+    'precip_4km': rf"{DATA_ROOT}\GIS\rasters\PRISM_ppt_30yr_normal_4kmM2_annual_asc\PRISM_ppt_30yr_normal_4kmM2_annual_asc.asc",
+    'precip_800m': rf"{DATA_ROOT}\GIS\rasters\PRISM_ppt_30yr_normal_800mM2_annual_bil\PRISM_ppt_30yr_normal_800mM2_annual_bil.bil",
+    'aridity': rf"{DATA_ROOT}\GIS\rasters\AI_annual\ai_yr",
 }
 
 # Raster metadata - NoData values and CRS info for each raster
@@ -107,11 +112,11 @@ RASTER_METADATA = {
 SHAPEFILES = {
     # Glacial extent boundaries by stage (Quaternary glaciation)
     # TODO: Update path when shapefile is ready
-    'glacial_stages': None,  # e.g., r"F:\Lakes\GIS\glacial\glacial_stages.shp"
+    'glacial_stages': None,  # e.g., rf"{DATA_ROOT}\GIS\glacial\glacial_stages.shp"
 
     # CONUS boundary for clipping (Census Bureau 2024, 1:5m resolution)
     # CRS: NAD83 (EPSG:4269) - geographic coordinates
-    'conus_boundary': r"F:\Lakes\GIS\shapefiles\cb_2024_us_all_5m\cb_2024_us_nation_5m\cb_2024_us_nation_5m.shp",
+    'conus_boundary': rf"{DATA_ROOT}\GIS\shapefiles\cb_2024_us_all_5m\cb_2024_us_nation_5m\cb_2024_us_nation_5m.shp",
 }
 
 # ============================================================================
@@ -136,7 +141,7 @@ GLACIAL_BOUNDARIES = {
     # CRS: NAD 1983 Canada Atlas Lambert (EPSG:3978)
     # NOTE: Covers all of North America - must be clipped to CONUS
     'dalton_18ka': {
-        'path': r"F:\Lakes\GIS\shapefiles\Dalton_2020_NA_IceSheets\shapefiles\18ka_21.7cal_MOCA_15_Aug_2019.shp",
+        'path': rf"{DATA_ROOT}\GIS\shapefiles\Dalton_2020_NA_IceSheets\shapefiles\18ka_21.7cal_MOCA_15_Aug_2019.shp",
         'crs': 'EPSG:3978',
         'description': 'Dalton 2020 NA ice sheet extent at 18ka (LGM)',
         'age_ka': 18,  # thousand years before present
@@ -145,7 +150,7 @@ GLACIAL_BOUNDARIES = {
     # Wisconsin glaciation extent (most recent major glaciation)
     # CRS: USA Contiguous Albers (WKID:102039)
     'wisconsin': {
-        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'path': rf"{DATA_ROOT}\GIS\MyProject.gdb",
         'layer': 'Wisconsin_area',
         'crs': 'ESRI:102039',
         'description': 'Wisconsin glaciation maximum extent',
@@ -155,7 +160,7 @@ GLACIAL_BOUNDARIES = {
     # Illinoian glaciation extent (older glaciation)
     # CRS: USA Contiguous Albers (WKID:102039)
     'illinoian': {
-        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'path': rf"{DATA_ROOT}\GIS\MyProject.gdb",
         'layer': 'illinoian_glacial_extent',
         'crs': 'ESRI:102039',
         'description': 'Illinoian glaciation maximum extent',
@@ -165,7 +170,7 @@ GLACIAL_BOUNDARIES = {
     # Driftless Area - definitely never glaciated
     # CRS: NAD 1983 UTM 15N (EPSG:26915)
     'driftless_definite': {
-        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'path': rf"{DATA_ROOT}\GIS\MyProject.gdb",
         'layer': 'definite_driftless_area_never_glaciated',
         'crs': 'EPSG:26915',
         'description': 'Driftless Area - never glaciated (definite)',
@@ -175,7 +180,7 @@ GLACIAL_BOUNDARIES = {
     # Larger Driftless Area - may have pre-Illinoian till
     # CRS: NAD 1983 UTM 15N (EPSG:26915)
     'driftless_larger': {
-        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'path': rf"{DATA_ROOT}\GIS\MyProject.gdb",
         'layer': 'larger_driftless_area_may_have_beenglaciatiated',
         'crs': 'EPSG:26915',
         'description': 'Larger Driftless Area - may have pre-Illinoian till',
@@ -185,7 +190,7 @@ GLACIAL_BOUNDARIES = {
     # Pre-Illinoian glaciation extent (oldest glaciation)
     # CRS: USA Contiguous Albers (WKID:102039)
     'pre_illinoian': {
-        'path': r"F:\Lakes\GIS\MyProject.gdb",
+        'path': rf"{DATA_ROOT}\GIS\MyProject.gdb",
         'layer': 'Pre_illinoian_glacial_extent',
         'crs': 'ESRI:102039',
         'description': 'Pre-Illinoian glaciation maximum extent',
@@ -198,7 +203,7 @@ GLACIAL_BOUNDARIES = {
     # Lakes within Qal are floodplain/alluvial features (oxbows, backwater pools)
     # that reflect fluvial processes rather than glacial geomorphic processes
     'quaternary_alluvium': {
-        'path': r"F:\Lakes\GIS\shapefiles\Qal_comprehensive_plus_glacial_alluvial.shp",
+        'path': rf"{DATA_ROOT}\GIS\shapefiles\Qal_comprehensive_plus_glacial_alluvial.shp",
         'layer': None,
         'crs': 'ESRI:102039',
         'description': 'Quaternary Alluvium deposits (Qal) - exclusion zone for glacial analysis',
@@ -210,7 +215,7 @@ GLACIAL_BOUNDARIES = {
     # CRS: UNKNOWN - will be detected and reprojected on load
     # Note: This is a comparison region with different hypsometry than glaciated lowlands
     'southern_appalachians': {
-        'path': r"F:\Lakes\GIS\rasters\S_App_Lakes.dbf",
+        'path': rf"{DATA_ROOT}\GIS\rasters\S_App_Lakes.dbf",
         'crs': None,  # Will be auto-detected from .prj file if available
         'description': 'Southern Appalachian lakes - never glaciated highlands',
         'age_ka': None,  # Never glaciated (Paleozoic, >250 Ma)
@@ -227,7 +232,7 @@ GLACIAL_BOUNDARIES = {
 
 NADI1_CONFIG = {
     # Directory containing all NADI-1 shapefiles
-    'directory': r"F:\Lakes\GIS\shapefiles\NADI-1 shapefiles Dalton et al. QSR",
+    'directory': rf"{DATA_ROOT}\GIS\shapefiles\NADI-1 shapefiles Dalton et al. QSR",
 
     # File naming pattern: {age}ka_cal_{type}_NADI-1_Dalton_etal_QSR.shp
     # Ages: 1, 1.5, 2, 2.5, ... 25 (0.5 ka intervals)
@@ -334,7 +339,7 @@ GLACIAL_STAGES = {
 }
 
 # Output directory (will be created if it doesn't exist)
-OUTPUT_DIR = r"F:\Lakes\Analysis\outputs"
+OUTPUT_DIR = rf"{DATA_ROOT}\Analysis\outputs"
 
 # ============================================================================
 # CRS COMPATIBILITY NOTES

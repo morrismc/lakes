@@ -187,7 +187,7 @@ try:
     print("\n" + "-" * 80)
     print("OUTPUTS")
     print("-" * 80)
-    print("\nFigures saved to: F:\\Lakes\\Analysis\\outputs\\")
+    from lake_analysis.config import OUTPUT_DIR; print(f"\nFigures saved to: {OUTPUT_DIR}")
     print("  - multivariate_correlation_matrix.png")
     print("  - multivariate_pca_biplot.png")
     print("  - multivariate_variance_partitioning.png")
