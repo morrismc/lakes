@@ -66,5 +66,12 @@ C:\Users\mmorriss\AppData\Local\miniforge3\Scripts\conda.exe run -n lakes python
 (Calling `envs\lakes\python.exe` directly without activation fails on this
 machine with a DLL error; `conda run` activates the env first.)
 
+Claude's runs also set `PYTENSOR_FLAGS=base_compiledir=D:/Lakes/.pytensor`.
+Inside the Claude desktop app, PyTensor's default compile cache resolves to a
+path that hits Windows' 260-character limit. When that happens the NADI-1
+Bayesian fit fails and the code silently falls back to a frequentist fit (look
+for "Bayesian model failed" in the log). Spyder runs use a shorter cache path
+and shouldn't need this.
+
 Long runs (full pipeline, Bayesian fits) go in the background with their log
 written under `D:\Lakes\Analysis\outputs\`.

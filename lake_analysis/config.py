@@ -199,13 +199,16 @@ GLACIAL_BOUNDARIES = {
 
     # Quaternary Alluvium (Qal) - EXCLUSION ZONE for lake analysis
     # Source: Fullerton, Bush & Pennell (2003), USGS Map I-2789, 1:2,500,000
-    # CRS: USA Contiguous Albers Equal Area Conic USGS (ESRI:102039)
-    # Lakes within Qal are floodplain/alluvial features (oxbows, backwater pools)
-    # that reflect fluvial processes rather than glacial geomorphic processes
+    # CRS: NAD27 geographic (EPSG:4267) per the file's .prj (checked 2026-11-05;
+    # loaders read the file's own CRS, so this field is informational only).
+    # GEOUNIT holds three late-Wisconsin/Holocene units: 'al' channel and
+    # flood-plain alluvium (1200 polys), 'gs' outwash sand (77), '(ag)' alluvial/
+    # outwash/ice-contact/glacial-lake deposits (62). Only 'al' is strictly
+    # floodplain; 'gs'/'(ag)' inside the Wisconsin zone hold kettle lakes.
     'quaternary_alluvium': {
         'path': rf"{DATA_ROOT}\GIS\shapefiles\Qal_comprehensive_plus_glacial_alluvial.shp",
         'layer': None,
-        'crs': 'ESRI:102039',
+        'crs': 'EPSG:4267',
         'description': 'Quaternary Alluvium deposits (Qal) - exclusion zone for glacial analysis',
         'age_ka': None,
         'exclusion_zone': True,
